@@ -390,6 +390,7 @@ jobs:
 
     name: Publish
     needs: [init, test, package]
+    permissions: write-all
     uses: ./.github/workflows/publish.yml
     with:
       checkout: ${{needs.init.outputs.checkout}}

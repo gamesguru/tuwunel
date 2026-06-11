@@ -88,11 +88,10 @@ impl Data {
 			.qry(&key)
 			.await
 			.deserialized::<Json<(u64, ReceiptEvent)>>()
+			&& stored_count != *count
 		{
-			if stored_count != *count {
-				self.roomuserid_readreceipt
-					.put(key, Json((*count, event.clone())));
-			}
+			self.roomuserid_readreceipt
+				.put(key, Json((*count, event.clone())));
 		}
 	}
 
@@ -133,6 +132,9 @@ impl Data {
 		since: Option<u64>,
 		user_id: Option<&'a UserId>,
 	) -> Result<u64> {
+		// 4-tuple key: pre-MSC3771 rows deserialize with `&str` tail empty.
+		type Key<'a> = (&'a RoomId, u64, &'a UserId, &'a str);
+
 		if let Some(user_id) = user_id {
 			let key = (room_id, user_id);
 			if let Ok(Json((count, _))) = self
@@ -140,15 +142,11 @@ impl Data {
 				.qry(&key)
 				.await
 				.deserialized::<Json<(u64, ReceiptEvent)>>()
+				&& since.is_none_or(|since| since > count)
 			{
-				if since.is_none_or(|since| since > count) {
-					return Ok(count);
-				}
+				return Ok(count);
 			}
 		}
-
-		// 4-tuple key: pre-MSC3771 rows deserialize with `&str` tail empty.
-		type Key<'a> = (&'a RoomId, u64, &'a UserId, &'a str);
 
 		let key = (room_id, u64::MAX);
 		self.readreceiptid_readreceipt
@@ -264,23 +262,6 @@ impl Data {
 			.stream_prefix(&prefix)
 			.ignore_err()
 			.map(|((_, _, kind), (count, _)): ThreadKv<'_>| (ThreadKind::from(kind), count))
-	}
-
-	/// Stream of `(thread_kind, ts)` for the per-thread (3-tuple)
-	/// private read rows for this `(room, user)`.
-	#[inline]
-	pub(super) fn private_read_threaded_ts_stream<'a>(
-		&'a self,
-		room_id: &'a RoomId,
-		user_id: &'a UserId,
-	) -> impl Stream<Item = (ThreadKind, u64)> + Send + 'a {
-		type ThreadKv<'a> = ((&'a RoomId, &'a UserId, &'a str), (u64, u64));
-
-		let prefix = (room_id, user_id, Interfix);
-		self.roomuserid_privateread_v2
-			.stream_prefix(&prefix)
-			.ignore_err()
-			.map(|((_, _, kind), (_, ts)): ThreadKv<'_>| (ThreadKind::from(kind), ts))
 	}
 
 	#[inline]

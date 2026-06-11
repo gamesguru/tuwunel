@@ -1,15 +1,9 @@
 use std::{collections::HashSet, fmt::Write};
 
-use ruma::{
-	CanonicalJsonObject, OwnedEventId, OwnedRoomOrAliasId, events::TimelineEventType,
-};
+use ruma::{CanonicalJsonObject, OwnedEventId, OwnedRoomOrAliasId, events::TimelineEventType};
 use serde_json::Value as JsonValue;
 use tokio::io::AsyncWriteExt;
-use tuwunel_core::{
-	Result, err,
-	matrix::PduEvent,
-	warn,
-};
+use tuwunel_core::{Result, err, matrix::PduEvent, warn};
 
 use crate::admin_command;
 
@@ -85,10 +79,10 @@ pub(super) async fn decorate_pdu_for_export(
 				.state
 				.pdu_shortstatehash(&pdu.event_id)
 				.await
-			{
-				obj.insert("__shortstatehash".to_owned(), JsonValue::from(ssh));
-				shortstatehash = Some(ssh);
-			}
+		{
+			obj.insert("__shortstatehash".to_owned(), JsonValue::from(ssh));
+			shortstatehash = Some(ssh);
+		}
 	} else {
 		is_separated = true;
 	}
@@ -113,33 +107,34 @@ impl DagExportStats {
 			decorate_pdu_for_export(ctx, &pdu_json, pdu_opt, is_outlier).await?;
 
 		if let Ok(pdu) = &pdu_result
-			&& !is_separated {
-				if let Some(ssh) = shortstatehash {
-					self.unique_hashes.insert(ssh);
-					self.last_ssh = Some(ssh);
-				} else {
-					self.missing_hash = self.missing_hash.saturating_add(1);
-				}
-
-				if pdu.state_key.is_some() {
-					self.state_events = self.state_events.saturating_add(1);
-					self.last_is_state_event = true;
-					self.last_event_type = Some(pdu.kind.clone());
-					self.last_state_key = pdu.state_key.as_ref().map(ToString::to_string);
-				} else {
-					self.last_is_state_event = false;
-				}
-
-				self.last_event_id = Some(pdu.event_id.clone());
-				let eid = pdu.event_id.clone();
-				self.all_event_ids.insert(eid);
-				for prev in &pdu.prev_events {
-					self.referenced_as_prev.insert(prev.clone());
-				}
-				let d: u64 = pdu.depth.into();
-				self.max_depth = self.max_depth.max(d);
-				self.min_depth = self.min_depth.min(d);
+			&& !is_separated
+		{
+			if let Some(ssh) = shortstatehash {
+				self.unique_hashes.insert(ssh);
+				self.last_ssh = Some(ssh);
+			} else {
+				self.missing_hash = self.missing_hash.saturating_add(1);
 			}
+
+			if pdu.state_key.is_some() {
+				self.state_events = self.state_events.saturating_add(1);
+				self.last_is_state_event = true;
+				self.last_event_type = Some(pdu.kind.clone());
+				self.last_state_key = pdu.state_key.as_ref().map(ToString::to_string);
+			} else {
+				self.last_is_state_event = false;
+			}
+
+			self.last_event_id = Some(pdu.event_id.clone());
+			let eid = pdu.event_id.clone();
+			self.all_event_ids.insert(eid);
+			for prev in &pdu.prev_events {
+				self.referenced_as_prev.insert(prev.clone());
+			}
+			let d: u64 = pdu.depth.into();
+			self.max_depth = self.max_depth.max(d);
+			self.min_depth = self.min_depth.min(d);
+		}
 
 		let json = serde_json::to_string(&obj)?;
 
@@ -165,6 +160,144 @@ impl DagExportStats {
 	}
 }
 
+async fn collect_pdu_ids(
+	services: &tuwunel_service::Services,
+	room_id: &ruma::RoomId,
+) -> Vec<OwnedEventId> {
+	use futures::StreamExt;
+
+	let pdu_stream = services.timeline.pdus(None, room_id, None);
+	futures::pin_mut!(pdu_stream);
+	let mut pdu_ids = Vec::new();
+	while let Some(res) = pdu_stream.next().await {
+		if let Ok((_, pdu)) = res {
+			pdu_ids.push(pdu.event_id.clone());
+		}
+	}
+	pdu_ids
+}
+
+async fn collect_outlier_ids(
+	services: &tuwunel_service::Services,
+	room_id: &ruma::RoomId,
+) -> Vec<OwnedEventId> {
+	use futures::StreamExt;
+
+	let mut outlier_ids = Vec::new();
+	let outlier_stream = services.timeline.outlier_pdus_raw();
+	futures::pin_mut!(outlier_stream);
+	while let Some(res) = outlier_stream.next().await {
+		if let Ok(data) = res
+			&& let Ok(pdu) = serde_json::from_slice::<PduEvent>(data)
+			&& pdu.room_id == *room_id
+		{
+			outlier_ids.push(pdu.event_id.clone());
+		}
+	}
+	outlier_ids
+}
+
+async fn determine_tip_match(
+	services: &tuwunel_service::Services,
+	stats: &DagExportStats,
+	room_ssh: Option<u64>,
+) -> String {
+	match (stats.last_ssh, room_ssh) {
+		| (Some(tip), Some(room)) if tip == room => "✓ tip matches room state".to_owned(),
+		| (Some(tip), Some(room)) if stats.last_is_state_event => {
+			if let (Some(last_eid), Some(last_type), Some(last_sk)) =
+				(&stats.last_event_id, &stats.last_event_type, &stats.last_state_key)
+			{
+				let room_has_tip = services
+					.state_accessor
+					.state_get_id(room, &last_type.to_string().into(), last_sk)
+					.await
+					.is_ok_and(|eid| eid == *last_eid);
+
+				if room_has_tip {
+					format!(
+						"✓ tip is state event — room state includes tip (pre={tip} post={room})"
+					)
+				} else {
+					format!(
+						"✗ tip DIVERGES — room state at ({last_type}, {last_sk}) does not point \
+						 to tip event {last_eid}"
+					)
+				}
+			} else {
+				"✗ tip DIVERGES from room state (state event but missing metadata)".to_owned()
+			}
+		},
+		| (Some(_tip), Some(_room)) => "✗ tip DIVERGES from room state".to_owned(),
+		| _ => "? unknown".to_owned(),
+	}
+}
+
+fn format_dag_stats_output(
+	stats: &DagExportStats,
+	room_ssh: Option<u64>,
+	tip_match: &str,
+	display_path: &str,
+) -> String {
+	let heads_count = stats
+		.all_event_ids
+		.difference(&stats.referenced_as_prev)
+		.count();
+
+	let (bf_whole, bf_frac) = if stats.count > 0 {
+		let scaled = stats
+			.total_prev_events
+			.saturating_mul(1000)
+			.checked_div(stats.count)
+			.unwrap_or(0);
+		(scaled.checked_div(1000).unwrap_or(0), scaled % 1000)
+	} else {
+		(0, 0)
+	};
+
+	let mut out = format!("Wrote {count} PDUs to {display_path}\n", count = stats.count);
+	writeln!(out, "```").expect("fmt");
+	writeln!(out, "PDUs:           {count}", count = stats.count).expect("fmt");
+	writeln!(out, "State events:   {state_events}", state_events = stats.state_events)
+		.expect("fmt");
+	writeln!(out, "Branching:      {bf_whole}.{bf_frac:03} avg prev_events/PDU").expect("fmt");
+
+	let (frag_whole, frag_frac) = if stats.max_depth > 0 {
+		let scaled = stats
+			.count
+			.saturating_mul(1000)
+			.checked_div(stats.max_depth)
+			.unwrap_or(0);
+		(scaled.checked_div(1000).unwrap_or(0), scaled % 1000)
+	} else {
+		(0, 0)
+	};
+
+	writeln!(
+		out,
+		"Frag factor:    {frag_whole}.{frag_frac:03} ({count} events / {max_depth} depth, \
+		 {heads_count} heads)",
+		count = stats.count,
+		max_depth = stats.max_depth
+	)
+	.expect("fmt");
+
+	writeln!(out, "Unique states:  {}", stats.unique_hashes.len()).expect("fmt");
+	writeln!(out, "Missing hash:   {missing_hash}", missing_hash = stats.missing_hash)
+		.expect("fmt");
+
+	if let Some(tip) = stats.last_ssh {
+		writeln!(out, "Tip SSH:        {tip}").expect("fmt");
+	}
+	if let Some(room) = room_ssh {
+		writeln!(out, "Room SSH:       {room}").expect("fmt");
+	}
+	writeln!(out, "Status:         {tip_match}").expect("fmt");
+	writeln!(out, "```").expect("fmt");
+
+	out
+}
+
 #[admin_command]
 pub(super) async fn get_room_dag(
 	&self,
@@ -174,22 +307,13 @@ pub(super) async fn get_room_dag(
 	print: bool,
 	outliers: bool,
 ) -> Result {
-	use futures::StreamExt;
-	
 	let room_id = self
 		.services
 		.alias
 		.maybe_resolve(&room_id)
 		.await?;
 
-	let pdu_stream = self.services.timeline.pdus(None, &room_id, None);
-	futures::pin_mut!(pdu_stream);
-	let mut pdu_ids = Vec::new();
-	while let Some(res) = pdu_stream.next().await {
-		if let Ok((_, pdu)) = res {
-			pdu_ids.push(pdu.event_id.clone());
-		}
-	}
+	let pdu_ids = collect_pdu_ids(self.services, &room_id).await;
 
 	let actual_start = if start < 0 {
 		let offset = usize::try_from(start.unsigned_abs()).unwrap_or(usize::MAX);
@@ -227,46 +351,38 @@ pub(super) async fn get_room_dag(
 
 	for event_id in pdu_ids {
 		if let Ok(end_val) = u64::try_from(end)
-			&& i > end_val {
-				break;
-			}
+			&& i > end_val
+		{
+			break;
+		}
 		if i >= actual_start
 			&& let Ok(pdu_json) = self
 				.services
 				.timeline
 				.get_pdu_json(&event_id)
 				.await
+		{
+			let pdu_result = self.services.timeline.get_pdu(&event_id).await;
+			if let Err(e) = stats
+				.process_and_write_pdu(
+					self,
+					&mut file,
+					&mut outliers_file,
+					pdu_json,
+					pdu_result,
+					false,
+					print,
+				)
+				.await
 			{
-				let pdu_result = self.services.timeline.get_pdu(&event_id).await;
-				if let Err(e) = stats
-					.process_and_write_pdu(
-						self,
-						&mut file,
-						&mut outliers_file,
-						pdu_json,
-						pdu_result,
-						false,
-						print,
-					)
-					.await
-				{
-					warn!("Failed to process PDU {event_id}: {e}");
-				}
+				warn!("Failed to process PDU {event_id}: {e}");
 			}
+		}
 		i = i.saturating_add(1);
 	}
 
 	if outliers {
-		let mut outlier_ids = Vec::new();
-		let outlier_stream = self.services.timeline.outlier_pdus_raw();
-		futures::pin_mut!(outlier_stream);
-		while let Some(res) = outlier_stream.next().await {
-			if let Ok(data) = res
-				&& let Ok(pdu) = serde_json::from_slice::<PduEvent>(data)
-					&& pdu.room_id == room_id {
-						outlier_ids.push(pdu.event_id.clone());
-					}
-		}
+		let outlier_ids = collect_outlier_ids(self.services, &room_id).await;
 
 		for event_id in outlier_ids {
 			if let Ok(pdu_json) = self
@@ -298,22 +414,6 @@ pub(super) async fn get_room_dag(
 		}
 	}
 
-	let heads_count = stats
-		.all_event_ids
-		.difference(&stats.referenced_as_prev)
-		.count();
-
-	let (bf_whole, bf_frac) = if stats.count > 0 {
-		let scaled = stats
-			.total_prev_events
-			.saturating_mul(1000)
-			.checked_div(stats.count)
-			.unwrap_or(0);
-		(scaled.checked_div(1000).unwrap_or(0), scaled % 1000)
-	} else {
-		(0, 0)
-	};
-
 	let room_ssh = self
 		.services
 		.state
@@ -321,36 +421,7 @@ pub(super) async fn get_room_dag(
 		.await
 		.ok();
 
-	let tip_match = match (stats.last_ssh, room_ssh) {
-		| (Some(tip), Some(room)) if tip == room => "✓ tip matches room state".to_owned(),
-		| (Some(tip), Some(room)) if stats.last_is_state_event => {
-			if let (Some(last_eid), Some(last_type), Some(last_sk)) =
-				(&stats.last_event_id, &stats.last_event_type, &stats.last_state_key)
-			{
-				let room_has_tip = self
-					.services
-					.state_accessor
-					.state_get_id(room, &last_type.to_string().into(), last_sk)
-					.await
-					.is_ok_and(|eid| eid == *last_eid);
-
-				if room_has_tip {
-					format!(
-						"✓ tip is state event — room state includes tip (pre={tip} post={room})"
-					)
-				} else {
-					format!(
-						"✗ tip DIVERGES — room state at ({last_type}, {last_sk}) does not point \
-						 to tip event {last_eid}"
-					)
-				}
-			} else {
-				"✗ tip DIVERGES from room state (state event but missing metadata)".to_owned()
-			}
-		},
-		| (Some(_tip), Some(_room)) => "✗ tip DIVERGES from room state".to_owned(),
-		| _ => "? unknown".to_owned(),
-	};
+	let tip_match = determine_tip_match(self.services, &stats, room_ssh).await;
 
 	let min_d = if stats.min_depth == u64::MAX {
 		0
@@ -370,41 +441,6 @@ pub(super) async fn get_room_dag(
 		path.to_string_lossy().into_owned()
 	};
 
-	let mut out = format!("Wrote {count} PDUs to {display_path}\n", count = stats.count);
-	writeln!(out, "```").expect("fmt");
-	writeln!(out, "PDUs:           {count}", count = stats.count).expect("fmt");
-	writeln!(out, "State events:   {state_events}", state_events = stats.state_events)
-		.expect("fmt");
-	writeln!(out, "Branching:      {bf_whole}.{bf_frac:03} avg prev_events/PDU").expect("fmt");
-	let (frag_whole, frag_frac) = if stats.max_depth > 0 {
-		let scaled = stats
-			.count
-			.saturating_mul(1000)
-			.checked_div(stats.max_depth)
-			.unwrap_or(0);
-		(scaled.checked_div(1000).unwrap_or(0), scaled % 1000)
-	} else {
-		(0, 0)
-	};
-	writeln!(
-		out,
-		"Frag factor:    {frag_whole}.{frag_frac:03} ({count} events / {max_depth} depth, \
-		 {heads_count} heads)",
-		count = stats.count,
-		max_depth = stats.max_depth
-	)
-	.expect("fmt");
-	writeln!(out, "Unique states:  {}", stats.unique_hashes.len()).expect("fmt");
-	writeln!(out, "Missing hash:   {missing_hash}", missing_hash = stats.missing_hash)
-		.expect("fmt");
-	if let Some(tip) = stats.last_ssh {
-		writeln!(out, "Tip SSH:        {tip}").expect("fmt");
-	}
-	if let Some(room) = room_ssh {
-		writeln!(out, "Room SSH:       {room}").expect("fmt");
-	}
-	writeln!(out, "Status:         {tip_match}").expect("fmt");
-	writeln!(out, "```").expect("fmt");
-
+	let out = format_dag_stats_output(&stats, room_ssh, &tip_match, &display_path);
 	self.write_str(&out).await
 }

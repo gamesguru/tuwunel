@@ -2,15 +2,18 @@
 
 use std::{env::temp_dir, fs::remove_dir_all};
 
-use ruma::{
-	RoomId, RoomVersionId,
-	events::room::{
-		create::RoomCreateEventContent,
-		member::{MembershipState, RoomMemberEventContent},
+use tuwunel::{Args, Runtime, Server, async_exec};
+use tuwunel_core::{
+	Result,
+	pdu::PduBuilder,
+	ruma::{
+		RoomId, RoomVersionId,
+		events::room::{
+			create::RoomCreateEventContent,
+			member::{MembershipState, RoomMemberEventContent},
+		},
 	},
 };
-use tuwunel::{Args, Runtime, Server, async_exec};
-use tuwunel_core::{Result, pdu::PduBuilder};
 
 async fn create_test_room(
 	services: &tuwunel_service::Services,

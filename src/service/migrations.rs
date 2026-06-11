@@ -14,7 +14,7 @@ use tuwunel_core::{
 	},
 	warn,
 };
-use tuwunel_database::{Deserialized, SEP};
+use tuwunel_database::{Deserialized, Json, SEP};
 
 use crate::{Services, media};
 
@@ -31,6 +31,18 @@ const SERVER_NAME_KEY: &[u8] = b"server_name";
 pub(crate) async fn migrations(services: &Services) -> Result {
 	if !services.config.database_migrations {
 		warn!("Skipping database migrations due to configuration...");
+		let db = &services.db;
+		if db["global"]
+			.get(b"migrate_roomuserid_privateread_v2")
+			.await
+			.is_not_found()
+		{
+			return Err!(Database(
+				"Database is missing private-read v2 migration markers. Please enable \
+				 database_migrations in your configuration to apply \
+				 migrate_roomuserid_privateread_v2."
+			));
+		}
 		return Ok(());
 	}
 
@@ -719,13 +731,23 @@ async fn migrate_roomuserid_privateread_v2(services: &Services) -> Result {
 		.ready_fold((0_usize, 0_usize), |(mut checked, mut migrated), (raw_key, raw_val)| {
 			checked = checked.saturating_add(1);
 
-			let pdu_count = tuwunel_core::utils::u64_from_bytes(&raw_val).unwrap_or(0);
+			let Ok(pdu_count) = tuwunel_core::utils::u64_from_bytes(&raw_val) else {
+				warn!(?raw_key, "Invalid private-read count bytes; skipping migration for key");
+				return (checked, migrated);
+			};
 
-			let ts = roomuserid_privatereadts
-				.get_blocking(&raw_key)
-				.ok()
-				.and_then(|handle| tuwunel_core::utils::u64_from_bytes(&*handle).ok())
-				.unwrap_or(0);
+			let Ok(handle) = roomuserid_privatereadts.get_blocking(&raw_key) else {
+				warn!(?raw_key, "Missing private-read timestamp; skipping migration for key");
+				return (checked, migrated);
+			};
+
+			let Ok(ts) = tuwunel_core::utils::u64_from_bytes(&*handle) else {
+				warn!(
+					?raw_key,
+					"Invalid private-read timestamp bytes; skipping migration for key"
+				);
+				return (checked, migrated);
+			};
 
 			let val = (pdu_count, ts);
 			roomuserid_privateread_v2.put(&raw_key, val);

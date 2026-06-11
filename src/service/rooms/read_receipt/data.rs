@@ -80,6 +80,20 @@ impl Data {
 		let key = (room_id, user_id);
 		self.roomuserid_readreceipt
 			.put(key, Json((*count, event.clone())));
+
+		// Verify the mirror against the chronological index and update if
+		// stale/inconsistent
+		if let Ok(Json((stored_count, _))) = self
+			.roomuserid_readreceipt
+			.qry(&key)
+			.await
+			.deserialized::<Json<(u64, ReceiptEvent)>>()
+		{
+			if stored_count != *count {
+				self.roomuserid_readreceipt
+					.put(key, Json((*count, event.clone())));
+			}
+		}
 	}
 
 	#[inline]

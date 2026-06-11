@@ -133,7 +133,7 @@ impl Service {
 			.chain(threaded)
 			.stream()
 			.filter_map(|(kind, count)| async move {
-				self.build_private_read_event(shortroomid, count, user_id, &kind)
+				self.build_private_read_event(room_id, shortroomid, count, user_id, &kind)
 					.await
 			})
 			.collect()
@@ -144,6 +144,7 @@ impl Service {
 
 	async fn build_private_read_event(
 		&self,
+		room_id: &RoomId,
 		shortroomid: u64,
 		count: u64,
 		user_id: &UserId,
@@ -164,11 +165,18 @@ impl Service {
 		let thread = thread_kind_to_receipt(thread_kind);
 		let event_id: OwnedEventId = pdu.event_id().to_owned();
 		let user_id: OwnedUserId = user_id.to_owned();
+
+		let ts = self
+			.db
+			.private_read_get_ts(room_id, &user_id, thread_kind)
+			.await
+			.and_then(|u64_ts| ruma::UInt::new(u64_ts).map(ruma::MilliSecondsSinceUnixEpoch));
+
 		let content: BTreeMap<OwnedEventId, Receipts> = BTreeMap::from_iter([(
 			event_id,
 			BTreeMap::from_iter([(
 				ReceiptType::ReadPrivate,
-				BTreeMap::from_iter([(user_id, Receipt { ts: None, thread })]),
+				BTreeMap::from_iter([(user_id, Receipt { ts, thread })]),
 			)]),
 		)]);
 

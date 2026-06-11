@@ -107,6 +107,8 @@ async fn fresh(services: &Services) -> Result {
 	db["global"].insert(b"fix_hashed_sentinel_passwords", []);
 	db["global"].insert(b"upgrade_legacy_mediaid_user", []);
 	db["global"].insert(b"remove_remote_media_userid", []);
+	db["global"].insert(b"migrate_roomuserid_privateread_v2", []);
+	db["global"].insert(b"migrate_roomuserid_readreceipt", []);
 
 	// Create the admin room and server user on first run
 	if services.config.create_admin_room {
@@ -199,6 +201,22 @@ async fn migrate(services: &Services) -> Result {
 		.is_not_found()
 	{
 		remove_remote_media_userid(services).await?;
+	}
+
+	if db["global"]
+		.get(b"migrate_roomuserid_privateread_v2")
+		.await
+		.is_not_found()
+	{
+		migrate_roomuserid_privateread_v2(services).await?;
+	}
+
+	if db["global"]
+		.get(b"migrate_roomuserid_readreceipt")
+		.await
+		.is_not_found()
+	{
+		migrate_roomuserid_readreceipt(services).await?;
 	}
 
 	if discovered_version().await < target_version {
@@ -680,5 +698,100 @@ async fn remove_remote_media_userid(services: &Services) -> Result {
 	);
 
 	db["global"].insert(b"remove_remote_media_userid", []);
+	db.engine.sort()
+}
+
+async fn migrate_roomuserid_privateread_v2(services: &Services) -> Result {
+	let db = &services.db;
+	let cork = db.cork_and_sync();
+	let roomuserid_privateread = db["roomuserid_privateread"].clone();
+	let roomuserid_privatereadts = db["roomuserid_privatereadts"].clone();
+	let roomuserid_privateread_v2 = db["roomuserid_privateread_v2"].clone();
+
+	info!(
+		"Consolidating legacy private read receipt maps (roomuserid_privateread and \
+		 roomuserid_privatereadts) into roomuserid_privateread_v2..."
+	);
+
+	let (checked, migrated) = roomuserid_privateread
+		.raw_stream()
+		.ignore_err()
+		.ready_fold((0_usize, 0_usize), |(mut checked, mut migrated), (raw_key, raw_val)| {
+			checked = checked.saturating_add(1);
+
+			let pdu_count = tuwunel_core::utils::u64_from_bytes(&raw_val).unwrap_or(0);
+
+			let ts = roomuserid_privatereadts
+				.get_blocking(&raw_key)
+				.ok()
+				.and_then(|handle| tuwunel_core::utils::u64_from_bytes(&*handle).ok())
+				.unwrap_or(0);
+
+			let val = (pdu_count, ts);
+			roomuserid_privateread_v2.put(&raw_key, val);
+
+			// Clean up legacy keys
+			roomuserid_privateread.remove(&raw_key);
+			roomuserid_privatereadts.remove(&raw_key);
+
+			migrated = migrated.saturating_add(1);
+
+			(checked, migrated)
+		})
+		.await;
+
+	drop(cork);
+	info!(
+		%checked,
+		%migrated,
+		"Consolidated legacy private read receipt maps"
+	);
+
+	db["global"].insert(b"migrate_roomuserid_privateread_v2", []);
+	db.engine.sort()
+}
+
+async fn migrate_roomuserid_readreceipt(services: &Services) -> Result {
+	let db = &services.db;
+	let cork = db.cork_and_sync();
+	let readreceiptid_readreceipt = db["readreceiptid_readreceipt"].clone();
+	let roomuserid_readreceipt = db["roomuserid_readreceipt"].clone();
+
+	info!(
+		"Populating direct public read receipt index (roomuserid_readreceipt) from \
+		 chronological read receipt history..."
+	);
+
+	// 4-tuple key: pre-MSC3771 rows deserialize with `&str` tail empty.
+	type Key<'a> = (&'a RoomId, u64, &'a UserId, &'a str);
+
+	let (checked, migrated) = readreceiptid_readreceipt
+		.stream::<Key<'_>, ruma::events::receipt::ReceiptEvent>()
+		.expect_ok()
+		.ignore_err()
+		.ready_fold(
+			(0_usize, 0_usize),
+			|(mut checked, mut migrated), ((room_id, count, user_id, _), event)| {
+				checked = checked.saturating_add(1);
+
+				let index_key = (room_id, user_id);
+				let val = (count, event);
+				roomuserid_readreceipt.put(index_key, Json(val));
+
+				migrated = migrated.saturating_add(1);
+
+				(checked, migrated)
+			},
+		)
+		.await;
+
+	drop(cork);
+	info!(
+		%checked,
+		%migrated,
+		"Populated direct public read receipt index"
+	);
+
+	db["global"].insert(b"migrate_roomuserid_readreceipt", []);
 	db.engine.sort()
 }

@@ -18,10 +18,11 @@ use tuwunel_database::{Deserialized, Interfix, Json, Map, serialize_key};
 use super::ThreadKind;
 
 pub(super) struct Data {
-	roomuserid_privateread: Arc<Map>,
+	roomuserid_privateread_v2: Arc<Map>,
 	roomuserid_lastprivatereadupdate: Arc<Map>,
 	services: Arc<crate::services::OnceServices>,
 	readreceiptid_readreceipt: Arc<Map>,
+	roomuserid_readreceipt: Arc<Map>,
 }
 
 pub(super) type ReceiptItem<'a> = (&'a UserId, u64, Raw<AnySyncEphemeralRoomEvent>);
@@ -30,9 +31,10 @@ impl Data {
 	pub(super) fn new(args: &crate::Args<'_>) -> Self {
 		let db = &args.db;
 		Self {
-			roomuserid_privateread: db["roomuserid_privateread"].clone(),
+			roomuserid_privateread_v2: db["roomuserid_privateread_v2"].clone(),
 			roomuserid_lastprivatereadupdate: db["roomuserid_lastprivatereadupdate"].clone(),
 			readreceiptid_readreceipt: db["readreceiptid_readreceipt"].clone(),
+			roomuserid_readreceipt: db["roomuserid_readreceipt"].clone(),
 			services: args.services.clone(),
 		}
 	}
@@ -74,6 +76,10 @@ impl Data {
 		let latest_id = (room_id, *count, user_id, thread_kind);
 		self.readreceiptid_readreceipt
 			.put(latest_id, Json(event));
+
+		let key = (room_id, user_id);
+		self.roomuserid_readreceipt
+			.put(key, Json((*count, event.clone())));
 	}
 
 	#[inline]
@@ -113,6 +119,20 @@ impl Data {
 		since: Option<u64>,
 		user_id: Option<&'a UserId>,
 	) -> Result<u64> {
+		if let Some(user_id) = user_id {
+			let key = (room_id, user_id);
+			if let Ok(Json((count, _))) = self
+				.roomuserid_readreceipt
+				.qry(&key)
+				.await
+				.deserialized::<Json<(u64, ReceiptEvent)>>()
+			{
+				if since.is_none_or(|since| since > count) {
+					return Ok(count);
+				}
+			}
+		}
+
 		// 4-tuple key: pre-MSC3771 rows deserialize with `&str` tail empty.
 		type Key<'a> = (&'a RoomId, u64, &'a UserId, &'a str);
 
@@ -153,17 +173,20 @@ impl Data {
 		self.roomuserid_lastprivatereadupdate
 			.put(lastupdate_key, *next_count);
 
+		let now = tuwunel_core::utils::millis_since_unix_epoch();
+		let val = (pdu_count, now);
+
 		match thread.as_str() {
 			| Some(thread_kind) if !thread_kind.is_empty() => {
 				let key = (room_id, user_id, thread_kind);
-				self.roomuserid_privateread.put(key, pdu_count);
+				self.roomuserid_privateread_v2.put(key, val);
 			},
 			| _ => {
 				self.clear_thread_private_reads(room_id, user_id)
 					.await;
 
 				let key = (room_id, user_id);
-				self.roomuserid_privateread.put(key, pdu_count);
+				self.roomuserid_privateread_v2.put(key, val);
 			},
 		}
 	}
@@ -176,10 +199,38 @@ impl Data {
 		user_id: &UserId,
 	) -> Result<u64> {
 		let key = (room_id, user_id);
-		self.roomuserid_privateread
+		self.roomuserid_privateread_v2
 			.qry(&key)
 			.await
-			.deserialized()
+			.deserialized::<(u64, u64)>()
+			.map(|(count, _)| count)
+	}
+
+	/// Get private read receipt timestamp (threaded or unthreaded).
+	#[inline]
+	pub(super) async fn private_read_get_ts(
+		&self,
+		room_id: &RoomId,
+		user_id: &UserId,
+		thread_kind: &str,
+	) -> Option<u64> {
+		if thread_kind.is_empty() {
+			let key = (room_id, user_id);
+			self.roomuserid_privateread_v2
+				.qry(&key)
+				.await
+				.deserialized::<(u64, u64)>()
+				.map(|(_, ts)| ts)
+				.ok()
+		} else {
+			let key = (room_id, user_id, thread_kind);
+			self.roomuserid_privateread_v2
+				.qry(&key)
+				.await
+				.deserialized::<(u64, u64)>()
+				.map(|(_, ts)| ts)
+				.ok()
+		}
 	}
 
 	/// Stream of `(thread_kind, pdu_count)` for the per-thread (3-tuple)
@@ -192,23 +243,40 @@ impl Data {
 		room_id: &'a RoomId,
 		user_id: &'a UserId,
 	) -> impl Stream<Item = (ThreadKind, u64)> + Send + 'a {
-		type ThreadKv<'a> = ((&'a RoomId, &'a UserId, &'a str), u64);
+		type ThreadKv<'a> = ((&'a RoomId, &'a UserId, &'a str), (u64, u64));
 
 		let prefix = (room_id, user_id, Interfix);
-		self.roomuserid_privateread
+		self.roomuserid_privateread_v2
 			.stream_prefix(&prefix)
 			.ignore_err()
-			.map(|((_, _, kind), count): ThreadKv<'_>| (ThreadKind::from(kind), count))
+			.map(|((_, _, kind), (count, _)): ThreadKv<'_>| (ThreadKind::from(kind), count))
+	}
+
+	/// Stream of `(thread_kind, ts)` for the per-thread (3-tuple)
+	/// private read rows for this `(room, user)`.
+	#[inline]
+	pub(super) fn private_read_threaded_ts_stream<'a>(
+		&'a self,
+		room_id: &'a RoomId,
+		user_id: &'a UserId,
+	) -> impl Stream<Item = (ThreadKind, u64)> + Send + 'a {
+		type ThreadKv<'a> = ((&'a RoomId, &'a UserId, &'a str), (u64, u64));
+
+		let prefix = (room_id, user_id, Interfix);
+		self.roomuserid_privateread_v2
+			.stream_prefix(&prefix)
+			.ignore_err()
+			.map(|((_, _, kind), (_, ts)): ThreadKv<'_>| (ThreadKind::from(kind), ts))
 	}
 
 	#[inline]
 	async fn clear_thread_private_reads(&self, room_id: &RoomId, user_id: &UserId) {
 		let prefix = (room_id, user_id, Interfix);
-		self.roomuserid_privateread
+		self.roomuserid_privateread_v2
 			.keys_prefix_raw(&prefix)
 			.ignore_err()
 			.ready_for_each(|key| {
-				self.roomuserid_privateread.remove(key);
+				self.roomuserid_privateread_v2.remove(key);
 			})
 			.await;
 	}
@@ -231,12 +299,12 @@ impl Data {
 	pub(super) async fn delete_all_read_receipts(&self, room_id: &RoomId) -> Result {
 		let prefix = (room_id, Interfix);
 
-		self.roomuserid_privateread
+		self.roomuserid_privateread_v2
 			.keys_prefix_raw(&prefix)
 			.ignore_err()
 			.ready_for_each(|key| {
 				trace!("Removing key: {key:?}");
-				self.roomuserid_privateread.remove(key);
+				self.roomuserid_privateread_v2.remove(key);
 			})
 			.await;
 
@@ -255,6 +323,15 @@ impl Data {
 			.ready_for_each(|key| {
 				trace!("Removing key: {key:?}");
 				self.readreceiptid_readreceipt.remove(key);
+			})
+			.await;
+
+		self.roomuserid_readreceipt
+			.keys_prefix_raw(&prefix)
+			.ignore_err()
+			.ready_for_each(|key| {
+				trace!("Removing key: {key:?}");
+				self.roomuserid_readreceipt.remove(key);
 			})
 			.await;
 

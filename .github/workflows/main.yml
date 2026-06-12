@@ -3,7 +3,8 @@ name: Main
 on:
   push:
     branches:
-      - "**"
+      - "main"
+      - "test"
     tags:
       - "v*"
   pull_request:

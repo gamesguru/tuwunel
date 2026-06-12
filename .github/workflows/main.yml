@@ -131,9 +131,9 @@ jobs:
       complement_runner: 'het'
       enable_test_complement_crypto: ${{fromJSON(inputs.enable_test_complement_crypto || 'true')}}
       complement_crypto_verbose: ${{fromJSON(inputs.complement_crypto_verbose || 'false')}}
-      enable_test_playwright: ${{fromJSON(inputs.enable_test_playwright || env.is_dev || 'false')}}
+      enable_test_playwright: ${{fromJSON(inputs.enable_test_playwright || env.is_dev || 'false') && vars.TUWUNEL_GH_ACTIONS_DISABLE_HEAVY == ''}}
       playwright_runner: 'het'
-      enable_package: ${{fromJSON(inputs.enable_package || 'true')}}
+      enable_package: ${{fromJSON(inputs.enable_package || 'true') && vars.TUWUNEL_GH_ACTIONS_DISABLE_HEAVY == ''}}
       enable_package_book: ${{fromJSON(inputs.enable_package_book || 'true')}}
       enable_package_docs: ${{fromJSON(inputs.enable_package_docs || 'true')}}
       enable_package_binary: ${{fromJSON(inputs.enable_package_binary || 'true')}}
@@ -142,7 +142,7 @@ jobs:
       enable_package_distro: ${{fromJSON(inputs.enable_package_distro || env.is_fat || 'false')}}
       package_distros: ${{inputs.package_distros || env.default_package_distros}}
       enable_package_checks: ${{fromJSON(inputs.enable_package_checks || env.is_test || 'false')}}
-      enable_publish: ${{fromJSON(inputs.enable_publish || 'true')}}
+      enable_publish: ${{fromJSON(inputs.enable_publish || 'true') && (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && vars.TUWUNEL_GH_ACTIONS_DISABLE_HEAVY == ''}}
       is_release: ${{fromJSON(env.is_release || 'false')}}
       is_main: ${{fromJSON(env.is_main || 'false')}}
       is_test: ${{fromJSON(env.is_test || 'false')}}
@@ -394,6 +394,7 @@ jobs:
 
     name: Publish
     needs: [init, test, package]
+    permissions: write-all
     uses: ./.github/workflows/publish.yml
     with:
       checkout: ${{needs.init.outputs.checkout}}

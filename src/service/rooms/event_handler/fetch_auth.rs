@@ -106,7 +106,7 @@ where
 							pdus.push((pdu, Some(json)));
 						}
 						self.record_success(Context::Auth, &next_id).await;
-						let _ = self
+						let _: Result = self
 							.unreject_rejected_events(origin, room_id, room_version)
 							.await;
 					} else {

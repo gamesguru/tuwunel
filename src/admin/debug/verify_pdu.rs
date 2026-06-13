@@ -74,8 +74,8 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 				| Ok(key) => {
 					let mut map = PublicKeyMap::new();
 					let mut set = PublicKeySet::new();
-					set.insert(key_id.to_owned(), key.key);
-					map.insert(server.to_owned(), set);
+					set.insert(key_id.as_str().to_owned(), key.key);
+					map.insert(server.as_str().to_owned(), set);
 
 					if let Err(e) = verify_json(&map, &pdu_json) {
 						if !verify_err.is_empty() {

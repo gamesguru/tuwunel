@@ -759,6 +759,7 @@ async fn handle_left_room(
 			auth_events: Default::default(),
 			prev_events: Default::default(),
 			signatures: None,
+			rejected: false,
 		};
 
 		let state = StateEvents {

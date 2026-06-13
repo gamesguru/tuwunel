@@ -137,7 +137,7 @@ pub async fn handle_incoming_pdu<'a>(
 			kind = ?incoming_pdu.event_type(),
 			"Not a timeline event.",
 		);
-		let _ = self
+		let _: Result = self
 			.unreject_rejected_events(origin, room_id, &room_version)
 			.await;
 		return Ok(None);
@@ -244,7 +244,7 @@ pub async fn handle_incoming_pdu<'a>(
 		.await;
 
 	if res.is_ok() {
-		let _ = self
+		let _: Result = self
 			.unreject_rejected_events(origin, room_id, &room_version)
 			.await;
 	}

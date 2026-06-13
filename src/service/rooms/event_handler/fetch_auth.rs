@@ -158,14 +158,13 @@ async fn fetch_auth_chain(
 		.attempt_limit(super::EVENT_FETCH_ATTEMPT_LIMIT)
 		.fanout_for_op();
 
-	if let Ok(outcome) = self.services.fetcher.fetch(chain_opts).await {
-		if let Ok(auth_chain) = serde_json::from_slice::<Vec<CanonicalJsonObject>>(&outcome.bytes)
-		{
-			debug!(count = auth_chain.len(), "Pre-fetched entire auth chain");
-			for event_json in auth_chain {
-				if let Ok(id) = gen_event_id(&event_json, room_version) {
-					fetched_chain.insert(id, event_json);
-				}
+	if let Ok(outcome) = self.services.fetcher.fetch(chain_opts).await
+		&& let Ok(auth_chain) = serde_json::from_slice::<Vec<CanonicalJsonObject>>(&outcome.bytes)
+	{
+		debug!(count = auth_chain.len(), "Pre-fetched entire auth chain");
+		for event_json in auth_chain {
+			if let Ok(id) = gen_event_id(&event_json, room_version) {
+				fetched_chain.insert(id, event_json);
 			}
 		}
 	}
@@ -248,4 +247,6 @@ async fn fetch_auth_chain(
 	}
 
 	(event_id.to_owned(), None, events_in_reverse_order)
+}
+_in_reverse_order)
 }

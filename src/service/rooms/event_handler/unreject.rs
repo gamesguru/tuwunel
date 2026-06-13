@@ -13,6 +13,7 @@ use tuwunel_core::{
 use crate::rooms::state_res;
 
 #[implement(super::Service)]
+#[must_use]
 pub fn unreject_rejected_events<'a>(
 	&'a self,
 	origin: &'a ServerName,
@@ -118,7 +119,7 @@ pub fn unreject_rejected_events<'a>(
 					.add_pdu_outlier(event_id, &pdu_json);
 
 				// Promote to timeline or handle incoming PDU!
-				let _ = Box::pin(self.handle_incoming_pdu(
+				let _: Result<super::Handled> = Box::pin(self.handle_incoming_pdu(
 					origin, room_id, event_id, pdu_json, true, // is_timeline_event
 				))
 				.await;

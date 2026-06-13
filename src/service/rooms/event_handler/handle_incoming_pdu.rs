@@ -137,6 +137,9 @@ pub async fn handle_incoming_pdu<'a>(
 			kind = ?incoming_pdu.event_type(),
 			"Not a timeline event.",
 		);
+		let _ = self
+			.unreject_rejected_events(origin, room_id, &room_version)
+			.await;
 		return Ok(None);
 	}
 
@@ -227,15 +230,24 @@ pub async fn handle_incoming_pdu<'a>(
 		.await?;
 
 	// Done with prev events, now handling the incoming event
-	self.upgrade_outlier_to_timeline_pdu(
-		origin,
-		room_id,
-		incoming_pdu,
-		pdu,
-		&room_version,
-		recursion_level,
-		create_event.event_id(),
-	)
-	.boxed()
-	.await
+	let res = self
+		.upgrade_outlier_to_timeline_pdu(
+			origin,
+			room_id,
+			incoming_pdu,
+			pdu,
+			&room_version,
+			recursion_level,
+			create_event.event_id(),
+		)
+		.boxed()
+		.await;
+
+	if res.is_ok() {
+		let _ = self
+			.unreject_rejected_events(origin, room_id, &room_version)
+			.await;
+	}
+
+	res
 }

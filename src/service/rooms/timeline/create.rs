@@ -141,6 +141,7 @@ pub async fn create_hash_and_sign_event(
 		hashes: EventHash::default(),
 		signatures: None,
 		prev_events,
+		rejected: false,
 		auth_events: auth_events
 			.values()
 			.filter(|pdu| {

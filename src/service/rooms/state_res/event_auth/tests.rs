@@ -581,7 +581,7 @@ async fn auth_event_in_different_room() {
 		depth: uint!(0),
 		hashes: EventHash::default(),
 		signatures: None,
-		//rejected: false,
+		rejected: false,
 	};
 	init_events
 		.insert(power_level.event_id.clone(), power_level)
@@ -720,7 +720,7 @@ async fn rejected_auth_event() {
 		depth: uint!(0),
 		hashes: EventHash::default(),
 		signatures: None,
-		//rejected: true,
+		rejected: true,
 	};
 	init_events
 		.insert(power_level.event_id.clone(), power_level)
@@ -813,7 +813,7 @@ async fn event_without_room_id() {
 		depth: uint!(0),
 		hashes: EventHash::default(),
 		signatures: None,
-		//rejected: false,
+		rejected: false,
 	};
 
 	let init_events = INITIAL_HYDRA_EVENTS();

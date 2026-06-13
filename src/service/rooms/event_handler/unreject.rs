@@ -26,7 +26,7 @@ pub fn unreject_rejected_events<'a>(
 	Box::pin(async move {
 		debug!("Starting unreject scanning for room {room_id}");
 
-		// 1. Get all outliers in eventid_outlierpdu
+		// Get all outliers in eventid_outlierpdu
 		let outliers: Vec<_> = self
 			.services
 			.timeline
@@ -37,7 +37,7 @@ pub fn unreject_rejected_events<'a>(
 			.collect()
 			.await;
 
-		// 2. Filter for outliers that are in this room and have "rejected" == true
+		// Filter for outliers that are in this room and have "rejected" == true
 		let mut rejected_outliers = Vec::new();
 		for item in outliers {
 			let pdu_room_id = item
@@ -58,7 +58,7 @@ pub fn unreject_rejected_events<'a>(
 
 		debug!(count = rejected_outliers.len(), "Found rejected outliers in room");
 
-		// 3. For each rejected outlier, re-run auth check
+		// For each rejected outlier, re-run auth check
 		let room_rules = room_version::rules(room_version)?;
 		let mut promoted_any = false;
 
@@ -134,7 +134,7 @@ pub fn unreject_rejected_events<'a>(
 			}
 		}
 
-		// 4. Cascade: if we promoted any event, we might have unrejected some auth
+		// Cascade: if we promoted any event, we might have unrejected some auth
 		// event that other events depend on, so recursively check them
 		if promoted_any {
 			Box::pin(self.unreject_rejected_events(origin, room_id, room_version)).await?;

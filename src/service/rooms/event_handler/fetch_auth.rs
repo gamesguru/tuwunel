@@ -248,5 +248,3 @@ async fn fetch_auth_chain(
 
 	(event_id.to_owned(), None, events_in_reverse_order)
 }
-_in_reverse_order)
-}

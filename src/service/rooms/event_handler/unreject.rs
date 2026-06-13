@@ -125,7 +125,7 @@ pub fn unreject_rejected_events<'a>(
 					.add_pdu_outlier(event_id, &pdu_json);
 
 				// Promote to timeline or handle incoming PDU!
-				let _: Result<super::Handled> = Box::pin(self.handle_incoming_pdu(
+				let _: Result<_> = Box::pin(self.handle_incoming_pdu(
 					origin, room_id, event_id, pdu_json, true, // is_timeline_event
 				))
 				.await;

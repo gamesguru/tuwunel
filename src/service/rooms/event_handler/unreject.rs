@@ -6,7 +6,7 @@ use tuwunel_core::{
 	Event, EventTypeExt, Result, debug, err, implement,
 	matrix::{PduEvent, room_version},
 	ref_at,
-	utils::stream::ReadyExt,
+	utils::{future::TryExtExt, stream::IterStream, stream::ReadyExt},
 	warn,
 };
 
@@ -36,12 +36,12 @@ pub async fn unreject_rejected_events(
 	let mut rejected_outliers = Vec::new();
 	for item in outliers {
 		let pdu_room_id = item
-			.value
+			.1
 			.get("room_id")
 			.and_then(CanonicalJsonValue::as_str);
 		if pdu_room_id == Some(room_id.as_str()) {
 			let is_rejected = item
-				.value
+				.1
 				.get("rejected")
 				.and_then(CanonicalJsonValue::as_bool)
 				.unwrap_or(false);
@@ -58,8 +58,8 @@ pub async fn unreject_rejected_events(
 	let mut promoted_any = false;
 
 	for item in rejected_outliers {
-		let event_id = &item.key;
-		let mut pdu_json = item.value;
+		let event_id = &item.0;
+		let mut pdu_json = item.1;
 
 		// Convert to PduEvent
 		let Ok((event, _)) =

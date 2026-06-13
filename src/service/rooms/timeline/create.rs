@@ -12,6 +12,7 @@ use serde_json::value::to_raw_value;
 use tuwunel_core::{
 	Error, Result, err, implement,
 	matrix::{
+		RoomVersionRules,
 		event::{Event, StateKey, TypeExt},
 		pdu::{EventHash, PduBuilder, PduEvent, PrevEvents, check_rules},
 		room_version,
@@ -31,7 +32,7 @@ async fn determine_room_version(
 	room_id: &RoomId,
 	event_type: &TimelineEventType,
 	content: &serde_json::value::RawValue,
-) -> Result<(ruma::RoomVersionId, ruma::RoomVersionRules)> {
+) -> Result<(ruma::RoomVersionId, RoomVersionRules)> {
 	self.services
 		.state
 		.get_room_version(room_id)
@@ -72,7 +73,7 @@ async fn build_unsigned_field(
 	room_id: &RoomId,
 	event_type: &TimelineEventType,
 	state_key: Option<&StateKey>,
-	unsigned_opt: Option<serde_json::Map<String, serde_json::Value>>,
+	unsigned_opt: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 ) -> Result<Option<Box<serde_json::value::RawValue>>> {
 	let mut unsigned = unsigned_opt.unwrap_or_default();
 	if let Some(state_key) = state_key
@@ -99,7 +100,7 @@ async fn hash_sign_and_validate_event(
 	&self,
 	mut pdu: PduEvent,
 	room_version: &ruma::RoomVersionId,
-	version_rules: &ruma::RoomVersionRules,
+	version_rules: &RoomVersionRules,
 ) -> Result<(PduEvent, CanonicalJsonObject)> {
 	let mut pdu_json = to_canonical_object(&pdu).map_err(|e| {
 		err!(Request(BadJson(warn!("Failed to convert PDU to canonical JSON: {e}"))))

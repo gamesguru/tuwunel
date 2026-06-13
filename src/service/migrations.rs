@@ -14,7 +14,7 @@ use tuwunel_core::{
 	},
 	warn,
 };
-use tuwunel_database::{Deserialized, SEP};
+use tuwunel_database::{Deserialized, Json, SEP};
 
 use crate::{Services, media};
 
@@ -31,6 +31,18 @@ const SERVER_NAME_KEY: &[u8] = b"server_name";
 pub(crate) async fn migrations(services: &Services) -> Result {
 	if !services.config.database_migrations {
 		warn!("Skipping database migrations due to configuration...");
+		let db = &services.db;
+		if db["global"]
+			.get(b"migrate_roomuserid_privateread_v2")
+			.await
+			.is_not_found()
+		{
+			return Err!(Database(
+				"Database is missing private-read v2 migration markers. Please enable \
+				 database_migrations in your configuration to apply \
+				 migrate_roomuserid_privateread_v2."
+			));
+		}
 		return Ok(());
 	}
 
@@ -107,6 +119,8 @@ async fn fresh(services: &Services) -> Result {
 	db["global"].insert(b"fix_hashed_sentinel_passwords", []);
 	db["global"].insert(b"upgrade_legacy_mediaid_user", []);
 	db["global"].insert(b"remove_remote_media_userid", []);
+	db["global"].insert(b"migrate_roomuserid_privateread_v2", []);
+	db["global"].insert(b"migrate_roomuserid_readreceipt", []);
 
 	// Create the admin room and server user on first run
 	if services.config.create_admin_room {
@@ -120,20 +134,9 @@ async fn fresh(services: &Services) -> Result {
 	Ok(())
 }
 
-/// Apply any migrations
-async fn migrate(services: &Services) -> Result {
+async fn run_media_migrations(services: &Services) -> Result {
 	let db = &services.db;
 	let config = &services.server.config;
-
-	let target_version = DATABASE_VERSION;
-	let discovered_version = async || services.globals.db.database_version().await;
-
-	if discovered_version().await < 13 {
-		return Err!(Database(
-			"Database schema version {} is no longer supported",
-			discovered_version().await,
-		));
-	}
 
 	if db["global"]
 		.get(b"feat_sha256_media")
@@ -144,6 +147,28 @@ async fn migrate(services: &Services) -> Result {
 	} else if config.media_startup_check {
 		media::migrations::checkup_sha256_media(services).await?;
 	}
+
+	if db["global"]
+		.get(b"upgrade_legacy_mediaid_user")
+		.await
+		.is_not_found()
+	{
+		upgrade_legacy_mediaid_user(services).await?;
+	}
+
+	if db["global"]
+		.get(b"remove_remote_media_userid")
+		.await
+		.is_not_found()
+	{
+		remove_remote_media_userid(services).await?;
+	}
+
+	Ok(())
+}
+
+async fn run_data_fixes(services: &Services) -> Result {
+	let db = &services.db;
 
 	if db["global"]
 		.get(b"fix_bad_double_separator_in_state_cache")
@@ -185,21 +210,48 @@ async fn migrate(services: &Services) -> Result {
 		fix_hashed_sentinel_passwords(services).await?;
 	}
 
+	Ok(())
+}
+
+async fn run_read_receipt_migrations(services: &Services) -> Result {
+	let db = &services.db;
+
 	if db["global"]
-		.get(b"upgrade_legacy_mediaid_user")
+		.get(b"migrate_roomuserid_privateread_v2")
 		.await
 		.is_not_found()
 	{
-		upgrade_legacy_mediaid_user(services).await?;
+		migrate_roomuserid_privateread_v2(services).await?;
 	}
 
 	if db["global"]
-		.get(b"remove_remote_media_userid")
+		.get(b"migrate_roomuserid_readreceipt")
 		.await
 		.is_not_found()
 	{
-		remove_remote_media_userid(services).await?;
+		migrate_roomuserid_readreceipt(services).await?;
 	}
+
+	Ok(())
+}
+
+/// Apply any migrations
+async fn migrate(services: &Services) -> Result {
+	let config = &services.server.config;
+
+	let target_version = DATABASE_VERSION;
+	let discovered_version = async || services.globals.db.database_version().await;
+
+	if discovered_version().await < 13 {
+		return Err!(Database(
+			"Database schema version {} is no longer supported",
+			discovered_version().await,
+		));
+	}
+
+	run_media_migrations(services).await?;
+	run_data_fixes(services).await?;
+	run_read_receipt_migrations(services).await?;
 
 	if discovered_version().await < target_version {
 		services
@@ -680,5 +732,110 @@ async fn remove_remote_media_userid(services: &Services) -> Result {
 	);
 
 	db["global"].insert(b"remove_remote_media_userid", []);
+	db.engine.sort()
+}
+
+async fn migrate_roomuserid_privateread_v2(services: &Services) -> Result {
+	let db = &services.db;
+	let cork = db.cork_and_sync();
+	let roomuserid_privateread = db["roomuserid_privateread"].clone();
+	let roomuserid_privatereadts = db["roomuserid_privatereadts"].clone();
+	let roomuserid_privateread_v2 = db["roomuserid_privateread_v2"].clone();
+
+	info!(
+		"Consolidating legacy private read receipt maps (roomuserid_privateread and \
+		 roomuserid_privatereadts) into roomuserid_privateread_v2..."
+	);
+
+	let (checked, migrated) = roomuserid_privateread
+		.raw_stream()
+		.ignore_err()
+		.ready_fold((0_usize, 0_usize), |(mut checked, mut migrated), (raw_key, raw_val)| {
+			checked = checked.saturating_add(1);
+
+			let Ok(pdu_count) = utils::u64_from_bytes(raw_val) else {
+				warn!(?raw_key, "Invalid private-read count bytes; skipping migration for key");
+				return (checked, migrated);
+			};
+
+			let Ok(handle) = roomuserid_privatereadts.get_blocking(&raw_key) else {
+				warn!(?raw_key, "Missing private-read timestamp; skipping migration for key");
+				return (checked, migrated);
+			};
+
+			let Ok(ts) = utils::u64_from_bytes(&handle) else {
+				warn!(
+					?raw_key,
+					"Invalid private-read timestamp bytes; skipping migration for key"
+				);
+				return (checked, migrated);
+			};
+
+			let val = (pdu_count, ts);
+			roomuserid_privateread_v2.put(raw_key, val);
+
+			// Clean up legacy keys
+			roomuserid_privateread.remove(&raw_key);
+			roomuserid_privatereadts.remove(&raw_key);
+
+			migrated = migrated.saturating_add(1);
+
+			(checked, migrated)
+		})
+		.await;
+
+	drop(cork);
+	info!(
+		%checked,
+		%migrated,
+		"Consolidated legacy private read receipt maps"
+	);
+
+	db["global"].insert(b"migrate_roomuserid_privateread_v2", []);
+	db.engine.sort()
+}
+
+async fn migrate_roomuserid_readreceipt(services: &Services) -> Result {
+	// 4-tuple key: pre-MSC3771 rows deserialize with `&str` tail empty.
+	type Key<'a> = (&'a RoomId, u64, &'a UserId, &'a str);
+
+	let db = &services.db;
+	let cork = db.cork_and_sync();
+	let readreceiptid_readreceipt = db["readreceiptid_readreceipt"].clone();
+	let roomuserid_readreceipt = db["roomuserid_readreceipt"].clone();
+
+	info!(
+		"Populating direct public read receipt index (roomuserid_readreceipt) from \
+		 chronological read receipt history..."
+	);
+
+	let (checked, migrated) = readreceiptid_readreceipt
+		.stream::<Key<'_>, ruma::events::receipt::ReceiptEvent>()
+		.expect_ok()
+		.ready_fold(
+			(0_usize, 0_usize),
+			|(mut checked, mut migrated): (usize, usize),
+			 ((room_id, count, user_id, _), event)| {
+				checked = checked.saturating_add(1);
+
+				let index_key = (room_id, user_id);
+				let val = (count, event);
+				roomuserid_readreceipt.put(index_key, Json(val));
+
+				migrated = migrated.saturating_add(1);
+
+				(checked, migrated)
+			},
+		)
+		.await;
+
+	drop(cork);
+	info!(
+		%checked,
+		%migrated,
+		"Populated direct public read receipt index"
+	);
+
+	db["global"].insert(b"migrate_roomuserid_readreceipt", []);
 	db.engine.sort()
 }

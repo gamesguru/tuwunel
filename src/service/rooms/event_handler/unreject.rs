@@ -6,7 +6,10 @@ use tuwunel_core::{
 	Event, EventTypeExt, Result, debug, err, implement,
 	matrix::{PduEvent, room_version},
 	ref_at,
-	utils::{future::TryExtExt, stream::IterStream, stream::ReadyExt},
+	utils::{
+		future::TryExtExt,
+		stream::{IterStream, ReadyExt},
+	},
 	warn,
 };
 
@@ -64,9 +67,12 @@ pub fn unreject_rejected_events<'a>(
 			let mut pdu_json = item.1;
 
 			// Convert to PduEvent
-			let Ok((event, _)) =
-				PduEvent::from_object_federation(room_id, event_id, pdu_json.clone(), &room_rules)
-			else {
+			let Ok((event, _)) = PduEvent::from_object_federation(
+				room_id,
+				event_id,
+				pdu_json.clone(),
+				&room_rules,
+			) else {
 				continue;
 			};
 

@@ -726,6 +726,10 @@ async fn handle_left_room(
 		return Ok(None);
 	}
 
+	if since == 0 && services.config.forget_forced_upon_leave {
+		return Ok(None);
+	}
+
 	// Cannot sync unless the event falls within the snapshot. The room is only
 	// sync'ed once to the client, after that it's too late.
 	if since != 0 && left_count <= since {
@@ -739,7 +743,13 @@ async fn handle_left_room(
 	let is_banned = services.metadata.is_banned(room_id);
 
 	pin_mut!(is_not_found, is_disabled, is_banned);
-	if is_not_found.or(is_disabled).or(is_banned).await {
+	let is_forbidden = is_not_found.or(is_disabled).or(is_banned).await;
+
+	if since == 0 && is_forbidden {
+		return Ok(None);
+	}
+
+	if is_forbidden {
 		// For rejected invites, deleted, missing, or broken room state this is the last
 		// resort to convey a the minimum of information to the client.
 		let event = PduEvent {

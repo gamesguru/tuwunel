@@ -143,14 +143,6 @@ pub async fn update_membership(
 		},
 		| MembershipState::Leave | MembershipState::Ban => {
 			self.mark_as_left(user_id, room_id, count);
-
-			if self.services.globals.user_is_local(user_id)
-				&& (self.services.config.forget_forced_upon_leave
-					|| self.services.metadata.is_banned(room_id).await
-					|| self.services.metadata.is_disabled(room_id).await)
-			{
-				self.forget(room_id, user_id);
-			}
 		},
 		| MembershipState::Knock => {
 			self.mark_as_knocked(user_id, room_id, count, last_state);

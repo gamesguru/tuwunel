@@ -7,8 +7,8 @@ use std::{
 
 use futures::pin_mut;
 use serde::Serialize;
-use tokio::sync::watch::{Sender, channel};
-use tuwunel_core::{debug, implement, smallvec::SmallVec};
+use tokio::sync::watch::{Receiver, Sender, channel};
+use tuwunel_core::{debug, defer, implement, smallvec::SmallVec};
 
 use crate::keyval::{KeyBuf, serialize_key};
 
@@ -30,16 +30,53 @@ where
 }
 
 #[implement(super::Map)]
+pub fn watch_prefix_once<K>(&self, prefix: K) -> impl Future<Output = ()> + Send + '_
+where
+	K: Serialize,
+{
+	let key = serialize_key(prefix).expect("failed to serialize watch prefix key");
+	let rx = self.subscribe(key.clone());
+
+	async move {
+		pin_mut!(rx);
+
+		// We are still subscribed, so a receiver count of one means we are the last.
+		defer! {{
+			let mut watchers = self.watch.watchers.lock().expect("locked");
+			if watchers.get(&key).is_some_and(|tx| tx.receiver_count() == 1) {
+				watchers.remove(&key);
+			}
+		}}
+
+		rx.changed()
+			.await
+			.expect("watcher sender dropped");
+	}
+}
+
+#[implement(super::Map)]
 pub fn watch_raw_prefix<'a, K>(&self, prefix: &'a K) -> impl Future<Output = ()> + Send + use<K>
 where
 	K: AsRef<[u8]> + ?Sized + 'a,
 {
-	let rx = match self
+	let rx = self.subscribe(prefix.as_ref().into());
+
+	async move {
+		pin_mut!(rx);
+		rx.changed()
+			.await
+			.expect("watcher sender dropped");
+	}
+}
+
+#[implement(super::Map)]
+fn subscribe(&self, key: KeyBuf) -> Receiver<()> {
+	match self
 		.watch
 		.watchers
 		.lock()
 		.expect("locked")
-		.entry(prefix.as_ref().into())
+		.entry(key)
 	{
 		| Entry::Occupied(node) => node.get().subscribe(),
 		| Entry::Vacant(node) => {
@@ -47,13 +84,6 @@ where
 			node.insert(tx);
 			rx
 		},
-	};
-
-	async move {
-		pin_mut!(rx);
-		rx.changed()
-			.await
-			.expect("watcher sender dropped");
 	}
 }
 
@@ -89,5 +119,28 @@ where
 
 	if num_notified > 0 {
 		debug!(watchers = watchers.len(), num_notified, "notified");
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use tokio::sync::watch::channel;
+
+	// Pins the tokio contract the reaper relies on: receiver_count() reflects a
+	// just-dropped Receiver and send() fails once no receiver remains.
+	#[test]
+	fn receiver_count_reaps_at_last_drop() {
+		let (tx, rx) = channel(());
+		assert_eq!(tx.receiver_count(), 1, "fresh channel has one receiver");
+
+		let rx2 = tx.subscribe();
+		assert_eq!(tx.receiver_count(), 2, "subscribe adds a receiver");
+
+		drop(rx2);
+		assert_eq!(tx.receiver_count(), 1, "drop is reflected synchronously");
+
+		drop(rx);
+		assert_eq!(tx.receiver_count(), 0, "last drop leaves no receiver");
+		assert!(tx.send(()).is_err(), "send fails with zero receivers");
 	}
 }

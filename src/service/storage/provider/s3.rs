@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 pub use object_store::{GetResult, GetResultPayload, PutPayload, PutResult};
-use object_store::{aws::AmazonS3Builder, client::ClientOptions};
+use object_store::{aws::AmazonS3Builder, client::ClientOptions, signer::Signer};
 use tuwunel_core::{
 	Result,
 	config::{StorageProvider, StorageProviderS3},
@@ -84,15 +84,17 @@ pub(in super::super) fn new(
 
 	trace!(?name, ?config, "Initializing S3...");
 
-	let provider = builder
+	let client = builder
 		.build()
-		.map(Box::from)
 		.inspect_err(|e| error!("Failed to configure S3 storage client: {e}"))?;
 
 	debug_info!(
-		credentials = ?provider.credentials(),
+		credentials = ?client.credentials(),
 		"Started S3 storage client."
 	);
+
+	#[allow(clippy::redundant_clone)] // buggy, nursery
+	let signer: Arc<dyn Signer> = Arc::new(client.clone());
 
 	let provider = Provider {
 		name: name.to_owned(),
@@ -100,7 +102,8 @@ pub(in super::super) fn new(
 		config: StorageProvider::s3(Box::new(config.clone())),
 		startup_check: config.startup_check,
 		services: args.services.clone(),
-		provider,
+		provider: Box::new(client),
+		signer: Some(signer),
 	};
 
 	Ok(Some((name.to_owned(), Arc::new(provider))))

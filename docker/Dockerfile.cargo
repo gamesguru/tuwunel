@@ -17,6 +17,7 @@ ARG CARGO_TERM_VERBOSE=0
 ARG RUST_BACKTRACE
 ARG JEMALLOC_OVERRIDE
 ARG ROCKSDB_LIB_DIR
+ARG ROCKSDB_INCLUDE_DIR
 ARG RUSTDOCFLAGS
 ARG CARGO_BUILD_RUSTFLAGS
 ARG CARGO_PROFILE_TEST_DEBUG
@@ -46,6 +47,15 @@ ENV CARGO_TERM_VERBOSE="${CARGO_TERM_VERBOSE}"
 ENV RUST_BACKTRACE="${RUST_BACKTRACE}"
 ENV JEMALLOC_OVERRIDE="${JEMALLOC_OVERRIDE}"
 ENV ROCKSDB_LIB_DIR="${ROCKSDB_LIB_DIR}"
+ENV ROCKSDB_INCLUDE_DIR="${ROCKSDB_INCLUDE_DIR}"
+# Link the C++ stdlib via bake's static_libs/dynamic_libs, not the rust-rocksdb
+# System backend. Its build script emits a dynamic `dylib=stdc++`; in the fully
+# static (crt-static) Test/Bench build that leaves dynamic relocations against
+# libstdc++ vtable symbols (e.g. __cxa_pure_virtual) in a binary with no dynamic
+# loader, so glibc aborts at startup ("Unexpected reloc type in static binary",
+# before main). An empty CXXSTDLIB suppresses that directive. Must match the
+# cargo stage's value or the build script re-emits it (rerun-if-env-changed).
+ENV CXXSTDLIB=""
 ENV RUSTDOCFLAGS="${RUSTDOCFLAGS}"
 ENV CARGO_PROFILE_TEST_DEBUG="${CARGO_PROFILE_TEST_DEBUG}"
 ENV CARGO_PROFILE_TEST_INCREMENTAL="${CARGO_PROFILE_TEST_INCREMENTAL}"
@@ -104,6 +114,10 @@ COPY --link --from=source /usr/src/tuwunel /usr/src/tuwunel
 
 WORKDIR /usr/src/tuwunel
 SHELL ["/bin/bash", "-c"]
+# Keep in sync with the cook stage: an empty CXXSTDLIB stops the rust-rocksdb
+# System backend emitting a dynamic `dylib=stdc++` (bake links the stdlib itself).
+# A mismatch with cook would re-run the build script and reintroduce the directive.
+ENV CXXSTDLIB=""
 ENV VALGRINDFLAGS="${VALGRINDFLAGS}"
 ENV TUWUNEL_DB_POOL_MAX_WORKERS="${VALGRIND_MAX_WORKERS}"
 RUN \

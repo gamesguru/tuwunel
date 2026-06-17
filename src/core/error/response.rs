@@ -56,7 +56,10 @@ pub(super) fn bad_request_code(kind: &ErrorKind) -> StatusCode {
 
 	match kind {
 		// 504
-		| NotYetUploaded => StatusCode::GATEWAY_TIMEOUT,
+		| NotYetUploaded | ConnectionTimeout => StatusCode::GATEWAY_TIMEOUT,
+
+		// 502
+		| BadStatus(..) | ConnectionFailed => StatusCode::BAD_GATEWAY,
 
 		// 429
 		| LimitExceeded { .. } => StatusCode::TOO_MANY_REQUESTS,

@@ -1,6 +1,9 @@
 #![expect(deprecated)]
 
-use axum::extract::State;
+use axum::{
+	extract::State,
+	response::{IntoResponse, Redirect, Response},
+};
 use reqwest::Url;
 use ruma::{
 	Mxc,
@@ -15,7 +18,7 @@ use tuwunel_core::{
 };
 use tuwunel_service::media::{CACHE_CONTROL_IMMUTABLE, CORP_CROSS_ORIGIN, Dim, Media};
 
-use crate::{ClientIp, Ruma};
+use crate::{ClientIp, Ruma, RumaResponse};
 
 /// # `GET /_matrix/media/v3/config`
 ///
@@ -85,11 +88,21 @@ pub(crate) async fn get_content_legacy_route(
 	State(services): State<crate::State>,
 	ClientIp(client): ClientIp,
 	body: Ruma<get_content::v3::Request>,
-) -> Result<get_content::v3::Response> {
+) -> Result<Response> {
 	let mxc = Mxc {
 		server_name: &body.server_name,
 		media_id: &body.media_id,
 	};
+
+	if body.allow_redirect
+		&& services.globals.server_is_ours(&body.server_name)
+		&& let Some(url) = services
+			.media
+			.redirect_url(&mxc, &Dim::default())
+			.await?
+	{
+		return Ok(Redirect::temporary(url.as_str()).into_response());
+	}
 
 	match services
 		.media
@@ -107,13 +120,15 @@ pub(crate) async fn get_content_legacy_route(
 				None,
 			);
 
-			Ok(get_content::v3::Response {
+			let response = get_content::v3::Response {
 				file: content,
 				content_type: content_type.map(Into::into),
 				content_disposition: Some(content_disposition),
 				cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
 				cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
-			})
+			};
+
+			Ok(RumaResponse(response).into_response())
 		},
 		| Err(e) =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
@@ -131,13 +146,15 @@ pub(crate) async fn get_content_legacy_route(
 					None,
 				);
 
-				Ok(get_content::v3::Response {
+				let response = get_content::v3::Response {
 					file: response.file,
 					content_type: response.content_type,
 					content_disposition: Some(content_disposition),
 					cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
 					cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
-				})
+				};
+
+				Ok(RumaResponse(response).into_response())
 			} else {
 				Err(e)
 			},
@@ -157,11 +174,21 @@ pub(crate) async fn get_content_as_filename_legacy_route(
 	State(services): State<crate::State>,
 	ClientIp(client): ClientIp,
 	body: Ruma<get_content_as_filename::v3::Request>,
-) -> Result<get_content_as_filename::v3::Response> {
+) -> Result<Response> {
 	let mxc = Mxc {
 		server_name: &body.server_name,
 		media_id: &body.media_id,
 	};
+
+	if body.allow_redirect
+		&& services.globals.server_is_ours(&body.server_name)
+		&& let Some(url) = services
+			.media
+			.redirect_url(&mxc, &Dim::default())
+			.await?
+	{
+		return Ok(Redirect::temporary(url.as_str()).into_response());
+	}
 
 	match services
 		.media
@@ -179,13 +206,15 @@ pub(crate) async fn get_content_as_filename_legacy_route(
 				Some(&body.filename),
 			);
 
-			Ok(get_content_as_filename::v3::Response {
+			let response = get_content_as_filename::v3::Response {
 				file: content,
 				content_type: content_type.map(Into::into),
 				content_disposition: Some(content_disposition),
 				cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
 				cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
-			})
+			};
+
+			Ok(RumaResponse(response).into_response())
 		},
 		| Err(e) =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
@@ -203,13 +232,15 @@ pub(crate) async fn get_content_as_filename_legacy_route(
 					None,
 				);
 
-				Ok(get_content_as_filename::v3::Response {
+				let response = get_content_as_filename::v3::Response {
 					content_disposition: Some(content_disposition),
 					content_type: response.content_type,
 					file: response.file,
 					cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
 					cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
-				})
+				};
+
+				Ok(RumaResponse(response).into_response())
 			} else {
 				Err(e)
 			},
@@ -229,13 +260,21 @@ pub(crate) async fn get_content_thumbnail_legacy_route(
 	State(services): State<crate::State>,
 	ClientIp(client): ClientIp,
 	body: Ruma<get_content_thumbnail::v3::Request>,
-) -> Result<get_content_thumbnail::v3::Response> {
+) -> Result<Response> {
 	let mxc = Mxc {
 		server_name: &body.server_name,
 		media_id: &body.media_id,
 	};
 
 	let dim = Dim::from_ruma(body.width, body.height, body.method.clone())?;
+
+	if body.allow_redirect
+		&& services.globals.server_is_ours(&body.server_name)
+		&& let Some(url) = services.media.redirect_url(&mxc, &dim).await?
+	{
+		return Ok(Redirect::temporary(url.as_str()).into_response());
+	}
+
 	match services
 		.media
 		.get_thumbnail(&mxc, &dim, Some(body.timeout_ms))
@@ -252,13 +291,15 @@ pub(crate) async fn get_content_thumbnail_legacy_route(
 				None,
 			);
 
-			Ok(get_content_thumbnail::v3::Response {
+			let response = get_content_thumbnail::v3::Response {
 				file: content,
 				content_type: content_type.map(Into::into),
 				cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
 				cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
 				content_disposition: Some(content_disposition),
-			})
+			};
+
+			Ok(RumaResponse(response).into_response())
 		},
 		| Err(e) =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
@@ -276,13 +317,15 @@ pub(crate) async fn get_content_thumbnail_legacy_route(
 					None,
 				);
 
-				Ok(get_content_thumbnail::v3::Response {
+				let response = get_content_thumbnail::v3::Response {
 					file: response.file,
 					content_type: response.content_type,
 					cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
 					cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
 					content_disposition: Some(content_disposition),
-				})
+				};
+
+				Ok(RumaResponse(response).into_response())
 			} else {
 				Err(e)
 			},

@@ -61,6 +61,14 @@ pub(crate) async fn create_invite_route(
 		.chain([pdu.to_format()])
 		.collect();
 
+	// Block on the inbound /send applying the departure that removes our last
+	// member, so the residency check observes it rather than stale state.
+	let _federation_lock = services
+		.event_handler
+		.mutex_federation
+		.lock(&body.room_id)
+		.await;
+
 	if !services
 		.state_cache
 		.server_in_room(services.globals.server_name(), &body.room_id)

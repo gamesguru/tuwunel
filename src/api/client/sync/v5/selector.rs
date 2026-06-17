@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use futures::{
 	FutureExt, StreamExt, TryFutureExt,
-	future::{join, join5},
+	future::{join, join3},
 };
 use ruma::{OwnedRoomId, UInt, events::room::member::MembershipState, uint};
 use tuwunel_core::{
@@ -36,11 +36,27 @@ pub(super) async fn selector(
 	// rooms from the sliding-sync window; an unblock re-exposes them.
 	let invites_blocked = services.users.invites_blocked(sender_user).await;
 
-	let mut rooms = services
+	let actives = services
 		.state_cache
 		.user_memberships(sender_user, Some(&[Join, Invite, Knock]))
-		.map(|(membership, room_id)| (room_id.to_owned(), Some(membership)))
-		.ready_filter(move |(_, m)| !invites_blocked || !matches!(m, Some(Invite)))
+		.ready_filter(move |(m, _)| !invites_blocked || !matches!(m, Invite))
+		.map(|(membership, room_id)| (room_id.to_owned(), Some(membership)));
+
+	// Source retractions from tracked rooms, not a full left-state scan.
+	let retracted = conn
+		.rooms
+		.keys()
+		.stream()
+		.broad_filter_map(async |room_id| {
+			services
+				.state_cache
+				.is_left(sender_user, room_id)
+				.await
+				.then_some((room_id.clone(), Some(Leave)))
+		});
+
+	let mut rooms = actives
+		.chain(retracted)
 		.broad_filter_map(|(room_id, membership)| matcher(sync_info, conn, room_id, membership))
 		.collect::<Vec<_>>()
 		.await;
@@ -134,27 +150,56 @@ async fn matcher(
 			.unwrap_or_default()
 	});
 
-	let (last_timeline, last_notification, last_account, last_receipt, last_privateread) =
-		join5(last_timeline, last_notification, last_account, last_receipt, last_privateread)
-			.await;
+	let last_membership = matched.then_async(async || match &membership {
+		| Some(MembershipState::Invite) => services
+			.state_cache
+			.get_invite_count(&room_id, sender_user)
+			.await
+			.unwrap_or_default(),
+		| Some(MembershipState::Leave | MembershipState::Ban) => services
+			.state_cache
+			.get_left_count(&room_id, sender_user)
+			.await
+			.unwrap_or_default(),
+		| _ => 0,
+	});
 
-	Some(WindowRoom {
-		room_id: room_id.clone(),
-		membership,
-		lists,
-		ranked: 0,
-		last_count: [
+	let (
+		(last_timeline, last_notification, last_account),
+		(last_receipt, last_privateread, last_membership),
+	) = join(
+		join3(last_timeline, last_notification, last_account),
+		join3(last_receipt, last_privateread, last_membership),
+	)
+	.await;
+
+	// A departed room surfaces only on its own leave count, never on room-global
+	// timeline activity the user no longer receives, so the retraction is one-shot.
+	let last_count = match &membership {
+		| Some(MembershipState::Leave | MembershipState::Ban) => last_membership
+			.filter(|count| conn.next_batch.ge(count))
+			.unwrap_or_default(),
+		| _ => [
 			last_timeline,
 			last_notification,
 			last_account,
 			last_receipt,
 			last_privateread,
+			last_membership,
 		]
 		.into_iter()
 		.map(Option::unwrap_or_default)
 		.filter(|count| conn.next_batch.ge(count))
 		.max()
 		.unwrap_or_default(),
+	};
+
+	Some(WindowRoom {
+		room_id: room_id.clone(),
+		membership,
+		lists,
+		ranked: 0,
+		last_count,
 	})
 }
 
@@ -246,6 +291,9 @@ where
 	Rooms: Iterator<Item = &'a WindowRoom>,
 {
 	rooms
+		.filter(|room| {
+			!matches!(room.membership, Some(MembershipState::Leave | MembershipState::Ban))
+		})
 		.flat_map(|room| room.lists.iter())
 		.fold(ResponseLists::default(), |mut lists, id| {
 			let list = lists.entry(id.clone()).or_default();

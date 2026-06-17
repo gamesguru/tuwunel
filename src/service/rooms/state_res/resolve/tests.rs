@@ -500,7 +500,7 @@ async fn test_reverse_topological_power_sort() {
 		event_id("p") => [event_id("o")].into_iter().collect(),
 	};
 
-	let res = super::super::topological_sort(&graph, &async |_id| {
+	let res = super::super::topological_sort(graph, &async |_id| {
 		Ok((int!(0).into(), MilliSecondsSinceUnixEpoch(uint!(0))))
 	})
 	.await
@@ -508,6 +508,34 @@ async fn test_reverse_topological_power_sort() {
 
 	assert_eq!(
 		vec!["o", "l", "n", "m", "p"],
+		res.iter()
+			.map(ToString::to_string)
+			.map(|s| s.replace('$', "").replace(":foo", ""))
+			.collect::<Vec<_>>()
+	);
+}
+
+#[tokio::test]
+#[expect(
+	clippy::iter_on_single_items,
+	clippy::iter_on_empty_collections
+)]
+async fn topological_sort_dangling_references() {
+	// A dangling reference (absent "x") must not drop "a" or its dependent "b".
+	let graph = hashmap! {
+		event_id("a") => [event_id("x")].into_iter().collect(),
+		event_id("b") => [event_id("a")].into_iter().collect(),
+		event_id("c") => [].into_iter().collect(),
+	};
+
+	let res = super::super::topological_sort(graph, &async |_id| {
+		Ok((int!(0).into(), MilliSecondsSinceUnixEpoch(uint!(0))))
+	})
+	.await
+	.unwrap();
+
+	assert_eq!(
+		vec!["a", "b", "c"],
 		res.iter()
 			.map(ToString::to_string)
 			.map(|s| s.replace('$', "").replace(":foo", ""))

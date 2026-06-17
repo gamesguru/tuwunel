@@ -1,3 +1,12 @@
+//! RocksDB engine: database-wide operations and shared resources.
+//!
+//! `Engine` owns the opened RocksDB instance together with the worker pool, the
+//! shared open-time context, and the flags fixed at open (read-only, secondary,
+//! checksums). Per-column-family reads and writes go through `Map`; the methods
+//! here act on the database as a whole: WAL flush and sync, memtable flush,
+//! manual compaction and primary catch-up, property queries, and the cork
+//! counter that coalesces WAL writes (see the `cork` module).
+
 mod backup;
 mod cf_opts;
 pub(crate) mod context;
@@ -32,19 +41,42 @@ use crate::{
 	util::{map_err, result},
 };
 
+/// Handle to the opened RocksDB database and its shared resources.
+///
+/// One `Engine` exists per database, shared behind an `Arc` by every `Map`.
 pub struct Engine {
+	/// The opened RocksDB instance.
 	pub(crate) db: Db,
+
+	/// Thread pool offloading uncached, blocking database requests from the
+	/// tokio workers.
 	pub(crate) pool: Arc<Pool>,
+
+	/// Resources constructed before the database is opened and outliving it
+	/// (block caches, environment, column descriptors).
 	pub(crate) ctx: Arc<Context>,
+
+	/// Database was opened read-only; writes are rejected.
 	pub(super) read_only: bool,
+
+	/// Database was opened as a secondary follower of a primary instance.
 	pub(super) secondary: bool,
+
+	/// Verify block checksums on read.
 	pub(crate) checksums: bool,
+
+	/// Live cork count; nonzero suppresses the per-write WAL flush.
 	corks: AtomicU32,
 }
 
+/// Backing RocksDB type: multi-threaded column-family access, no transactions.
 pub(crate) type Db = DBWithThreadMode<MultiThreaded>;
 
 impl Engine {
+	/// Block until outstanding background compactions finish.
+	///
+	/// Waits without a timeout and does not flush first; aborts the wait if
+	/// compaction has been paused.
 	#[tracing::instrument(
 		level = "info",
 		skip_all,
@@ -61,6 +93,10 @@ impl Engine {
 		self.db.wait_for_compact(&opts).map_err(map_err)
 	}
 
+	/// Flush the memtables to SST files.
+	///
+	/// Forces buffered writes out of memory into the on-disk LSM tree; distinct
+	/// from `flush` and `sync`, which act on the write-ahead log.
 	#[tracing::instrument(
 		level = "info",
 		skip_all,
@@ -73,6 +109,10 @@ impl Engine {
 		result(DBCommon::flush_opt(&self.db, &flushoptions))
 	}
 
+	/// Catch a secondary instance up to the primary's latest writes.
+	///
+	/// Replays the primary's newly appended WAL into this instance's view;
+	/// meaningful only when the database was opened as a secondary.
 	#[tracing::instrument(
 		level = "debug",
 		skip_all,
@@ -86,18 +126,36 @@ impl Engine {
 			.map_err(map_err)
 	}
 
+	/// Flush the write-ahead log and fsync it to disk.
+	///
+	/// Once this returns the buffered writes survive power loss. Heavier than
+	/// `flush`, which stops at the OS page cache.
 	#[tracing::instrument(level = "info", skip_all)]
 	pub fn sync(&self) -> Result { result(DBCommon::flush_wal(&self.db, true)) }
 
+	/// Flush the buffered write-ahead log to the OS without an fsync.
+	///
+	/// Pushes WAL bytes to the page cache (durable against process crash, not
+	/// power loss). This is the per-write flush that corking suppresses.
 	#[tracing::instrument(level = "debug", skip_all)]
 	pub fn flush(&self) -> Result { result(DBCommon::flush_wal(&self.db, false)) }
 
+	/// Increment the cork count, suppressing the per-write WAL flush.
 	#[inline]
 	pub(crate) fn cork(&self) { self.corks.fetch_add(1, Ordering::Relaxed); }
 
+	/// Decrement the cork count; the per-write flush resumes at zero.
 	#[inline]
 	pub(crate) fn uncork(&self) { self.corks.fetch_sub(1, Ordering::Relaxed); }
 
+	/// Whether any cork is currently held.
+	///
+	/// When true, `Map` insert and remove skip their post-write WAL flush so
+	/// the records coalesce into one batch. Corking is purely a backend
+	/// write-buffering signal: it never changes application logic or any
+	/// observable database API behavior, because a write lands in the memtable
+	/// synchronously and reads back regardless of WAL flush state. See the
+	/// `cork` module.
 	#[inline]
 	pub fn corked(&self) -> bool { self.corks.load(Ordering::Relaxed) > 0 }
 
@@ -119,16 +177,21 @@ impl Engine {
 			.and_then(|val| val.map_or_else(|| Err!("Property {name:?} not found."), Ok))
 	}
 
+	/// Look up a column-family handle by name.
+	///
+	/// Panics if the family was not described before the database was opened.
 	pub(crate) fn cf(&self, name: &str) -> Arc<BoundColumnFamily<'_>> {
 		self.db
 			.cf_handle(name)
 			.expect("column must be described prior to database open")
 	}
 
+	/// Whether a column family with this name exists.
 	#[inline]
 	#[must_use]
 	pub fn has_cf(&self, name: &str) -> bool { self.db.cf_handle(name).is_some() }
 
+	/// The latest RocksDB sequence number, a monotonic counter of writes.
 	#[inline]
 	#[must_use]
 	#[tracing::instrument(
@@ -146,10 +209,12 @@ impl Engine {
 		sequence
 	}
 
+	/// Whether writes are rejected: true for a read-only or secondary open.
 	#[inline]
 	#[must_use]
 	pub fn is_read_only(&self) -> bool { self.secondary || self.read_only }
 
+	/// Whether the database was opened as a secondary follower of a primary.
 	#[inline]
 	#[must_use]
 	pub fn is_secondary(&self) -> bool { self.secondary }

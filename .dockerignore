@@ -6,6 +6,8 @@ target/
 Dockerfile*
 docker/
 !docker/playwright.tuwunel.ts
+!docker/snippets/
+!docker/snippets/*
 
 # IDE files
 .vscode

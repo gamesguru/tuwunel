@@ -11,8 +11,8 @@ use ruma::{
 		get_capabilities,
 		get_capabilities::v3::{
 			AccountModerationCapability, Capabilities, ChangePasswordCapability,
-			GetLoginTokenCapability, ProfileFieldsCapability, RoomVersionStability,
-			RoomVersionsCapability, ThirdPartyIdChangesCapability,
+			ForgetForcedUponLeaveCapability, GetLoginTokenCapability, ProfileFieldsCapability,
+			RoomVersionStability, RoomVersionsCapability, ThirdPartyIdChangesCapability,
 		},
 	},
 };
@@ -61,6 +61,9 @@ pub(crate) async fn get_capabilities_route(
 	capabilities.change_password = ChangePasswordCapability {
 		enabled: services.server.config.login_with_password,
 	};
+
+	capabilities.forget_forced_upon_leave =
+		ForgetForcedUponLeaveCapability::new(services.config.forget_forced_upon_leave);
 
 	capabilities.set(
 		"org.matrix.msc4267.forget_forced_upon_leave",

@@ -17,6 +17,7 @@ use tuwunel_core::{
 	warn,
 };
 
+use super::backoff::{Context, Disposition};
 use crate::rooms::timeline::RawPduId;
 
 type PrevResultsHandled = SmallVec<[PrevHandled; MAX_PREV_EVENTS]>;
@@ -162,6 +163,7 @@ pub async fn handle_incoming_pdu<'a>(
 		.fetch_prev(
 			origin,
 			room_id,
+			event_id,
 			incoming_pdu.prev_events(),
 			&room_version,
 			recursion_level,
@@ -196,7 +198,8 @@ pub async fn handle_incoming_pdu<'a>(
 				.await
 			{
 				| Ok(Some(handled)) => {
-					self.cancel_back_off(&prev_id);
+					self.record_success(Context::Upgrade, &prev_id)
+						.await;
 					debug!(?i, ?prev_id, ?handled, "Prev event processed.");
 
 					Ok((prev_id, Ok(Some(handled))))
@@ -207,7 +210,7 @@ pub async fn handle_incoming_pdu<'a>(
 					Ok((prev_id, Ok(None)))
 				},
 				| Err(e) => {
-					self.back_off(&prev_id);
+					self.record_outcome(Context::Upgrade, &prev_id, Disposition::Transient);
 					warn!(?i, ?prev_id, ?event_id, ?room_id, "Prev event processing failed: {e}");
 
 					Ok((prev_id, Err(e)))

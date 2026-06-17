@@ -3,6 +3,7 @@ pub mod compact;
 mod contains;
 mod count;
 mod del;
+mod del_prefix;
 mod get;
 mod get_batch;
 mod insert;

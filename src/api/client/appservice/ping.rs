@@ -1,5 +1,7 @@
 use axum::extract::State;
-use ruma::api::{appservice::ping, client::appservice::request_ping};
+use ruma::api::{
+	appservice::ping::send_ping::v1::Request as SendPing, client::appservice::request_ping,
+};
 use tuwunel_core::{Err, Result, err};
 
 use crate::Ruma;
@@ -36,13 +38,12 @@ pub(crate) async fn appservice_ping(
 
 	let timer = tokio::time::Instant::now();
 
-	let _response = services
+	services
 		.appservice
-		.send_request(appservice_info.registration.clone(), ping::send_ping::v1::Request {
+		.ping(appservice_info.registration.clone(), SendPing {
 			transaction_id: body.transaction_id.clone(),
 		})
-		.await?
-		.expect("We already validated if an appservice URL exists above");
+		.await?;
 
 	Ok(request_ping::v1::Response { duration: timer.elapsed() })
 }

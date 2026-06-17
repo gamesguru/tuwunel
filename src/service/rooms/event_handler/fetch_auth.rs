@@ -1,21 +1,23 @@
 use std::{
 	collections::{HashSet, VecDeque},
-	ops::Range,
 	time::Duration,
 };
 
 use futures::{FutureExt, StreamExt, TryFutureExt};
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, RoomId, RoomVersionId,
-	ServerName, api::federation::event::get_event,
+	ServerName,
 };
 use tuwunel_core::{
 	debug, debug_error, debug_warn, expected, implement,
-	matrix::{PduEvent, event::gen_event_id_canonical_json, pdu::MAX_AUTH_EVENTS},
+	matrix::{PduEvent, pdu::MAX_AUTH_EVENTS},
 	trace,
-	utils::stream::{BroadbandExt, IterStream, ReadyExt},
+	utils::stream::{BroadbandExt, IterStream},
 	warn,
 };
+
+use super::backoff::{Context, Disposition};
+use crate::fetcher::{Op, Opts};
 
 /// Find the event and auth it. Once the event is validated (steps 1 - 8)
 /// it is appended to the outliers Tree.
@@ -73,15 +75,19 @@ where
 				.into_iter()
 				.rev()
 				.stream()
-				.ready_filter(|(next_id, _)| {
-					let backed_off = self.is_backed_off(next_id, Range {
-						start: Duration::from_mins(5),
-						end: Duration::from_hours(24),
-					});
-
-					!backed_off
-				})
 				.fold(pdus, async |mut pdus, (next_id, value)| {
+					if self
+						.is_suppressed(
+							Context::Auth,
+							&next_id,
+							Duration::from_mins(5)..Duration::from_hours(24),
+						)
+						.await
+						.is_deny()
+					{
+						return pdus;
+					}
+
 					let outlier = Box::pin(self.handle_outlier_pdu(
 						origin,
 						room_id,
@@ -99,9 +105,9 @@ where
 						if next_id == id {
 							pdus.push((pdu, Some(json)));
 						}
-						self.cancel_back_off(&next_id);
+						self.record_success(Context::Auth, &next_id).await;
 					} else {
-						self.back_off(&next_id);
+						self.record_outcome(Context::Auth, &next_id, Disposition::Transient);
 					}
 
 					pdus
@@ -121,7 +127,7 @@ where
 async fn fetch_auth_chain(
 	&self,
 	origin: &ServerName,
-	_room_id: &RoomId,
+	room_id: &RoomId,
 	event_id: &EventId,
 	room_version: &RoomVersionId,
 ) -> (OwnedEventId, Option<PduEvent>, Vec<(OwnedEventId, CanonicalJsonObject)>) {
@@ -144,10 +150,15 @@ async fn fetch_auth_chain(
 			continue;
 		}
 
-		if self.is_backed_off(&next_id, Range {
-			start: Duration::from_mins(2),
-			end: Duration::from_hours(8),
-		}) {
+		if self
+			.is_suppressed(
+				Context::Fetch,
+				&next_id,
+				Duration::from_mins(2)..Duration::from_hours(8),
+			)
+			.await
+			.is_deny()
+		{
 			debug_warn!("Backed off from {next_id}");
 			continue;
 		}
@@ -163,41 +174,33 @@ async fn fetch_auth_chain(
 		}
 
 		debug!("Fetching {next_id} over federation.");
-		let Ok(res) = self
+		let opts = Opts::new(Op::AuthEvent, room_id.to_owned())
+			.event_id(next_id.clone())
+			.hint(origin.to_owned())
+			.room_version(room_version.to_owned())
+			.attempt_limit(super::EVENT_FETCH_ATTEMPT_LIMIT)
+			.fanout_for_op();
+
+		let Ok(outcome) = self
 			.services
-			.federation
-			.execute(origin, get_event::v1::Request { event_id: next_id.clone() })
+			.fetcher
+			.fetch(opts)
 			.inspect_err(|e| debug_error!(?next_id, "Failed to fetch event: {e}"))
-			.inspect_ok(|_| {
-				self.cancel_back_off(&next_id);
-			})
 			.await
 		else {
 			debug_warn!("Backing off from {next_id}");
-			self.back_off(&next_id);
+			self.record_outcome(Context::Fetch, &next_id, Disposition::Transient);
+			continue;
+		};
+
+		let Ok(value) = serde_json::from_slice::<CanonicalJsonObject>(&outcome.bytes) else {
+			self.record_outcome(Context::Fetch, &next_id, Disposition::Transient);
 			continue;
 		};
 
 		debug!("Got {next_id} over federation");
-		let Ok((calculated_event_id, value)) =
-			gen_event_id_canonical_json(&res.pdu, room_version)
-		else {
-			self.back_off(&next_id);
-			continue;
-		};
-
-		if calculated_event_id != next_id {
-			warn!(
-				"Server returned wrong event id: requested {next_id}, got \
-				 {calculated_event_id}. Event: {:?}",
-				&res.pdu
-			);
-
-			self.back_off(&next_id);
-			continue;
-		}
-
-		self.cancel_back_off(&next_id);
+		self.record_success(Context::Fetch, &next_id)
+			.await;
 		value
 			.get("auth_events")
 			.and_then(CanonicalJsonValue::as_array)

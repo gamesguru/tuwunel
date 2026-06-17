@@ -50,6 +50,7 @@ pub(in super::super) fn new(
 		startup_check: config.startup_check,
 		services: args.services.clone(),
 		provider: Box::new(provider),
+		signer: None,
 	};
 
 	Ok(Some((name.to_owned(), Arc::new(provider))))

@@ -9,6 +9,8 @@ use tuwunel_core::{
 	Err, Result, debug_warn, err, implement, trace, utils::string_from_bytes, warn,
 };
 
+use crate::client::read_response_capped;
+
 #[implement(super::Service)]
 #[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn send_request<T>(&self, dest: &str, request: T) -> Result<T::IncomingResponse>
@@ -70,7 +72,8 @@ where
 					.expect("http::response::Builder is usable"),
 			);
 
-			let body = response.bytes().await?; // TODO: handle timeout
+			let limit = self.services.config.max_response_size;
+			let body = read_response_capped(response, limit).await?;
 
 			if !status.is_success() {
 				debug_warn!("Push gateway response body: {:?}", string_from_bytes(&body));

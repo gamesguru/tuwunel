@@ -3,6 +3,7 @@ use std::{env::consts::OS, fs::read_to_string, net::SocketAddr};
 use either::Either;
 use itertools::Itertools;
 use regex::RegexSet;
+use url::Url;
 
 use super::{DEPRECATED_KEYS, IdentityProvider, IpSource, KNOWN_KEYS};
 use crate::{Config, Err, Result, debug, debug_info, err, error, warn};
@@ -86,6 +87,24 @@ fn check_network(config: &Config) -> Result {
 	let key_set = config.tls.key.is_some();
 	if certs_set ^ key_set {
 		return Err!(Config("tls", "tls.certs and tls.key must either both be set or unset"));
+	}
+
+	// A non-zero depth shards the 64-char SHA-256 hex digest into `depth`
+	// segments of `length` plus a remainder, so the product must stay below 64.
+	let depth = config.conduit_media_directory_depth;
+	let length = config.conduit_media_directory_length;
+	if depth > 0 && length == 0 {
+		return Err!(Config(
+			"conduit_media_directory_length",
+			"must be non-zero when conduit_media_directory_depth is non-zero"
+		));
+	}
+	if depth > 0 && usize::from(depth).saturating_mul(usize::from(length)) >= 64 {
+		return Err!(Config(
+			"conduit_media_directory_depth",
+			"conduit_media_directory_depth times conduit_media_directory_length must be less \
+			 than 64, the length of a SHA-256 hex digest"
+		));
 	}
 
 	if let Some(source) = config.ip_source
@@ -490,16 +509,49 @@ fn check_well_known_support_contact_validity(config: &Config) -> Result {
 		);
 	}
 
-	well_known
-		.support_contact
-		.iter()
-		.find(|(_, contact)| contact.email_address.is_none() && contact.matrix_id.is_none())
-		.map_or(Ok(()), |(id, _)| {
-			Err!(
+	if let Some(pgp_key) = well_known.support_pgp_key.as_deref() {
+		validate_pgp_key(pgp_key).map_err(|e| err!("well_known.support_pgp_key: {e}"))?;
+	}
+
+	for (id, contact) in &well_known.support_contact {
+		if contact.email_address.is_none() && contact.matrix_id.is_none() {
+			return Err!(
 				"well_known.support_contact.{id} has neither email_address nor matrix_id; at \
 				 least one is required"
-			)
-		})
+			);
+		}
+
+		if let Some(pgp_key) = contact.pgp_key.as_deref() {
+			validate_pgp_key(pgp_key)
+				.map_err(|e| err!("well_known.support_contact.{id}.pgp_key: {e}"))?;
+		}
+	}
+
+	Ok(())
+}
+
+/// Validates an MSC4439 `pgp_key`: a URI, never inline key material.
+fn validate_pgp_key(value: &str) -> Result {
+	if value.contains("BEGIN PGP") {
+		return Err!(
+			"must be a URI, not inlined key material; publish the key and reference it by URI \
+			 (for example https://example.com/key.asc or openpgp4fpr:<fingerprint>)"
+		);
+	}
+
+	let uri = Url::parse(value).map_err(|_| {
+		err!("must be a URI; a bare fingerprint must be prefixed with `openpgp4fpr:`")
+	})?;
+
+	if uri.scheme() == "openpgp4fpr" && !valid_openpgp4fpr(uri.path()) {
+		return Err!("`openpgp4fpr:` must be followed by a 40- or 64-character hex fingerprint");
+	}
+
+	Ok(())
+}
+
+fn valid_openpgp4fpr(fpr: &str) -> bool {
+	matches!(fpr.len(), 40 | 64) && fpr.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Iterates over all the keys in the config file and warns if there is a

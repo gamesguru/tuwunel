@@ -3,6 +3,7 @@ pub(super) mod auth_issuer;
 pub(super) mod auth_metadata;
 pub(super) mod authorize;
 pub(super) mod complete;
+pub(super) mod device;
 pub(super) mod jwks;
 pub(super) mod registration;
 pub(super) mod revoke;
@@ -16,7 +17,7 @@ use http::{Response, StatusCode};
 use serde_json::json;
 
 pub(super) use self::{
-	account::*, auth_issuer::*, auth_metadata::*, authorize::*, complete::*, jwks::*,
+	account::*, auth_issuer::*, auth_metadata::*, authorize::*, complete::*, device::*, jwks::*,
 	registration::*, revoke::*, token::*, userinfo::*,
 };
 

@@ -193,11 +193,6 @@ pub async fn set_access_token(
 			.await?;
 	}
 
-	// Remove old token.
-	self.remove_access_token(user_id, device_id)
-		.await
-		.ok();
-
 	let expires_at = expires_in
 		.map(timepoint_from_now)
 		.transpose()?
@@ -206,10 +201,27 @@ pub async fn set_access_token(
 		.map(Duration::as_secs);
 
 	let userdeviceid = (user_id, device_id);
+
+	// Fold the prior pointer token into the index for pre-index upgrades.
+	if let Ok(prev) = self
+		.db
+		.userdeviceid_token
+		.qry(&userdeviceid)
+		.await
+		.deserialized::<String>()
+	{
+		self.db
+			.userdeviceidtoken_index
+			.put_raw((user_id, device_id, prev.as_str()), []);
+	}
+
 	let value = (user_id, device_id, expires_at);
 	self.db
 		.token_userdeviceid
 		.raw_put(access_token, value);
+	self.db
+		.userdeviceidtoken_index
+		.put_raw((user_id, device_id, access_token), []);
 	self.db
 		.userdeviceid_token
 		.put_raw(userdeviceid, access_token);
@@ -217,31 +229,58 @@ pub async fn set_access_token(
 	Ok(())
 }
 
-/// Revoke the access token without deleting the device. Take care to not leave
-/// dangling devices if using this method.
+/// Revoke every access token of one device, without deleting the device. Take
+/// care to not leave dangling devices if using this method.
 #[implement(super::Service)]
 pub async fn remove_access_token(&self, user_id: &UserId, device_id: &DeviceId) -> Result {
-	let userdeviceid = (user_id, device_id);
-	let access_token = self
+	let prefix = (user_id, device_id, Interfix);
+	self.db
+		.userdeviceidtoken_index
+		.keys_prefix(&prefix)
+		.ignore_err()
+		.ready_for_each(|(_, _, token): (Ignore, Ignore, &str)| {
+			self.db.token_userdeviceid.remove(token);
+			self.db
+				.userdeviceidtoken_index
+				.del((user_id, device_id, token));
+		})
+		.await;
+
+	// Cover any pre-index token still recorded only in the legacy pointer.
+	if let Ok(token) = self
 		.db
 		.userdeviceid_token
-		.qry(&userdeviceid)
-		.await?;
+		.qry(&(user_id, device_id))
+		.await
+		.deserialized::<String>()
+	{
+		self.db.token_userdeviceid.remove(token.as_str());
+	}
 
-	self.db.userdeviceid_token.del(userdeviceid);
-	self.db.token_userdeviceid.remove(&access_token);
+	self.db
+		.userdeviceid_token
+		.del((user_id, device_id));
 
 	Ok(())
 }
 
+/// Revoke a single access token by value, leaving the device and any other
+/// tokens it holds intact.
 #[implement(super::Service)]
-pub async fn get_access_token(&self, user_id: &UserId, device_id: &DeviceId) -> Result<String> {
-	let key = (user_id, device_id);
-	self.db
-		.userdeviceid_token
-		.qry(&key)
+pub async fn remove_access_token_value(&self, access_token: &str) {
+	if let Ok((user_id, device_id, _)) = self
+		.db
+		.token_userdeviceid
+		.get(access_token)
 		.await
-		.deserialized()
+		.deserialized::<(OwnedUserId, OwnedDeviceId, Option<u64>)>()
+	{
+		self.db
+			.userdeviceidtoken_index
+			.del((&*user_id, &*device_id, access_token));
+	}
+
+	self.db.token_userdeviceid.remove(access_token);
 }
 
 #[implement(super::Service)]
@@ -275,7 +314,17 @@ pub async fn set_refresh_token(
 		.await
 		.flatten();
 
-	// Remove old token
+	// Capture the outgoing token before removal so it can be retained for one
+	// generation, making a later replay detectable.
+	let spent: Option<String> = self
+		.db
+		.userdeviceid_refresh
+		.qry(&(user_id, device_id))
+		.await
+		.deserialized()
+		.ok();
+
+	// Also drops the prior spent entry.
 	self.remove_refresh_token(user_id, device_id)
 		.await
 		.ok();
@@ -299,6 +348,19 @@ pub async fn set_refresh_token(
 	self.db
 		.userdeviceid_refresh
 		.put_raw(userdeviceid, refresh_token);
+
+	// Retain the outgoing token as the device's spent token, pointing at its
+	// successor so a double-submit can be distinguished from a replay.
+	if let Some(spent) = spent {
+		let spent_at = duration_since_epoch(SystemTime::now()).as_secs();
+		let value = (user_id, device_id, refresh_token, spent_at);
+		self.db
+			.spentrefresh_userdeviceid
+			.raw_put(&*spent, value);
+		self.db
+			.userdeviceid_spentrefresh
+			.put_raw(userdeviceid, &*spent);
+	}
 
 	Ok(())
 }
@@ -340,26 +402,127 @@ async fn find_refresh_token_expires_at(
 #[implement(super::Service)]
 pub async fn remove_refresh_token(&self, user_id: &UserId, device_id: &DeviceId) -> Result {
 	let userdeviceid = (user_id, device_id);
-	let refresh_token = self
+
+	if let Ok(refresh_token) = self
 		.db
 		.userdeviceid_refresh
 		.qry(&userdeviceid)
-		.await?;
+		.await
+	{
+		self.db.token_userdeviceid.remove(&refresh_token);
+	}
 
 	self.db.userdeviceid_refresh.del(userdeviceid);
-	self.db.token_userdeviceid.remove(&refresh_token);
+
+	self.forget_spent_refresh_token(user_id, device_id)
+		.await;
 
 	Ok(())
 }
 
+/// Drop the spent (previous-generation) refresh token retained for reuse
+/// detection, if any.
 #[implement(super::Service)]
-pub async fn get_refresh_token(&self, user_id: &UserId, device_id: &DeviceId) -> Result<String> {
-	let key = (user_id, device_id);
+async fn forget_spent_refresh_token(&self, user_id: &UserId, device_id: &DeviceId) {
+	let userdeviceid = (user_id, device_id);
+
+	if let Ok(spent) = self
+		.db
+		.userdeviceid_spentrefresh
+		.qry(&userdeviceid)
+		.await
+	{
+		self.db.spentrefresh_userdeviceid.remove(&spent);
+	}
+
 	self.db
+		.userdeviceid_spentrefresh
+		.del(userdeviceid);
+}
+
+/// Classification of a refresh token presented for rotation at a token
+/// endpoint.
+pub enum RefreshToken {
+	/// The device's current refresh token; rotate it.
+	Current {
+		user_id: OwnedUserId,
+		device_id: OwnedDeviceId,
+		expires_at: Option<SystemTime>,
+	},
+
+	/// A spent (already-rotated) token retained for one generation. `grace` is
+	/// set when its successor is still current and it was spent within the
+	/// configured window, marking a benign double-submit rather than a replay;
+	/// `current` is the successor for which to re-issue an access token.
+	Replayed {
+		user_id: OwnedUserId,
+		device_id: OwnedDeviceId,
+		current: String,
+		grace: bool,
+	},
+
+	/// Not a recognised refresh token.
+	Unknown,
+}
+
+/// Classify a presented refresh token for the token-endpoint rotation path.
+#[implement(super::Service)]
+pub async fn classify_refresh_token(&self, presented: &str) -> RefreshToken {
+	// The current refresh token resolves and matches the device's active
+	// pointer (an access token resolves but will not match).
+	if let Ok((user_id, device_id, expires_at)) = self.find_from_token(presented).await {
+		let current: Option<String> = self
+			.db
+			.userdeviceid_refresh
+			.qry(&(&user_id, &device_id))
+			.await
+			.deserialized()
+			.ok();
+
+		if current.as_deref() == Some(presented) {
+			return RefreshToken::Current { user_id, device_id, expires_at };
+		}
+	}
+
+	// Otherwise it may be the one retained spent token: a benign double-submit
+	// inside the grace window, or a replay to be treated as a compromise.
+	let Ok((user_id, device_id, successor, spent_at)) = self
+		.db
+		.spentrefresh_userdeviceid
+		.get(presented)
+		.await
+		.deserialized::<(OwnedUserId, OwnedDeviceId, String, u64)>()
+	else {
+		return RefreshToken::Unknown;
+	};
+
+	let current: Option<String> = self
+		.db
 		.userdeviceid_refresh
-		.qry(&key)
+		.qry(&(&user_id, &device_id))
 		.await
 		.deserialized()
+		.ok();
+
+	let grace_window = self
+		.services
+		.server
+		.config
+		.refresh_token_reuse_grace;
+	let elapsed = duration_since_epoch(SystemTime::now())
+		.as_secs()
+		.saturating_sub(spent_at);
+
+	let grace = grace_window != 0
+		&& elapsed <= grace_window
+		&& current.as_deref() == Some(successor.as_str());
+
+	RefreshToken::Replayed {
+		user_id,
+		device_id,
+		current: successor,
+		grace,
+	}
 }
 
 #[must_use]
@@ -531,6 +694,7 @@ pub async fn get_oidc_device_idp(
 		.deserialized::<Json<String>>()
 		.ok()
 		.map(|Json(idp)| idp)
+		.filter(|idp| !idp.is_empty())
 }
 
 #[implement(super::Service)]

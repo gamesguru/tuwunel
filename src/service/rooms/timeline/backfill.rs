@@ -1,17 +1,14 @@
-use std::{collections::HashSet, iter::once};
+use std::{collections::HashSet, iter::once, num::NonZeroUsize};
 
 use futures::{
 	FutureExt, StreamExt, TryFutureExt,
 	future::{join, try_join, try_join4},
 };
 use rand::seq::SliceRandom;
-use ruma::{
-	CanonicalJsonObject, EventId, RoomId, ServerName, api::federation, events::TimelineEventType,
-	uint,
-};
+use ruma::{CanonicalJsonObject, EventId, RoomId, ServerName, events::TimelineEventType};
 use serde_json::value::RawValue as RawJsonValue;
 use tuwunel_core::{
-	Result, at, debug, debug_info, debug_warn, implement, is_false,
+	Result, at, debug, debug_warn, implement, is_false,
 	matrix::{
 		event::Event,
 		pdu::{PduCount, PduId, RawPduId},
@@ -25,6 +22,13 @@ use tuwunel_core::{
 use tuwunel_database::Json;
 
 use super::ExtractBody;
+use crate::{
+	federation::Candidates,
+	fetcher::{Op, Opts},
+};
+
+/// Events requested per backfill batch.
+const BACKFILL_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
 
 #[implement(super::Service)]
 #[tracing::instrument(name = "backfill", level = "debug", skip(self))]
@@ -121,7 +125,7 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 		.map(ToOwned::to_owned)
 		.stream();
 
-	let mut servers = power_servers
+	let eligible: Candidates = power_servers
 		.chain(canonical_room_alias_server)
 		.chain(trusted_servers)
 		.ready_filter(|server_name| !self.services.globals.server_is_ours(server_name))
@@ -132,45 +136,67 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 				.await
 				.then_some(server_name)
 		})
-		.boxed();
+		.collect()
+		.await;
 
-	while let Some(ref backfill_server) = servers.next().await {
-		let request = federation::backfill::get_backfill::v1::Request {
-			room_id: room_id.to_owned(),
-			v: vec![first_pdu.event_id().to_owned()],
-			limit: uint!(100),
-		};
+	let no_backfill = || {
+		warn!(%room_id, "No servers could backfill, but backfill was needed");
+		Ok(())
+	};
 
-		debug_info!("Asking {backfill_server} for backfill");
-		if let Ok(response) = self
-			.services
-			.federation
-			.execute(backfill_server, request)
-			.inspect_err(|e| {
-				warn!("{backfill_server} failed backfilling for room {room_id}: {e}");
-			})
-			.await
-		{
-			return response
-				.pdus
-				.into_iter()
-				.stream()
-				.for_each(async |pdu| {
-					if let Err(e) = self
-						.backfill_pdu(room_id, backfill_server, pdu)
-						.await
-					{
-						debug_warn!("Failed to add backfilled pdu in room {room_id}: {e}");
-					}
-				})
-				.map(Ok)
-				.await;
-		}
+	// Empty here, rather than deferring to the fetcher, keeps backfill scoped to
+	// the authoritative servers; the fetcher would otherwise fall back to the
+	// room's whole population.
+	if eligible.is_empty() {
+		return no_backfill();
 	}
 
-	warn!("No servers could backfill, but backfill was needed in room {room_id}");
+	let opts = Opts::new(Op::Backfill, room_id.to_owned())
+		.event_id(first_pdu.event_id().to_owned())
+		.candidates(eligible)
+		.backfill_limit(BACKFILL_LIMIT);
+
+	let Ok(outcome) = self
+		.services
+		.fetcher
+		.fetch(opts)
+		.inspect_err(|e| warn!(%room_id, "Backfilling failed: {e}"))
+		.await
+	else {
+		return no_backfill();
+	};
+
+	let pdus: Vec<Box<RawJsonValue>> = serde_json::from_slice(&outcome.bytes)?;
+
+	pdus.into_iter()
+		.stream()
+		.for_each(async |pdu| {
+			self.backfill_pdu(room_id, &outcome.origin, pdu)
+				.await
+				.inspect_err(|e| debug_warn!(%room_id, "Failed to add backfilled pdu: {e}"))
+				.ok();
+		})
+		.await;
 
 	Ok(())
+}
+
+/// Fetch a single event we have not received over federation and persist it via
+/// the backfill path, so a subsequent local lookup resolves it. Checks are off:
+/// `backfill_pdu` performs full signature, hash, and auth validation itself.
+#[implement(super::Service)]
+#[tracing::instrument(skip(self), level = "debug")]
+pub async fn fetch_remote_event(&self, room_id: &RoomId, event_id: &EventId) -> Result {
+	let opts = Opts::new(Op::Event, room_id.to_owned())
+		.event_id(event_id.to_owned())
+		.checks(false);
+
+	let outcome = self.services.fetcher.fetch(opts).await?;
+
+	let pdu: Box<RawJsonValue> = serde_json::from_slice(&outcome.bytes)?;
+
+	self.backfill_pdu(room_id, &outcome.origin, pdu)
+		.await
 }
 
 #[implement(super::Service)]

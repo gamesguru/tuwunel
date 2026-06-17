@@ -24,7 +24,7 @@
 
 use std::{
 	cmp::{Ordering, Reverse},
-	collections::{BinaryHeap, HashMap},
+	collections::{BinaryHeap, HashMap, HashSet},
 };
 
 use futures::{Stream, TryFutureExt, TryStreamExt, stream::try_unfold};
@@ -72,7 +72,9 @@ impl PartialOrd for TieBreaker {
 ///
 /// ## Returns
 ///
-/// Returns the ordered list of event IDs from earliest to latest.
+/// Returns the ordered list of event IDs from earliest to latest. Every event
+/// in the graph appears exactly once; a reference to an event absent from the
+/// graph is treated as a non-edge rather than dropping the referencing event.
 ///
 /// We consider that the DAG is directed from most recent events to oldest
 /// events, so an event is an incoming edge to its referenced events.
@@ -88,7 +90,7 @@ impl PartialOrd for TieBreaker {
 )]
 #[expect(clippy::implicit_hasher)]
 pub async fn topological_sort<Query, Fut>(
-	graph: &HashMap<OwnedEventId, ReferencedIds>,
+	graph: HashMap<OwnedEventId, ReferencedIds>,
 	query: &Query,
 ) -> Result<Vec<OwnedEventId>>
 where
@@ -121,15 +123,20 @@ where
 			incoming
 		});
 
+	// A reference absent from the graph is unresolvable and not an out-edge.
 	let horizon = graph
 		.iter()
-		.filter(|(_, references)| references.is_empty())
+		.filter(|(_, references)| {
+			!references
+				.iter()
+				.any(|reference| graph.contains_key(reference))
+		})
 		.try_stream()
 		.and_then(async |(event_id, _)| Ok(Reverse(query(event_id.clone()).await?)))
 		.try_collect::<BinaryHeap<Reverse<TieBreaker>>>()
 		.await?;
 
-	kahn_sort(horizon, graph.clone(), &incoming, &query)
+	kahn_sort(horizon, graph, &incoming, &query)
 		.try_collect()
 		.await
 }
@@ -167,14 +174,16 @@ where
 			.flatten()
 			.try_stream()
 			.try_fold(state, |(event_id, (mut heap, mut graph)), parent_id| async move {
-				let out = graph
+				graph
 					.get_mut(&parent_id)
-					.expect("contains all parent_ids");
+					.expect("contains all parent_ids")
+					.retain(is_not_equal_to!(&event_id));
 
-				out.retain(is_not_equal_to!(&event_id));
-
-				// Push on the heap once all the outgoing edges have been removed.
-				if out.is_empty() {
+				// References to absent events never resolve; gate on present out-edges only.
+				if !graph[&parent_id]
+					.iter()
+					.any(|reference| graph.contains_key(reference))
+				{
 					heap.push(Reverse(query(parent_id.clone()).await?));
 				}
 
@@ -183,4 +192,114 @@ where
 			.map_ok(Some)
 			.await
 	})
+}
+
+/// Tests whether the events in `order` are in reverse topological power
+/// ordering with respect to `graph`: each event appears after every event it
+/// references that is present in `graph`.
+///
+/// A reference absent from `graph` is a non-edge, as in [`topological_sort`].
+/// The check covers relative order only: it certifies that the events present
+/// in `order` are mutually consistent, not that `order` is complete or
+/// duplicate-free, and (lacking the tie-breaker) not that it equals the exact
+/// sequence [`topological_sort`] would select.
+#[expect(clippy::implicit_hasher)]
+pub fn is_topologically_sorted<'a, Order>(
+	order: Order,
+	graph: &HashMap<OwnedEventId, ReferencedIds>,
+) -> bool
+where
+	Order: IntoIterator<Item = &'a OwnedEventId>,
+{
+	order
+		.into_iter()
+		.try_fold(HashSet::with_capacity(graph.len()), |mut seen, event_id| {
+			let satisfied = graph
+				.get(event_id)
+				.into_iter()
+				.flatten()
+				.filter(|reference| graph.contains_key(*reference))
+				.all(|reference| seen.contains(reference));
+
+			seen.insert(event_id);
+			satisfied.then_some(seen)
+		})
+		.is_some()
+}
+
+/// Whether `items` are already in reverse topological order, reading each
+/// item's references in place instead of from a prebuilt graph. An item must
+/// follow every item it references that is also present among `items`; a
+/// reference to an absent item is a non-edge. `id` reads an item's identifier,
+/// `references` its outgoing references.
+///
+/// This allocates nothing, scanning the remaining items for each reference
+/// rather than building a seen-set. The scan is quadratic, so it suits short
+/// sequences; [`is_topologically_sorted`] is the better pick for a large
+/// sequence or one whose graph is already built.
+pub fn is_topologically_sorted_in_place<'a, T, Id, Refs, Ref>(
+	items: &'a [T],
+	id: Id,
+	references: Refs,
+) -> bool
+where
+	Id: Fn(&'a T) -> &'a str,
+	Refs: Fn(&'a T) -> Ref,
+	Ref: Iterator<Item = &'a str>,
+{
+	if items.len() < 2 {
+		return true;
+	}
+
+	items.iter().enumerate().all(|(i, item)| {
+		references(item).all(|reference| {
+			items[i..]
+				.iter()
+				.all(|other| id(other) != reference)
+		})
+	})
+}
+
+#[cfg(test)]
+mod tests {
+	use super::is_topologically_sorted_in_place;
+
+	fn sorted(items: &[(&str, &[&str])]) -> bool {
+		is_topologically_sorted_in_place(
+			items,
+			|item: &(&str, &[&str])| item.0,
+			|item: &(&str, &[&str])| item.1.iter().copied(),
+		)
+	}
+
+	#[test]
+	fn empty_or_single_is_sorted() {
+		assert!(sorted(&[]));
+		assert!(sorted(&[("a", &[])]));
+	}
+
+	#[test]
+	fn parents_before_children() {
+		assert!(sorted(&[("a", &[]), ("b", &["a"]), ("c", &["a", "b"])]));
+	}
+
+	#[test]
+	fn child_before_parent_is_unsorted() {
+		assert!(!sorted(&[("b", &["a"]), ("a", &[])]));
+	}
+
+	#[test]
+	fn absent_reference_is_a_non_edge() {
+		assert!(sorted(&[("b", &["x"]), ("a", &["x"])]));
+	}
+
+	#[test]
+	fn self_reference_is_unsorted() {
+		assert!(!sorted(&[("a", &["a"]), ("b", &[])]));
+	}
+
+	#[test]
+	fn later_duplicate_of_a_parent_is_unsorted() {
+		assert!(!sorted(&[("a", &[]), ("b", &["a"]), ("a", &[])]));
+	}
 }

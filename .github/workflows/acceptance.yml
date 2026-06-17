@@ -1,0 +1,181 @@
+name: Acceptance
+
+on:
+  workflow_call:
+    inputs:
+      job_name:
+        type: string
+        description: Display name
+      runner:
+        type: string
+        default: 'het'
+        description: Runner mask
+      workers:
+        type: string
+        default: '1'
+        description: Playwright workers per shard
+      retries:
+        type: string
+        default: '1'
+        description: Playwright retries
+      shards:
+        type: string
+        default: '1'
+        description: Number of test shards
+      cargo_profiles:
+        type: string
+      feat_sets:
+        type: string
+      rust_toolchains:
+        type: string
+      rust_targets:
+        type: string
+      sys_names:
+        type: string
+      sys_versions:
+        type: string
+      sys_targets:
+        type: string
+      machines:
+        type: string
+      excludes:
+        type: string
+        default: '[]'
+      includes:
+        type: string
+        default: '[]'
+      checkout:
+        type: string
+        default: 'HEAD'
+
+jobs:
+  init:
+    name: Acceptance Initialize
+    runs-on: ["${{fromJSON(inputs.machines)[0]}}", "${{inputs.runner}}"]
+
+    outputs:
+      ids: ${{steps.gen.outputs.ids}}
+      count: ${{steps.gen.outputs.count}}
+
+    steps:
+    - id: gen
+      name: Generate Shard Matrix
+      env:
+        shards: ${{inputs.shards}}
+      run: |
+        case "$shards" in ''|*[!0-9]*) echo "invalid shards: '$shards'" >&2; exit 1;; esac
+        test "$shards" -ge 1 || { echo "shards must be >= 1" >&2; exit 1; }
+        echo "ids=[$(seq -s, 1 "$shards")]" >> "$GITHUB_OUTPUT"
+        echo "count=$shards" >> "$GITHUB_OUTPUT"
+
+  acceptance:
+    name: ${{inputs.job_name}}
+    needs: [init]
+    runs-on: ["${{matrix.machine}}", "${{inputs.runner}}"]
+    concurrency:
+      group: playwright-cant-walk-and-chew-bubblegum-${{matrix.shard}}
+      cancel-in-progress: false
+
+    outputs:
+      shards: ${{needs.init.outputs.count}}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Shard ids come from the init job, which expands the `shards` count
+        # into [1..N]; that count is also the /N split and summary expectation.
+        shard: ${{fromJSON(needs.init.outputs.ids)}}
+        cargo_profile: ${{fromJSON(inputs.cargo_profiles)}}
+        feat_set: ${{fromJSON(inputs.feat_sets)}}
+        rust_toolchain: ${{fromJSON(inputs.rust_toolchains)}}
+        sys_name: ${{fromJSON(inputs.sys_names)}}
+        sys_version: ${{fromJSON(inputs.sys_versions)}}
+        rust_target: ${{fromJSON(inputs.rust_targets)}}
+        sys_target: ${{fromJSON(inputs.sys_targets)}}
+        machine: ${{fromJSON(inputs.machines)}}
+        exclude: ${{fromJSON(inputs.excludes)}}
+        include: ${{fromJSON(inputs.includes)}}
+
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        ref: ${{inputs.checkout}}
+
+    - name: Execute
+      id: execute
+      env:
+        playwright_workers: ${{fromJSON(inputs.workers)}}
+        playwright_retries: ${{fromJSON(inputs.retries)}}
+        playwright_shard: ${{matrix.shard}}/${{needs.init.outputs.count}}
+        cargo_profile: ${{matrix.cargo_profile}}
+        rust_toolchain: ${{matrix.rust_toolchain}}
+        rust_target: ${{matrix.rust_target}}
+        feat_set: ${{matrix.feat_set}}
+        sys_name: ${{matrix.sys_name}}
+        sys_target: ${{matrix.sys_target}}
+        sys_version: ${{matrix.sys_version}}
+        machine: ${{matrix.machine}}
+
+      run: |
+        docker/playwright.sh
+
+    - if: success() || (failure() && steps.execute.outcome == 'failure')
+      name: Upload Results
+      id: upload-result
+      uses: actions/upload-artifact@v7
+      with:
+        name: playwright_results-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}-shard-${{matrix.shard}}.json
+        path: ./tests/playwright/results.json
+        if-no-files-found: ignore
+        overwrite: true
+
+    - if: success() || (failure() && steps.execute.outcome == 'failure')
+      name: Upload Log Output
+      id: upload-output
+      uses: actions/upload-artifact@v7
+      with:
+        name: playwright_output-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}-shard-${{matrix.shard}}.log
+        path: ./tests/playwright/output.log
+        if-no-files-found: ignore
+        overwrite: true
+
+    - if: success() || (failure() && steps.execute.outcome == 'failure')
+      name: Gate
+      run: |
+        .github/workflows/playwright_summarise.sh gate
+
+  fini:
+    if: >
+      !cancelled()
+      && needs.acceptance.result != 'skipped'
+
+    name: Acceptance Aggregate
+    needs: [acceptance]
+    runs-on: ["${{fromJSON(inputs.machines)[0]}}", "${{inputs.runner}}"]
+
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        ref: ${{inputs.checkout}}
+
+    - name: Collect Shard Results
+      uses: actions/download-artifact@v7
+      with:
+        pattern: playwright_results-*
+        path: ./shard-results
+        merge-multiple: false
+
+    - name: Merge and Summarise
+      shell: bash
+      env:
+        shards: ${{needs.acceptance.outputs.shards}}
+      run: |
+        mkdir -p tests/playwright
+        mapfile -t files < <(find ./shard-results -name results.json | sort)
+        echo "Merging ${#files[@]} shard result files (expected ${shards})."
+        if test "${#files[@]}" -ne "${shards}"; then
+          echo "expected ${shards} shard results, found ${#files[@]}" >&2
+          exit 1
+        fi
+        jq -s '.' "${files[@]}" > tests/playwright/results.json
+        .github/workflows/playwright_summarise.sh

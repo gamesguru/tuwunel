@@ -2,10 +2,11 @@
 
 use std::{collections::HashMap, hash::Hash};
 
+use arrayvec::ArrayVec;
 use futures::{Future, Stream, StreamExt};
 
 use super::ReadyExt;
-use crate::expected;
+use crate::{expected, utils::rand::index};
 
 /// StreamTools
 ///
@@ -37,6 +38,15 @@ where
 	) -> impl Future<Output = HashMap<Item, usize>> + Send
 	where
 		<Self as Stream>::Item: Eq + Hash;
+
+	/// Reservoir-samples up to `N` items uniformly at random in a single
+	/// pass, applying `f` only to the items retained. Items are drawn
+	/// without replacement; the keys `f` derives may still repeat, so a key
+	/// produced by twice as many items is twice as likely to appear.
+	fn sample_by<const N: usize, K, F>(self, f: F) -> impl Future<Output = ArrayVec<K, N>> + Send
+	where
+		F: Fn(Item) -> K + Send,
+		K: Send;
 
 	fn fold_default<T, F, Fut>(self, f: F) -> impl Future<Output = T> + Send
 	where
@@ -92,6 +102,27 @@ where
 			*entry = expected!(value + 1);
 			counts
 		})
+	}
+
+	#[inline]
+	fn sample_by<const N: usize, K, F>(self, f: F) -> impl Future<Output = ArrayVec<K, N>> + Send
+	where
+		F: Fn(Item) -> K + Send,
+		K: Send,
+	{
+		self.enumerate()
+			.ready_fold(ArrayVec::<K, N>::new(), move |mut reservoir, (i, item)| {
+				if reservoir.len() < N {
+					reservoir.push(f(item));
+				} else {
+					let slot = index(expected!(i + 1));
+					if slot < N {
+						reservoir[slot] = f(item);
+					}
+				}
+
+				reservoir
+			})
 	}
 
 	#[inline]

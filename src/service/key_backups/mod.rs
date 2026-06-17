@@ -1,8 +1,8 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{cmp::Ordering, collections::BTreeMap, sync::Arc};
 
 use futures::StreamExt;
 use ruma::{
-	OwnedRoomId, RoomId, UserId,
+	OwnedRoomId, RoomId, UInt, UserId,
 	api::client::backup::{BackupAlgorithm, KeyBackupData, RoomKeyBackup},
 	serde::Raw,
 };
@@ -172,6 +172,19 @@ pub async fn add_key(
 		return Err!(Request(NotFound("Tried to update nonexistent backup.")));
 	}
 
+	// Keep the existing key unless the incoming one is preferable per MSC1219.
+	let replace = match self
+		.get_session(user_id, version, room_id, session_id)
+		.await
+	{
+		| Ok(old_key) => is_better_key(&old_key, key_data)?,
+		| Err(_) => true,
+	};
+
+	if !replace {
+		return Ok(());
+	}
+
 	let count = self.services.globals.next_count();
 	self.db.backupid_etag.put(key, *count);
 
@@ -181,6 +194,46 @@ pub async fn add_key(
 		.put_raw(key, key_data.json().get());
 
 	Ok(())
+}
+
+/// Per MSC1219: prefer verified, then lower `first_message_index`, then lower
+/// `forwarded_count`; equal on all three keeps the existing key.
+fn is_better_key(old: &Raw<KeyBackupData>, new: &Raw<KeyBackupData>) -> Result<bool> {
+	let old_verified = old
+		.get_field::<bool>("is_verified")?
+		.unwrap_or_default();
+
+	let new_verified = new
+		.get_field::<bool>("is_verified")?
+		.ok_or_else(|| err!(Request(BadJson("`is_verified` field should exist"))))?;
+
+	if old_verified != new_verified {
+		return Ok(new_verified);
+	}
+
+	let old_first_message_index = old
+		.get_field::<UInt>("first_message_index")?
+		.unwrap_or(UInt::MAX);
+
+	let new_first_message_index = new
+		.get_field::<UInt>("first_message_index")?
+		.ok_or_else(|| err!(Request(BadJson("`first_message_index` field should exist"))))?;
+
+	match new_first_message_index.cmp(&old_first_message_index) {
+		| Ordering::Less => Ok(true),
+		| Ordering::Greater => Ok(false),
+		| Ordering::Equal => {
+			let old_forwarded_count = old
+				.get_field::<UInt>("forwarded_count")?
+				.unwrap_or(UInt::MAX);
+
+			let new_forwarded_count = new
+				.get_field::<UInt>("forwarded_count")?
+				.ok_or_else(|| err!(Request(BadJson("`forwarded_count` field should exist"))))?;
+
+			Ok(new_forwarded_count < old_forwarded_count)
+		},
+	}
 }
 
 #[implement(Service)]

@@ -1,4 +1,4 @@
-use std::{fmt::Debug, mem};
+use std::{fmt::Debug, mem, time::Duration};
 
 use bytes::Bytes;
 use ipaddress::IPAddress;
@@ -10,13 +10,17 @@ use ruma::{
 		error::Error as RumaError,
 	},
 };
+use tokio::time::timeout;
 use tuwunel_core::{
-	Err, Error, Result, debug, debug::INFO_SPAN_LEVEL, debug_error, debug_warn, err,
-	error::inspect_debug_log, implement, trace,
+	Err, Error, Result, debug, debug::INFO_SPAN_LEVEL, debug_error, debug_warn, err, implement,
+	trace,
 };
 
-use super::scheme::{FedAuth, FedPath};
-use crate::resolver::actual::ActualDest;
+use super::{
+	Classification, ShouldAttempt,
+	scheme::{FedAuth, FedPath},
+};
+use crate::{client::read_response_capped, resolver::actual::ActualDest};
 
 /// Sends a request to a federation server
 #[implement(super::Service)]
@@ -29,6 +33,38 @@ where
 {
 	let client = &self.services.client.federation;
 	self.execute_on(client, dest, request).await
+}
+
+/// Client-initiated key lookup (`/keys/query`, `/keys/claim`) over federation:
+/// skips servers already in backoff and bounds the request by
+/// `federation_keys_timeout` so a waiting client is not held past its own send
+/// deadline. Honors peer-status but does not record into it; a slow key lookup
+/// must not suppress unrelated outbound traffic to the server.
+#[implement(super::Service)]
+#[tracing::instrument(skip_all, name = "keys", level = "debug")]
+pub async fn execute_keys<T>(&self, dest: &ServerName, request: T) -> Result<T::IncomingResponse>
+where
+	T: OutgoingRequest + Debug + Send,
+	T::Authentication: FedAuth,
+	T::PathBuilder: FedPath,
+{
+	if matches!(self.should_attempt(dest).await, ShouldAttempt::No { .. }) {
+		return Err!("{dest} is in federation backoff; skipping key lookup");
+	}
+
+	let timeout_dur = Duration::from_secs(
+		self.services
+			.server
+			.config
+			.federation_keys_timeout,
+	);
+
+	let client = &self.services.client.federation;
+
+	match timeout(timeout_dur, self.execute_uncounted(client, dest, request)).await {
+		| Ok(result) => result,
+		| Err(_elapsed) => Err!("{dest} key lookup exceeded {}s", timeout_dur.as_secs()),
+	}
 }
 
 /// Like execute() but with a very large timeout
@@ -49,12 +85,38 @@ where
 }
 
 #[implement(super::Service)]
+pub async fn execute_on<T>(
+	&self,
+	client: &Client,
+	dest: &ServerName,
+	request: T,
+) -> Result<T::IncomingResponse>
+where
+	T: OutgoingRequest + Send,
+	T::Authentication: FedAuth,
+	T::PathBuilder: FedPath,
+{
+	let result = self
+		.execute_uncounted(client, dest, request)
+		.await;
+
+	match &result {
+		| Ok(_) => self.record_success(dest),
+		| Err(_) => self.record_failure(dest, Classification::Transient),
+	}
+
+	result
+}
+
+/// Like [`execute_on`] but leaves peer-status untouched, for callers that
+/// must honor backoff without contributing to it.
+#[implement(super::Service)]
 #[tracing::instrument(
 	name = "fed",
 	level = INFO_SPAN_LEVEL,
 	skip(self, client, request),
 )]
-pub async fn execute_on<T>(
+async fn execute_uncounted<T>(
 	&self,
 	client: &Client,
 	dest: &ServerName,
@@ -85,6 +147,7 @@ where
 		.await?;
 
 	let request = self.prepare(&actual, dest, request)?;
+
 	self.perform::<T>(&actual, dest, request, client)
 		.await
 }
@@ -106,8 +169,11 @@ where
 	let method = request.method().clone();
 
 	debug!(?method, ?url, "Sending request");
+	let limit = self.services.server.config.max_response_size;
+
 	match client.execute(request).await {
-		| Ok(response) => handle_response::<T>(actual, dest, &method, &url, response).await,
+		| Ok(response) =>
+			handle_response::<T>(actual, dest, &method, &url, response, limit).await,
 		| Err(error) => Err(self
 			.handle_error(dest, actual, &method, &url, error)
 			.expect_err("always returns error")),
@@ -147,13 +213,14 @@ async fn handle_response<T>(
 	method: &Method,
 	url: &Url,
 	response: Response,
+	limit: usize,
 ) -> Result<T::IncomingResponse>
 where
 	T: OutgoingRequest + Send,
 	T::Authentication: FedAuth,
 	T::PathBuilder: FedPath,
 {
-	let response = into_http_response(dest, actual, method, url, response).await?;
+	let response = into_http_response(dest, actual, method, url, response, limit).await?;
 
 	T::IncomingResponse::try_from_http_response(response)
 		.map_err(|e| err!(BadServerResponse("Server returned bad 200 response: {e:?}")))
@@ -165,6 +232,7 @@ async fn into_http_response(
 	method: &Method,
 	url: &Url,
 	mut response: Response,
+	limit: usize,
 ) -> Result<http::Response<Bytes>> {
 	let status = response.status();
 	trace!(
@@ -188,11 +256,7 @@ async fn into_http_response(
 
 	// TODO: handle timeout
 	trace!("Waiting for response body...");
-	let body = response
-		.bytes()
-		.await
-		.inspect_err(inspect_debug_log)
-		.unwrap_or_else(|_| Vec::new().into());
+	let body = read_response_capped(response, limit).await?;
 
 	let http_response = http_response_builder
 		.body(body)

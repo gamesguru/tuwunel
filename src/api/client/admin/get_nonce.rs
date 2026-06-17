@@ -1,5 +1,5 @@
 use axum::extract::State;
-use ruma::api::client::admin::get_nonce;
+use synapse_admin_api::register_users::shared_secret_register_nonce as get_nonce;
 use tuwunel_core::{Result, err};
 
 use crate::Ruma;

@@ -1,4 +1,3 @@
-pub mod blurhash;
 mod data;
 pub(super) mod migrations;
 mod preview;
@@ -32,6 +31,7 @@ use tuwunel_core::{
 	},
 	warn,
 };
+use url::Url;
 
 use self::data::{Data, Metadata};
 pub use self::thumbnail::Dim;
@@ -68,6 +68,9 @@ pub const CACHE_CONTROL_IMMUTABLE: &str = "private,max-age=31536000,immutable";
 
 /// Default cross-origin resource policy.
 pub const CORP_CROSS_ORIGIN: &str = "cross-origin";
+
+/// Validity window for a presigned media download redirect (MSC3860).
+const REDIRECT_TTL: Duration = Duration::from_mins(5);
 
 #[async_trait]
 impl crate::Service for Service {
@@ -383,6 +386,39 @@ impl Service {
 		})
 	}
 
+	/// Presigned redirect URL for locally-stored media (MSC3860).
+	///
+	/// Returns the first configured provider's signed URL for the object, or
+	/// `None` when redirects are disabled, the media is unknown, or no provider
+	/// can presign (filesystem-only media).
+	#[tracing::instrument(level = "debug", skip(self))]
+	pub async fn redirect_url(&self, mxc: &Mxc<'_>, dim: &Dim) -> Result<Option<Url>> {
+		if !self.services.config.media_allow_redirect {
+			return Ok(None);
+		}
+
+		let Ok(Metadata { key, .. }) = self.db.search_file_metadata(mxc, dim).await else {
+			return Ok(None);
+		};
+
+		let path = self.get_media_name_sha256(&key);
+		let urls = self
+			.storage_providers()
+			.stream()
+			.filter_map(async |provider| {
+				provider
+					.signed_get_url(path.as_str(), REDIRECT_TTL)
+					.await
+					.log_debug_err()
+					.ok()
+					.flatten()
+			});
+
+		pin_mut!(urls);
+
+		Ok(urls.next().await)
+	}
+
 	/// Gets all the MXC URIs in our media database
 	pub async fn get_all_mxcs(&self) -> Result<Vec<OwnedMxcUri>> {
 		let all_keys = self.db.get_all_media_keys().await;
@@ -570,6 +606,7 @@ impl Service {
 			.map(|count| {
 				count
 					.ge(&0)
+					.into_option()
 					.ok_or_else(|| err!(Request(NotFound("Failed to remove on any provider."))))
 			})
 			.await

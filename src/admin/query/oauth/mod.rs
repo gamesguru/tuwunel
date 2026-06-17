@@ -34,6 +34,11 @@ pub(crate) enum OauthCommand {
 		/// List of claims to match in key=value format.
 		#[arg(long, required = true)]
 		claim: Vec<String>,
+
+		/// Replace existing committed SSO sessions before recording the claim;
+		/// without it, associate refuses when committed sessions exist.
+		#[arg(long)]
+		force: bool,
 	},
 
 	/// List configured OAuth providers.

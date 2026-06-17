@@ -29,6 +29,7 @@ use tuwunel_core::{
 		math::Expected,
 		stream::{IterStream, ReadyExt, WidebandExt},
 	},
+	warn,
 };
 use tuwunel_service::Services;
 
@@ -57,7 +58,8 @@ pub(crate) async fn get_public_rooms_filtered_route(
 	)
 	.await
 	.map_err(|e| {
-		err!(Request(Unknown(warn!(?body.server, "Failed to return /publicRooms: {e}"))))
+		warn!(?body.server, %e, "Failed to query remote public rooms directory");
+		err!(Request(ConnectionFailed("Unable to query the remote public rooms directory.")))
 	})?;
 
 	Ok(response)
@@ -86,7 +88,8 @@ pub(crate) async fn get_public_rooms_route(
 	)
 	.await
 	.map_err(|e| {
-		err!(Request(Unknown(warn!(?body.server, "Failed to return /publicRooms: {e}"))))
+		warn!(?body.server, %e, "Failed to query remote public rooms directory");
+		err!(Request(ConnectionFailed("Unable to query the remote public rooms directory.")))
 	})?;
 
 	Ok(get_public_rooms::v3::Response {

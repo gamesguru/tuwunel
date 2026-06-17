@@ -3,9 +3,9 @@ use futures::{StreamExt, TryStreamExt};
 use ruma::api::client::backup::{
 	add_backup_keys_for_room, delete_backup_keys_for_room, get_backup_keys_for_room,
 };
-use tuwunel_core::{Err, Result, utils::stream::IterStream};
+use tuwunel_core::{Result, utils::stream::IterStream};
 
-use super::get_count_etag;
+use super::{check_backup_version, get_count_etag};
 use crate::Ruma;
 
 /// # `PUT /_matrix/client/r0/room_keys/keys/{roomId}`
@@ -20,16 +20,7 @@ pub(crate) async fn add_backup_keys_for_room_route(
 	State(services): State<crate::State>,
 	body: Ruma<add_backup_keys_for_room::v3::Request>,
 ) -> Result<add_backup_keys_for_room::v3::Response> {
-	if services
-		.key_backups
-		.get_latest_backup_version(body.sender_user())
-		.await
-		.is_ok_and(|version| version != body.version)
-	{
-		return Err!(Request(InvalidParam(
-			"You may only manipulate the most recently created version of the backup."
-		)));
-	}
+	check_backup_version(&services, body.sender_user(), &body.version).await?;
 
 	body.sessions
 		.iter()

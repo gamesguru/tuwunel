@@ -68,7 +68,7 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 	trace!(format = ?room_rules.event_format, "Checking format");
 	check_rules(&pdu_json, &room_rules.event_format)?;
 
-	let state_at_incoming_event = self
+	let (state_at_incoming_event, via_fetch) = self
 		.resolve_state_at_incoming_event(
 			origin,
 			room_id,
@@ -107,6 +107,11 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 		.collect()
 		.map(Arc::new)
 		.await;
+
+	if via_fetch && !soft_fail {
+		self.cache_resolved_state(room_id, incoming_pdu.event_id(), state_ids_compressed.clone())
+			.await;
+	}
 
 	if incoming_pdu.state_key().is_some() {
 		self.resolve_and_force_state_after(
@@ -187,7 +192,7 @@ async fn resolve_state_at_incoming_event(
 	room_version: &RoomVersionId,
 	recursion_level: usize,
 	create_event_id: &EventId,
-) -> Result<HashMap<u64, OwnedEventId>> {
+) -> Result<(HashMap<u64, OwnedEventId>, bool)> {
 	// 10. Fetch missing state and auth chain events by calling /state_ids at
 	//     backwards extremities doing all the checks in this list starting at 1.
 	//     These are not timeline events.
@@ -204,19 +209,31 @@ async fn resolve_state_at_incoming_event(
 
 	if state_at_incoming_event.is_none() {
 		state_at_incoming_event = self
-			.fetch_state(
-				origin,
-				room_id,
-				incoming_pdu.event_id(),
-				room_version,
-				recursion_level,
-				create_event_id,
-			)
-			.boxed()
-			.await?;
+			.cached_resolved_state(incoming_pdu.event_id())
+			.await;
 	}
 
-	Ok(state_at_incoming_event.expect("we always set this to some above"))
+	let (state_at_incoming_event, via_fetch) = match state_at_incoming_event {
+		| Some(state) => (state, false),
+		| None => {
+			let state = self
+				.fetch_state(
+					origin,
+					room_id,
+					incoming_pdu.event_id(),
+					room_version,
+					recursion_level,
+					create_event_id,
+				)
+				.boxed()
+				.await?
+				.expect("fetch_state always resolves state to some");
+
+			(state, true)
+		},
+	};
+
+	Ok((state_at_incoming_event, via_fetch))
 }
 
 #[implement(super::Service)]

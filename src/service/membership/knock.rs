@@ -69,11 +69,19 @@ pub async fn knock(
 		return Err!(Request(Forbidden("You cannot knock on a room you are already joined in.")));
 	}
 
-	if self
+	let server_in_room = self
 		.services
 		.state_cache
-		.is_knocked(sender_user, room_id)
-		.await
+		.server_in_room(self.services.globals.server_name(), room_id)
+		.await;
+
+	// Trust a local knock; re-drive a remote one in case we missed a kick.
+	if server_in_room
+		&& self
+			.services
+			.state_cache
+			.is_knocked(sender_user, room_id)
+			.await
 	{
 		debug_warn!("{sender_user} is already knocked in {room_id}");
 		return Ok(());
@@ -88,12 +96,6 @@ pub async fn knock(
 		debug_warn!("{sender_user} is banned from {room_id} but attempted to knock");
 		return Err!(Request(Forbidden("You cannot knock on a room you are banned from.")));
 	}
-
-	let server_in_room = self
-		.services
-		.state_cache
-		.server_in_room(self.services.globals.server_name(), room_id)
-		.await;
 
 	let local_knock = server_in_room
 		|| servers.is_empty()

@@ -10,6 +10,11 @@ use tuwunel_database::{Cbor, Deserialized};
 // evict every other client from the FIFO cache with one huge record.
 const MAX_REGISTRATION_BYTES: usize = 4096;
 
+// Grant and response types the server understands; MSC2966 requires dropping
+// any others from a registration before it is stored and echoed.
+const KNOWN_GRANT_TYPES: [&str; 2] = ["authorization_code", "refresh_token"];
+const KNOWN_RESPONSE_TYPES: [&str; 1] = ["code"];
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DcrRequest {
 	pub redirect_uris: Vec<String>,
@@ -115,14 +120,17 @@ pub async fn get_client(&self, client_id: &str) -> Result<ClientRegistration> {
 fn normalize(mut request: DcrRequest) -> DcrRequest {
 	request.redirect_uris.sort();
 	request.contacts.sort();
-	request
-		.grant_types
-		.iter_mut()
-		.for_each(|v| v.sort());
-	request
-		.response_types
-		.iter_mut()
-		.for_each(|v| v.sort());
+	prune(&mut request.grant_types, &KNOWN_GRANT_TYPES);
+	prune(&mut request.response_types, &KNOWN_RESPONSE_TYPES);
 
 	request
+}
+
+fn prune(types: &mut Option<Vec<String>>, known: &[&str]) {
+	let Some(types) = types else {
+		return;
+	};
+
+	types.retain(|ty| known.contains(&ty.as_str()));
+	types.sort();
 }

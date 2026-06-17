@@ -45,8 +45,21 @@ pub async fn add_servers_invite_via(&self, room_id: &RoomId, servers: Vec<OwnedS
 #[implement(super::Service)]
 #[tracing::instrument(skip(self), level = "trace")]
 pub async fn servers_route_via(&self, room_id: &RoomId) -> Result<Vec<OwnedServerName>> {
-	let most_powerful_user_server = self
-		.services
+	let most_powerful = self.most_powerful_user_server(room_id).await;
+
+	Ok(most_powerful
+		.into_iter()
+		.chain(self.popular_servers(room_id).await)
+		.take(5)
+		.collect())
+}
+
+/// The room's highest power-level user's server, provided that user holds at
+/// least power level 50.
+#[implement(super::Service)]
+#[tracing::instrument(skip(self), level = "trace")]
+pub async fn most_powerful_user_server(&self, room_id: &RoomId) -> Option<OwnedServerName> {
+	self.services
 		.state_accessor
 		.room_state_get_content(room_id, &StateEventType::RoomPowerLevels, "")
 		.await
@@ -58,21 +71,22 @@ pub async fn servers_route_via(&self, room_id: &RoomId) -> Result<Vec<OwnedServe
 				.max_by_key(|(_, power)| *power)
 				.filter(|(_, power)| *power >= int!(50))
 				.map(|(user, _)| user.server_name().to_owned())
-		});
+		})
+}
 
-	let popular_servers = self
-		.room_members(room_id)
+/// Servers participating in the room, ordered by descending resident user
+/// count. Counting members per server is an aggregation, so the result is
+/// materialized rather than streamed.
+#[implement(super::Service)]
+#[tracing::instrument(skip(self), level = "trace")]
+pub async fn popular_servers(&self, room_id: &RoomId) -> Vec<OwnedServerName> {
+	self.room_members(room_id)
 		.counts_by(|user| user.server_name().to_owned())
 		.await
 		.into_iter()
 		.sorted_by_key(|(_, users)| Reverse(*users))
-		.map(|(server, _)| server);
-
-	Ok(most_powerful_user_server
-		.into_iter()
-		.chain(popular_servers)
-		.take(5)
-		.collect())
+		.map(|(server, _)| server)
+		.collect()
 }
 
 #[implement(super::Service)]

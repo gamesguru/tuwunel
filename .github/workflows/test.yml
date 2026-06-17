@@ -71,12 +71,27 @@ on:
       complement_verbose:
         type: string
         default: 'false'
+      enable_complement_crypto:
+        type: string
+        default: 'true'
+      complement_crypto_verbose:
+        type: string
+        default: 'false'
       enable_playwright:
         type: string
         default: 'false'
       playwright_runner:
         type: string
         default: 'het'
+      playwright_workers:
+        type: string
+        default: '3'
+      playwright_retries:
+        type: string
+        default: '1'
+      playwright_shards:
+        type: string
+        default: '6'
 
 jobs:
   doc:
@@ -294,7 +309,7 @@ jobs:
       && contains(fromJSON(inputs.rust_targets), fromJSON('["x86_64-unknown-linux-gnu"]')[0])
 
     name: Matrix SDK Integration
-    needs: [smoke]
+    needs: [doc, unit, bench, memcheck, smoke, nix]
     uses: ./.github/workflows/bake.yml
     with:
       #bake_targets: '["rust-sdk-integ", "rust-sdk-valgrind"]'
@@ -373,100 +388,99 @@ jobs:
       && contains(fromJSON(inputs.rust_toolchains), fromJSON('["nightly"]')[0])
       && contains(fromJSON(inputs.sys_targets), fromJSON('["x86_64-v3-linux-gnu"]')[0])
 
-    name: Matrix Compliance
-    needs: [complement, smoke]
-    runs-on: ["${{matrix.machine}}", "${{inputs.complement_runner}}"]
-    concurrency:
-      group: complement-cant-walk-and-chew-bubblegum
-      cancel-in-progress: false
+    name: Compliance (Tuwunel)
+    needs: [doc, unit, bench, memcheck, smoke, nix, complement]
 
-    strategy:
-      fail-fast: false
-      matrix:
-        cargo_profile: ${{fromJSON('["bench"]')}}
-        feat_set: ${{fromJSON('["logging"]')}}
-        rust_toolchain: ${{fromJSON('["nightly"]')}}
-        sys_name: ${{fromJSON(inputs.sys_names)}}
-        sys_version: ${{fromJSON(inputs.sys_versions)}}
-        rust_target: ${{fromJSON(inputs.rust_targets)}}
-        sys_target: ${{fromJSON('["x86_64-v3-linux-gnu"]')}}
-        machine: ${{fromJSON(inputs.machines)}}
-        exclude: ${{fromJSON(inputs.excludes)}}
-        include: ${{fromJSON(inputs.includes)}}
+    uses: ./.github/workflows/compliance.yml
+    with:
+      job_name: Compliance (Tuwunel)
+      flavor: complement
+      runner: ${{inputs.complement_runner}}
+      script: docker/complement.sh
+      summariser: .github/workflows/complement_summarise.sh
+      results_path: tests/complement/results.jsonl
+      logs_path: tests/complement/logs.jsonl
+      runtime_metrics_path: tests/complement/runtime_metrics.tar.zst
+      verbose: ${{inputs.complement_verbose}}
+      results_artifact_prefix: complement_results
+      output_artifact_prefix: complement_output
+      metrics_artifact_prefix: complement_runtime_metrics
+      cargo_profiles: '["bench"]'
+      feat_sets: '["logging"]'
+      rust_toolchains: '["nightly"]'
+      sys_names: ${{inputs.sys_names}}
+      sys_versions: ${{inputs.sys_versions}}
+      rust_targets: ${{inputs.rust_targets}}
+      sys_targets: '["x86_64-v3-linux-gnu"]'
+      machines: ${{inputs.machines}}
+      excludes: ${{inputs.excludes}}
+      includes: ${{inputs.includes}}
+      checkout: ${{inputs.checkout}}
 
-    steps:
-    - uses: actions/checkout@v6
-      with:
-        ref: ${{inputs.checkout}}
+  complement-crypto:
+    if: >
+      !failure() && !cancelled()
+      && fromJSON(inputs.enable_complement_crypto)
+      && !contains(inputs.pipeline, '[ci no build]')
+      && contains(fromJSON(inputs.cargo_profiles), fromJSON('["bench"]')[0])
+      && contains(fromJSON(inputs.rust_toolchains), fromJSON('["nightly"]')[0])
+      && contains(fromJSON(inputs.sys_targets), fromJSON('["x86_64-v3-linux-gnu"]')[0])
 
-    - name: Execute
-      id: execute
-      env:
-        complement_verbose: ${{inputs.complement_verbose && 1 || 0}}
-        cargo_profile: ${{matrix.cargo_profile}}
-        rust_toolchain: ${{matrix.rust_toolchain}}
-        rust_target: ${{matrix.rust_target}}
-        feat_set: ${{matrix.feat_set}}
-        sys_name: ${{matrix.sys_name}}
-        sys_target: ${{matrix.sys_target}}
-        sys_version: ${{matrix.sys_version}}
-        machine: ${{matrix.machine}}
+    name: Complement-Crypto
+    uses: ./.github/workflows/bake.yml
+    with:
+      bake_targets: '["complement-crypto-tester", "complement-testee"]'
+      cargo_profiles: '["bench"]'
+      feat_sets: '["logging"]'
+      rust_toolchains: '["nightly"]'
+      sys_names: ${{inputs.sys_names}}
+      sys_versions: ${{inputs.sys_versions}}
+      rust_targets: ${{inputs.rust_targets}}
+      sys_targets: '["x86_64-v3-linux-gnu"]'
+      machines: ${{inputs.machines}}
+      runner: ${{inputs.complement_runner}}
+      excludes: ${{inputs.excludes}}
+      includes: ${{inputs.includes}}
+      checkout: ${{inputs.checkout}}
 
-      run: |
-        docker/complement.sh
+  compliance-crypto:
+    if: >
+      !failure() && !cancelled()
+      && fromJSON(inputs.enable_complement_crypto)
+      && !contains(inputs.pipeline, '[ci no build]')
+      && inputs.machines
+      && contains(fromJSON(inputs.cargo_profiles), fromJSON('["bench"]')[0])
+      && contains(fromJSON(inputs.rust_toolchains), fromJSON('["nightly"]')[0])
+      && contains(fromJSON(inputs.sys_targets), fromJSON('["x86_64-v3-linux-gnu"]')[0])
 
-    - if: success() || failure() && steps.execute.outcome == 'failure'
-      name: Extract
-      id: extract
-      env:
-        name: complement_tester__${{matrix.sys_name}}__${{matrix.sys_version}}__${{matrix.sys_target}}
-        tag: latest
+    name: Cryptography (rust-sdk)
+    needs: [doc, unit, bench, memcheck, smoke, nix, complement-crypto]
 
-      run: |
-        cid=$(cat "$name")
-        docker cp "$cid:/usr/src/complement/new_results.jsonl" tests/complement/results.jsonl
-
-    - if: success() || (failure() && steps.extract.outcome == 'success')
-      name: Summarise
-      id: summarise
-      env:
-        feat_set: ${{matrix.feat_set}}
-        sys_name: ${{matrix.sys_name}}
-        sys_target: ${{matrix.sys_target}}
-        GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
-      run: |
-        .github/workflows/complement_summarise.sh
-
-    - if: success() || failure() && steps.execute.outcome == 'failure'
-      name: Upload New Results
-      id: upload-result
-      uses: actions/upload-artifact@v7
-      with:
-        name: complement_results-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}.jsonl
-        path: ./tests/complement/results.jsonl
-
-    - if: success() || (failure() && steps.execute.outcome == 'failure')
-      name: Upload Log Output
-      id: upload-output
-      uses: actions/upload-artifact@v7
-      with:
-        name: complement_output-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}.jsonl
-        path: ./tests/complement/logs.jsonl
-        if-no-files-found: ignore
-
-    - if: success() || (failure() && steps.execute.outcome == 'failure')
-      name: Upload Runtime Metrics
-      id: upload-metrics
-      uses: actions/upload-artifact@v7
-      with:
-        name: complement_runtime_metrics-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}.tar.zst
-        path: ./tests/complement/runtime_metrics.tar.zst
-        if-no-files-found: ignore
-
-    - name: Accept
-      id: accept
-      run: |
-        git diff --exit-code --color --color-moved
+    uses: ./.github/workflows/compliance.yml
+    with:
+      job_name: Cryptography (rust-sdk)
+      flavor: complement-crypto
+      runner: ${{inputs.complement_runner}}
+      script: docker/complement-crypto.sh
+      summariser: .github/workflows/complement_crypto_summarise.sh
+      results_path: tests/complement-crypto/results.jsonl
+      logs_path: tests/complement-crypto/logs.jsonl
+      runtime_metrics_path: tests/complement-crypto/runtime_metrics.tar.zst
+      verbose: ${{inputs.complement_crypto_verbose}}
+      results_artifact_prefix: complement_crypto_results
+      output_artifact_prefix: complement_crypto_output
+      metrics_artifact_prefix: complement_crypto_runtime_metrics
+      cargo_profiles: '["bench"]'
+      feat_sets: '["logging"]'
+      rust_toolchains: '["nightly"]'
+      sys_names: ${{inputs.sys_names}}
+      sys_versions: ${{inputs.sys_versions}}
+      rust_targets: ${{inputs.rust_targets}}
+      sys_targets: '["x86_64-v3-linux-gnu"]'
+      machines: ${{inputs.machines}}
+      excludes: ${{inputs.excludes}}
+      includes: ${{inputs.includes}}
+      checkout: ${{inputs.checkout}}
 
   playwright:
     if: >
@@ -504,67 +518,23 @@ jobs:
       && contains(fromJSON(inputs.rust_toolchains), fromJSON('["nightly"]')[0])
       && contains(fromJSON(inputs.sys_targets), fromJSON('["x86_64-v3-linux-gnu"]')[0])
 
-    name: Matrix Acceptance
-    needs: [playwright]
-    runs-on: ["${{matrix.machine}}", "${{inputs.playwright_runner}}"]
-    concurrency:
-      group: playwright-cant-walk-and-chew-bubblegum
-      cancel-in-progress: false
-
-    strategy:
-      fail-fast: false
-      matrix:
-        cargo_profile: ${{fromJSON('["bench"]')}}
-        feat_set: ${{fromJSON('["logging"]')}}
-        rust_toolchain: ${{fromJSON('["nightly"]')}}
-        sys_name: ${{fromJSON(inputs.sys_names)}}
-        sys_version: ${{fromJSON(inputs.sys_versions)}}
-        rust_target: ${{fromJSON(inputs.rust_targets)}}
-        sys_target: ${{fromJSON('["x86_64-v3-linux-gnu"]')}}
-        machine: ${{fromJSON(inputs.machines)}}
-        exclude: ${{fromJSON(inputs.excludes)}}
-        include: ${{fromJSON(inputs.includes)}}
-
-    steps:
-    - uses: actions/checkout@v6
-      with:
-        ref: ${{inputs.checkout}}
-
-    - name: Execute
-      id: execute
-      env:
-        cargo_profile: ${{matrix.cargo_profile}}
-        rust_toolchain: ${{matrix.rust_toolchain}}
-        rust_target: ${{matrix.rust_target}}
-        feat_set: ${{matrix.feat_set}}
-        sys_name: ${{matrix.sys_name}}
-        sys_target: ${{matrix.sys_target}}
-        sys_version: ${{matrix.sys_version}}
-        machine: ${{matrix.machine}}
-
-      run: |
-        docker/playwright.sh
-
-    - if: success() || (failure() && steps.execute.outcome == 'failure')
-      name: Summarise
-      id: summarise
-      run: |
-        .github/workflows/playwright_summarise.sh
-
-    - if: success() || (failure() && (steps.execute.outcome == 'failure' || steps.summarise.outcome == 'failure'))
-      name: Upload Results
-      id: upload-result
-      uses: actions/upload-artifact@v7
-      with:
-        name: playwright_results-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}.json
-        path: ./tests/playwright/results.json
-        if-no-files-found: ignore
-
-    - if: success() || (failure() && (steps.execute.outcome == 'failure' || steps.summarise.outcome == 'failure'))
-      name: Upload Log Output
-      id: upload-output
-      uses: actions/upload-artifact@v7
-      with:
-        name: playwright_output-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}.log
-        path: ./tests/playwright/output.log
-        if-no-files-found: ignore
+    name: Acceptance (element-web)
+    needs: [doc, unit, bench, memcheck, smoke, nix, playwright]
+    uses: ./.github/workflows/acceptance.yml
+    with:
+      job_name: Acceptance (element-web)
+      runner: ${{inputs.playwright_runner}}
+      workers: ${{inputs.playwright_workers}}
+      retries: ${{inputs.playwright_retries}}
+      shards: ${{inputs.playwright_shards}}
+      cargo_profiles: '["bench"]'
+      feat_sets: '["logging"]'
+      rust_toolchains: '["nightly"]'
+      sys_names: ${{inputs.sys_names}}
+      sys_versions: ${{inputs.sys_versions}}
+      rust_targets: ${{inputs.rust_targets}}
+      sys_targets: '["x86_64-v3-linux-gnu"]'
+      machines: ${{inputs.machines}}
+      excludes: ${{inputs.excludes}}
+      includes: ${{inputs.includes}}
+      checkout: ${{inputs.checkout}}

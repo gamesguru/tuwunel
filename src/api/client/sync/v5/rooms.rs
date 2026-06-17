@@ -27,8 +27,10 @@ use tuwunel_core::{
 	},
 	ref_at,
 	utils::{
-		BoolExt, IterStream, ReadyExt, TryFutureExtExt, math::usize_from_ruma, result::FlatOk,
-		stream::BroadbandExt,
+		BoolExt, IterStream, ReadyExt, TryFutureExtExt,
+		math::usize_from_ruma,
+		result::FlatOk,
+		stream::{BroadbandExt, WidebandExt},
 	},
 };
 use tuwunel_service::{Services, sync::Room};
@@ -179,7 +181,7 @@ async fn handle_room(
 		.stream()
 		.filter_map(|item| ignored_filter(services, item.clone(), sender_user))
 		.map(at!(1))
-		.broad_then(|pdu| with_membership(services, pdu, sender_user, encrypted))
+		.wide_then(|pdu| with_membership(services, pdu, sender_user, encrypted))
 		.map(Event::into_format)
 		.collect();
 

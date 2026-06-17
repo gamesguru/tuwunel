@@ -128,25 +128,13 @@ fn create_oauth_uiaa(
 	body: &Ruma<upload_signing_keys::v3::Request>,
 ) -> Result<UiaaInfo> {
 	let session = utils::random_string(SESSION_ID_LENGTH);
-	let base = services
-		.config
-		.well_known
-		.client
-		.as_ref()
-		.map(|url| url.to_string().trim_end_matches('/').to_owned())
-		.ok_or_else(|| {
-			err!(Config(
-				"well_known.client",
-				"well_known.client must be set for cross-signing reset"
-			))
-		})?;
-
-	let fallback_url =
-		format!("{base}/_matrix/client/v3/auth/m.login.sso/fallback/web?session={session}");
+	let issuer = services.oauth.get_server()?.issuer_url()?;
+	let base = issuer.trim_end_matches('/');
+	let url = format!("{base}/_tuwunel/oidc/account?action=org.matrix.cross_signing_reset");
 
 	let uiaainfo = UiaaInfo {
 		flows: vec![AuthFlow { stages: vec![AuthType::OAuth] }],
-		params: Some(to_raw_value(&json!({"m.oauth": { "url": fallback_url }}))?),
+		params: Some(to_raw_value(&json!({"m.oauth": { "url": url }}))?),
 		session: Some(session),
 		..Default::default()
 	};

@@ -162,7 +162,8 @@ pub async fn download_image(&self, response: reqwest::Response) -> Result<UrlPre
 	use ruma::Mxc;
 	use tuwunel_core::utils::random_string;
 
-	let image = response.bytes().await?;
+	let limit = self.services.config.max_response_size;
+	let image = crate::client::read_response_capped(response, limit).await?;
 	let mxc = Mxc {
 		server_name: self.services.globals.server_name(),
 		media_id: &random_string(super::MXC_LENGTH),
@@ -276,7 +277,7 @@ async fn download_html(
 }
 
 #[implement(Service)]
-fn check_url_host(&self, url: &Url) -> Result {
+pub(super) fn check_url_host(&self, url: &Url) -> Result {
 	let host = url
 		.host()
 		.ok_or_else(|| err!(Request(Unknown("URL has no host"))))?;

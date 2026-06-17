@@ -77,6 +77,14 @@ on:
         type: boolean
         default: false
         description: Enable publication stage
+      playwright_shards:
+        type: string
+        default: '8'
+        description: "Playwright: number of test shards"
+      playwright_workers:
+        type: string
+        default: '2'
+        description: "Playwright: workers per shard"
 
 concurrency:
   group: ${{github.workflow}}-${{github.ref}}
@@ -122,15 +130,19 @@ jobs:
       enable_test_doc: ${{fromJSON(inputs.enable_test_doc || 'true')}}
       enable_test_unit: ${{fromJSON(inputs.enable_test_unit || 'true')}}
       enable_test_bench: ${{fromJSON(inputs.enable_test_bench || 'true')}}
-      enable_test_memcheck: ${{fromJSON(inputs.enable_test_memcheck || 'true')}}
+      enable_test_memcheck: ${{fromJSON(inputs.enable_test_memcheck || env.is_test)}}
       enable_test_smoke: ${{fromJSON(inputs.enable_test_smoke || env.is_fat || 'false')}}
       enable_test_nix: ${{fromJSON(inputs.enable_test_nix || 'true')}}
       enable_test_rustsdk: ${{fromJSON(inputs.enable_test_rustsdk || 'true')}}
       enable_test_complement: ${{fromJSON(inputs.enable_test_complement || 'true')}}
       complement_verbose: ${{fromJSON(inputs.complement_verbose || 'false')}}
       complement_runner: 'het'
+      enable_test_complement_crypto: ${{fromJSON(inputs.enable_test_complement_crypto || 'true')}}
+      complement_crypto_verbose: ${{fromJSON(inputs.complement_crypto_verbose || 'false')}}
       enable_test_playwright: ${{fromJSON(inputs.enable_test_playwright || env.is_dev || 'false')}}
       playwright_runner: 'het'
+      playwright_shards: ${{inputs.playwright_shards || vars.PLAYWRIGHT_SHARDS || '8'}}
+      playwright_workers: ${{inputs.playwright_workers || vars.PLAYWRIGHT_WORKERS || '2'}}
       enable_package: ${{fromJSON(inputs.enable_package || 'true')}}
       enable_package_book: ${{fromJSON(inputs.enable_package_book || 'true')}}
       enable_package_docs: ${{fromJSON(inputs.enable_package_docs || 'true')}}
@@ -165,6 +177,8 @@ jobs:
     - name: Initialize Builder
       env:
         runner: ${{matrix.runner}}
+        pipeline: ${{inputs.pipeline || github.event.head_commit.message || github.event.workflow_run.head_commit.message}}
+        seed_builder: ${{vars.SEED_BUILDER || 'jevolk'}}
         reserved_space:      '{"het": "192GB", "aws": "48GB"}'
         max_used_space:      '{"het": "384GB", "aws": "64GB"}'
         min_free_space:      '{"het": "32GB",  "aws": "16GB"}'
@@ -270,8 +284,12 @@ jobs:
       enable_complement: ${{needs.init.outputs.enable_test_complement}}
       complement_runner: ${{needs.init.outputs.complement_runner}}
       complement_verbose: ${{needs.init.outputs.complement_verbose}}
+      enable_complement_crypto: ${{needs.init.outputs.enable_test_complement_crypto}}
+      complement_crypto_verbose: ${{needs.init.outputs.complement_crypto_verbose}}
       enable_playwright: ${{needs.init.outputs.enable_test_playwright}}
       playwright_runner: ${{needs.init.outputs.playwright_runner}}
+      playwright_shards: ${{needs.init.outputs.playwright_shards}}
+      playwright_workers: ${{needs.init.outputs.playwright_workers}}
       cargo_profiles: ${{needs.init.outputs.cargo_profiles}}
       feat_sets: ${{needs.init.outputs.feat_sets}}
       rust_toolchains: ${{needs.init.outputs.rust_toolchains}}

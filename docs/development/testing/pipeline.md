@@ -174,7 +174,7 @@ For the above two matrix variations `rust-sdk-integ` is run for both and
 - Bake targets: `rust-sdk-integ`, `rust-sdk-valgrind`
 - Dockerfile: `docker/Dockerfile.matrix-rust-sdk`
 
-#### Matrix Compliance (`complement-tester`/`complement-testee`)
+#### Compliance (`complement-tester`/`complement-testee`)
 
 See [Complement Testing](complement.md) for full details. Briefly: the
 [Complement](https://github.com/matrix-org/complement) suite runs its Go tests

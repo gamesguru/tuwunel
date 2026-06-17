@@ -1,5 +1,4 @@
 use std::{
-	borrow::Borrow,
 	collections::{HashMap, HashSet},
 	iter::once,
 };
@@ -84,7 +83,7 @@ where
 		.map_ok(AsRef::as_ref)
 		.broad_and_then(|event_id| {
 			power_level_for_sender(event_id, rules, fetch)
-				.map_ok(move |sender_power| (event_id, sender_power))
+				.map_ok(move |sender_power| (event_id.to_owned(), sender_power))
 				.map_err(|e| err!(Request(NotFound("Missing PL for sender: {e}"))))
 		})
 		.try_collect()
@@ -92,14 +91,14 @@ where
 
 	let query = async |event_id: OwnedEventId| {
 		let power_level = *event_to_power_level
-			.get(&event_id.borrow())
+			.get(&event_id)
 			.ok_or_else(|| err!(Request(NotFound("Missing PL event: {event_id}"))))?;
 
 		let event = fetch(event_id).await?;
 		Ok((power_level, event.origin_server_ts()))
 	};
 
-	topological_sort(&graph, &query).await
+	topological_sort(graph, &query).await
 }
 
 /// Add the event with the given event ID and all the events in its auth chain

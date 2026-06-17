@@ -5,10 +5,15 @@ mod version;
 mod version_id;
 
 use futures::{FutureExt, future::try_join};
-use ruma::{UInt, UserId, serde::Raw};
+use http::StatusCode;
+use ruma::{
+	UInt, UserId,
+	api::error::{ErrorKind, WrongRoomKeysVersionErrorData},
+	serde::Raw,
+};
 use serde::Deserialize;
 use serde_json::value::RawValue as RawJsonValue;
-use tuwunel_core::Result;
+use tuwunel_core::{Error, Result};
 use tuwunel_service::Services;
 
 pub(crate) use self::{
@@ -59,4 +64,27 @@ pub(super) async fn get_count_etag(
 		.map(Ok);
 
 	Ok(try_join(count, etag).await?)
+}
+
+pub(super) async fn check_backup_version(
+	services: &Services,
+	sender_user: &UserId,
+	version: &str,
+) -> Result {
+	services
+		.key_backups
+		.get_latest_backup_version(sender_user)
+		.await
+		.ok()
+		.filter(|current| current.as_str() != version)
+		.map_or(Ok(()), |current_version| {
+			let data = WrongRoomKeysVersionErrorData::new(current_version);
+			let kind = ErrorKind::WrongRoomKeysVersion(data);
+
+			Err(Error::Request(
+				kind,
+				"You may only manipulate the most recently created version of the backup.".into(),
+				StatusCode::BAD_REQUEST,
+			))
+		})
 }

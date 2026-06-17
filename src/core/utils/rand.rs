@@ -12,11 +12,29 @@ pub fn shuffle<T>(vec: &mut [T]) {
 	vec.shuffle(&mut rng);
 }
 
+/// A uniform random index into `0..len`, or `0` when `len` is `0`.
+#[must_use]
+pub fn index(len: usize) -> usize {
+	match len {
+		| 0 => 0,
+		| len => rng().random_range(0..len),
+	}
+}
+
 pub fn string(length: usize) -> String {
 	rng()
 		.sample_iter(&rand::distr::Alphanumeric)
 		.take(length)
 		.map(char::from)
+		.collect()
+}
+
+/// A random string of `length` characters drawn uniformly from `charset`.
+#[must_use]
+pub fn string_from(charset: &[u8], length: usize) -> String {
+	let mut rng = rng();
+	(0..length)
+		.map(|_| char::from(charset[rng.random_range(0..charset.len())]))
 		.collect()
 }
 

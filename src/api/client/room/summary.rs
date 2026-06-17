@@ -230,7 +230,15 @@ async fn remote_room_summary_hierarchy_response(
 		})
 		.collect();
 
-	while let Some(Ok(response)) = requests.next().await {
+	while let Some(result) = requests.next().await {
+		let response = match result {
+			| Ok(response) => response,
+			| Err(e) => {
+				debug_warn!(?e, "Failed to fetch room hierarchy over federation");
+				continue;
+			},
+		};
+
 		trace!("{response:?}");
 		let room = response.room.clone();
 		let summary = &room.summary;

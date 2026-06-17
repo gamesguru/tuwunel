@@ -102,11 +102,24 @@ export class TuwunelContainer extends GenericContainer implements HomeserverCont
         // suite's context fixture restarts the testee between tests). 127.0.0.1 over
         // testcontainers' default getHost() to avoid the docker0 bridge IP, which
         // ECONNREFUSEs from Playwright's apiRequestContext under --network=host.
-        const port = await pickFreePort();
-        this.withExposedPorts({container: 8008, host: port});
-        const container = await super.start();
-        const baseUrl = `http://127.0.0.1:${port}`;
-        return new StartedTuwunelContainer(container, baseUrl, REGISTRATION_SHARED_SECRET);
+        //
+        // pickFreePort releases its probe socket before the daemon binds the
+        // port, so a concurrent worker can claim it in the gap (workers run
+        // several testees at once). Retry with a fresh pick on the daemon's
+        // "port is already allocated" until one sticks.
+        for (let attempt = 1; ; attempt++) {
+            const port = await pickFreePort();
+            this.withExposedPorts({container: 8008, host: port});
+            try {
+                const container = await super.start();
+                const baseUrl = `http://127.0.0.1:${port}`;
+                return new StartedTuwunelContainer(container, baseUrl, REGISTRATION_SHARED_SECRET);
+            } catch (e) {
+                if (attempt >= 5 || !/port is already allocated|address already in use/i.test(String(e))) {
+                    throw e;
+                }
+            }
+        }
     }
 }
 

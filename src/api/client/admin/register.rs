@@ -2,8 +2,9 @@ use std::result::Result as StdResult;
 
 use axum::extract::State;
 use hmac::{Hmac, Mac};
-use ruma::{OwnedUserId, UserId, api::client::admin::register};
+use ruma::{OwnedUserId, UserId};
 use sha1::Sha1;
+use synapse_admin_api::register_users::shared_secret_register as register;
 use tuwunel_core::{Err, Result, err};
 use tuwunel_service::users::{Register, device::generate_refresh_token};
 

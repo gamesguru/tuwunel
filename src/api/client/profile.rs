@@ -299,7 +299,13 @@ pub(crate) async fn get_profile_route(
 ) -> Result<get_profile::v3::Response> {
 	const CANONICAL_FIELDS: &[&str] = &["avatar_url", "blurhash", "displayname", "m.tz"];
 
-	if !services.globals.user_is_local(&body.user_id) {
+	let is_local = services.globals.user_is_local(&body.user_id);
+	let allow_outbound = services
+		.server
+		.config
+		.allow_outbound_profile_lookup_federation_requests;
+
+	if !is_local && allow_outbound {
 		// Create and update our local copy of the user
 		if let Ok(response) = services
 			.federation
@@ -346,6 +352,13 @@ pub(crate) async fn get_profile_route(
 	}
 
 	if !services.users.exists(&body.user_id).await {
+		if !is_local && !allow_outbound {
+			// MSC3550: signal a withheld profile, not a missing user.
+			return Err!(Request(Forbidden(
+				"Profile lookup over federation is not allowed on this homeserver."
+			)));
+		}
+
 		// Return 404 if this user doesn't exist and we couldn't fetch it over
 		// federation
 		return Err!(Request(NotFound("Profile was not found.")));

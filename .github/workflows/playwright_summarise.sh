@@ -158,4 +158,35 @@ main() {
 	test "$ngate" -eq 0
 }
 
-main "$@"
+# Per-shard gate: fail this shard on any error not on the acceptlist. The verdict
+# rides on the execution job, so a rerun re-executes the tests, not a stale summary.
+gate_main() {
+	if test ! -s "$json"; then
+		echo "No results.json produced." >> "$out"
+		exit 1
+	fi
+
+	curr=$(mktemp)
+	trap 'rm -f "$curr"' EXIT
+	snapshot_current
+
+	gate=$(gate_violators)
+	ngate=$(count_lines "$gate")
+
+	if test "$ngate" -ne 0; then
+		{
+			echo "### Playwright shard gate"
+			echo
+			echo '```diff'
+			printf '%s\n' "$gate" | sed -n 's/^./- &/p'
+			echo '```'
+		} >> "$out"
+	fi
+
+	test "$ngate" -eq 0
+}
+
+case "${1:-}" in
+	gate) gate_main ;;
+	*)    main "$@" ;;
+esac

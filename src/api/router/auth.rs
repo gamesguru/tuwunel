@@ -29,7 +29,7 @@ use ruma::{
 		session::{logout, logout_all},
 	},
 };
-use tuwunel_core::{Err, Result, is_less_than};
+use tuwunel_core::{Err, Result, is_less_than, smallstr::SmallString};
 use tuwunel_service::{Services, appservice::RegistrationInfo};
 
 pub(super) use self::dispatch::AuthDispatch;
@@ -37,10 +37,12 @@ use self::dispatch::Scheme;
 pub(crate) use self::uiaa::auth_uiaa;
 use super::request::Request;
 
+type AccessToken = SmallString<[u8; 32]>;
+
 pub(super) enum Token {
 	Appservice(Box<RegistrationInfo>),
 	User((OwnedUserId, OwnedDeviceId, Option<SystemTime>)),
-	Expired((OwnedUserId, OwnedDeviceId)),
+	Expired(AccessToken),
 	Invalid,
 	None,
 }
@@ -69,15 +71,15 @@ pub(super) async fn auth<A: AuthDispatch>(
 	let bearer: Option<TypedHeader<Authorization<Bearer>>> =
 		request.parts.extract().await.unwrap_or(None);
 
-	let token = match &bearer {
+	let access_token = match &bearer {
 		| Some(TypedHeader(Authorization(bearer))) => Some(bearer.token()),
 		| None => request.query.access_token.as_deref(),
 	};
 
-	let token = match find_token(services, token).await? {
-		| Token::User((user_id, device_id, expires_at))
+	let token = match find_token(services, access_token).await? {
+		| Token::User((_, _, expires_at))
 			if expires_at.is_some_and(is_less_than!(SystemTime::now())) =>
-			Token::Expired((user_id, device_id)),
+			Token::Expired(access_token.unwrap_or_default().into()),
 
 		| token => token,
 	};

@@ -5,11 +5,14 @@ use std::{
 	time::Duration,
 };
 
+use bytes::{Bytes, BytesMut};
 use ipaddress::{IPAddress, ipv4::from_u32 as ipv4_from_u32};
 use reqwest::{Certificate, Client, ClientBuilder, dns::Resolve, header::HeaderValue, redirect};
-use tuwunel_core::{Config, Result, either::Either, err, implement, trace};
+use tuwunel_core::{Config, Err, Result, debug, either::Either, err, implement, trace};
 
-use crate::{Services, service};
+use crate::{Services, resolver::Validating, service};
+
+type DisableEncoding = fn(ClientBuilder) -> ClientBuilder;
 
 pub struct Clients {
 	pub default: Client,
@@ -84,7 +87,7 @@ fn make_clients(services: &Services) -> Result<Clients> {
 			let bind_addr = interface.clone().and_then(Either::left);
 			let bind_iface = interface.clone().and_then(Either::right);
 
-			let resolver = crate::resolver::Validating::new(
+			let resolver = Validating::new(
 				Arc::clone(&services.resolver.resolver),
 				Arc::clone(&services.client.cidr_range_denylist),
 			);
@@ -96,7 +99,10 @@ fn make_clients(services: &Services) -> Result<Clients> {
 		}),
 
 		extern_media: with!(cb => cb
-			.dns_resolver(Arc::clone(&services.resolver.resolver))
+			.dns_resolver(Validating::new(
+				Arc::clone(&services.resolver.resolver),
+				Arc::clone(&services.client.cidr_range_denylist),
+			))
 			.redirect(redirect::Policy::limited(3))),
 
 		well_known: with!(cb => cb
@@ -166,7 +172,7 @@ fn base(config: &Config, name: Option<&str>) -> Result<ClientBuilder> {
 		.map(|name| format!("{user_agent} {name}").try_into())
 		.unwrap_or_else(|| user_agent.try_into())?;
 
-	let mut builder = Client::builder()
+	let builder = Client::builder()
 		.connect_timeout(Duration::from_secs(config.request_conn_timeout))
 		.read_timeout(Duration::from_secs(config.request_timeout))
 		.timeout(Duration::from_secs(config.request_total_timeout))
@@ -184,52 +190,51 @@ fn base(config: &Config, name: Option<&str>) -> Result<ClientBuilder> {
 		)
 		.connection_verbose(cfg!(debug_assertions));
 
-	#[cfg(feature = "gzip_compression")]
-	{
-		builder = if config.gzip_compression {
-			builder.gzip(true)
-		} else {
-			builder.gzip(false).no_gzip()
-		};
-	};
+	let encodings: [(bool, DisableEncoding); 3] = [
+		(config.request_gzip, ClientBuilder::no_gzip),
+		(config.request_brotli, ClientBuilder::no_brotli),
+		(config.request_zstd, ClientBuilder::no_zstd),
+	];
 
-	#[cfg(feature = "brotli_compression")]
-	{
-		builder = if config.brotli_compression {
-			builder.brotli(true)
-		} else {
-			builder.brotli(false).no_brotli()
-		};
-	};
-
-	#[cfg(feature = "zstd_compression")]
-	{
-		builder = if config.zstd_compression {
-			builder.zstd(true)
-		} else {
-			builder.zstd(false).no_zstd()
-		};
-	};
-
-	#[cfg(not(feature = "gzip_compression"))]
-	{
-		builder = builder.no_gzip();
-	};
-
-	#[cfg(not(feature = "brotli_compression"))]
-	{
-		builder = builder.no_brotli();
-	};
-
-	#[cfg(not(feature = "zstd_compression"))]
-	{
-		builder = builder.no_zstd();
-	};
+	let builder = encodings
+		.into_iter()
+		.filter(|(enabled, _)| !enabled)
+		.fold(builder, |builder, (_, disable)| disable(builder));
 
 	match config.proxy.to_proxy()? {
 		| Some(proxy) => Ok(builder.proxy(proxy)),
 		| _ => Ok(builder),
 	}
+}
+
+/// Buffer a remote response body, rejecting any response larger than `limit`
+/// bytes. reqwest enforces no response-size limit, so an unbounded `bytes()`
+/// lets a peer drive an allocator abort; refuse an oversized advertised length
+/// and hold the same bound while streaming for when that length is absent.
+pub async fn read_response_capped(
+	mut response: reqwest::Response,
+	limit: usize,
+) -> Result<Bytes> {
+	let mut body = match response.content_length() {
+		| Some(len) if len > limit.try_into().unwrap_or(u64::MAX) => {
+			debug!(%len, %limit, "rejecting response: advertised body exceeds limit");
+			return Err!(BadServerResponse(
+				"Response body length {len} exceeds the {limit} byte limit"
+			));
+		},
+		| Some(len) => BytesMut::with_capacity(usize::try_from(len).unwrap_or(limit)),
+		| None => BytesMut::new(),
+	};
+	while let Some(chunk) = response.chunk().await? {
+		if body.len().saturating_add(chunk.len()) > limit {
+			debug!(%limit, "rejecting response: streamed body exceeds limit");
+			return Err!(BadServerResponse("Response body exceeds the {limit} byte limit"));
+		}
+
+		body.extend_from_slice(&chunk);
+	}
+
+	Ok(body.freeze())
 }
 
 #[cfg(any(

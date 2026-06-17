@@ -1,6 +1,6 @@
 use std::{
 	borrow::Borrow,
-	collections::{HashMap, HashSet},
+	collections::{BTreeSet, HashMap, HashSet},
 	iter::once,
 	mem::take,
 	sync::Arc,
@@ -38,6 +38,7 @@ use tuwunel_core::{
 use super::Service;
 use crate::{
 	Services,
+	federation::{Candidates, WhenAllBackedOff},
 	rooms::{
 		state::RoomMutexGuard,
 		state_compressor::{CompressedState, HashSetCompressStateEvent},
@@ -183,7 +184,7 @@ pub async fn join_remote(
 		.await?;
 
 	if response.members_omitted {
-		self.fetch_omitted_state(&remote_server, room_id, &event_id, &mut response)
+		self.fetch_omitted_state(&remote_server, room_id, &event_id, servers, &mut response)
 			.await?;
 	}
 
@@ -376,31 +377,79 @@ async fn fetch_omitted_state(
 	remote_server: &OwnedServerName,
 	room_id: &RoomId,
 	event_id: &OwnedEventId,
+	servers: &[OwnedServerName],
 	response: &mut federation::membership::create_join_event::v2::RoomState,
 ) -> Result {
 	use federation::event::get_room_state::v1::{Request, Response};
 
-	info!("Asking {remote_server} for state in room {room_id}");
-	let Response { mut auth_chain, mut pdus } = self
+	let eligible =
+		self.omitted_state_servers(remote_server, servers, response.servers_in_room.as_deref());
+
+	let candidates = self
 		.services
 		.federation
-		.execute(remote_server, Request {
-			room_id: room_id.to_owned(),
-			event_id: event_id.clone(),
-		})
-		.await
-		.inspect_err(|e| error!("state failed: {e}"))?;
+		.rank_candidates(eligible, WhenAllBackedOff::Attempt)
+		.await;
 
-	response.auth_chain = take(&mut auth_chain);
-	response.state = take(&mut pdus);
+	let mut last_error = Err!(BadServerResponse("No server provided omitted send_join state."));
+	for server in candidates {
+		info!("Asking {server} for state in room {room_id}");
+		let result = self
+			.services
+			.federation
+			.execute(&server, Request {
+				room_id: room_id.to_owned(),
+				event_id: event_id.clone(),
+			})
+			.await;
 
-	info!(
-		auth_chain = response.auth_chain.len(),
-		state = response.state.len(),
-		"state finished"
-	);
+		match result {
+			| Err(e) => {
+				debug_warn!(?server, "state fetch failed: {e}");
+				last_error = Err(e);
+			},
+			| Ok(Response { mut auth_chain, mut pdus }) => {
+				response.auth_chain = take(&mut auth_chain);
+				response.state = take(&mut pdus);
 
-	Ok(())
+				info!(
+					auth_chain = response.auth_chain.len(),
+					state = response.state.len(),
+					"state finished"
+				);
+
+				return Ok(());
+			},
+		}
+	}
+
+	last_error
+}
+
+#[implement(Service)]
+fn omitted_state_servers(
+	&self,
+	remote_server: &OwnedServerName,
+	servers: &[OwnedServerName],
+	servers_in_room: Option<&[String]>,
+) -> Candidates {
+	let extracted = servers_in_room
+		.into_iter()
+		.flatten()
+		.filter_map(|server| OwnedServerName::parse(server.as_str()).ok());
+
+	let mut seen = BTreeSet::new();
+	once(remote_server.clone())
+		.chain(extracted)
+		.chain(servers.iter().cloned())
+		.filter(|server| !self.services.globals.server_is_ours(server))
+		.filter(move |server| seen.insert(server.clone()))
+		.take(
+			self.services
+				.config
+				.max_make_join_attempts_per_join_attempt,
+		)
+		.collect()
 }
 
 fn merge_restricted_signature(

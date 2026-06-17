@@ -18,6 +18,8 @@ use tuwunel_database::{Deserialized, SEP};
 
 use crate::{Services, media};
 
+mod conduit;
+
 /// The current schema version.
 /// - If database is opened at greater version we reject with error. The
 ///   software must be updated for backward-incompatible changes.
@@ -76,6 +78,7 @@ async fn backfill_server_name(services: &Services) -> Result {
 		.stream()
 		.ready_any(|user_id| services.globals.user_is_local(user_id))
 		.await
+		.into_option()
 		.ok_or_else(|| {
 			err!(Database(
 				"Database has no users from {server_name}; refusing to reuse with this \
@@ -134,14 +137,16 @@ async fn migrate(services: &Services) -> Result {
 		));
 	}
 
-	if db["global"]
-		.get(b"feat_sha256_media")
-		.await
-		.is_not_found()
-	{
-		media::migrations::migrate_sha256_media(services).await?;
-	} else if config.media_startup_check {
-		media::migrations::checkup_sha256_media(services).await?;
+	// A Conduit database's colliding schema version 18 is reconciled below.
+	let conduit = conduit::is_conduit_database(services).await;
+	migrate_media(services, conduit).await?;
+
+	if conduit {
+		conduit::migrate_conduit_pdus(services).await?;
+		// Conduit's membership index is already correct; skip the conduwuit-era
+		// repairs.
+		db["global"].insert(b"fix_bad_double_separator_in_state_cache", []);
+		db["global"].insert(b"retroactively_fix_bad_data_from_roomuserid_joined", []);
 	}
 
 	if db["global"]
@@ -210,7 +215,8 @@ async fn migrate(services: &Services) -> Result {
 			"Database: Migrated schema version from {} to {target_version}",
 			discovered_version().await
 		);
-	} else if discovered_version().await != target_version && config.force_migration {
+	} else if discovered_version().await != target_version && (config.force_migration || conduit)
+	{
 		services
 			.globals
 			.db
@@ -287,6 +293,31 @@ async fn migrate(services: &Services) -> Result {
 	}
 
 	info!("Loaded RocksDB database with schema version {DATABASE_VERSION}");
+
+	Ok(())
+}
+
+/// Imports a Conduit database's content-addressed media into tuwunel's
+/// key-addressed store; otherwise runs the key-addressed media migrations.
+async fn migrate_media(services: &Services, conduit: bool) -> Result {
+	let db = &services.db;
+	let config = &services.server.config;
+
+	if conduit {
+		conduit::migrate_conduit_media(services).await?;
+		db["global"].insert(b"feat_sha256_media", []);
+		return Ok(());
+	}
+
+	if db["global"]
+		.get(b"feat_sha256_media")
+		.await
+		.is_not_found()
+	{
+		media::migrations::migrate_sha256_media(services).await?;
+	} else if config.media_startup_check {
+		media::migrations::checkup_sha256_media(services).await?;
+	}
 
 	Ok(())
 }
@@ -380,7 +411,7 @@ async fn retroactively_fix_bad_data_from_roomuserid_joined(services: &Services) 
 					.state_accessor
 					.get_member(room_id, user_id)
 					.map(|member| {
-						member.is_ok_and(|member| member.membership == MembershipState::Join)
+						member.is_ok_and(|member| member.membership != MembershipState::Join)
 					})
 			})
 			.collect::<Vec<_>>()

@@ -20,9 +20,10 @@ pub(super) async fn serve<'a>(
 	path: Option<&Path>,
 	socket_perms: u32,
 ) -> Result<Vec<BoxFuture<'a, Result<(), std::io::Error>>>> {
+	// Loopback so a unix-socket peer bypasses a configured `ip_source`.
 	let router = router
 		.clone()
-		.layer(Extension(ConnectInfo(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))))
+		.layer(Extension(ConnectInfo(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))))
 		.into_make_service();
 
 	let mut acceptors = listeners

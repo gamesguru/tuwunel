@@ -5,7 +5,7 @@ mod create;
 mod pdus;
 mod redact;
 
-use std::{fmt::Write, sync::Arc};
+use std::{fmt::Write, future::Future, sync::Arc};
 
 use async_trait::async_trait;
 use futures::{
@@ -541,6 +541,15 @@ pub async fn pdu_exists<'a>(&'a self, event_id: &'a EventId) -> bool {
 		.await
 		.map(at!(0))
 		.is_ok()
+}
+
+/// Resolves once `event_id` lands in the timeline (its `eventid_pduid` row is
+/// written), waking a task waiting for the event to arrive via concurrent
+/// ingest. Registration is eager: the watcher is in place when this returns,
+/// before the future is awaited.
+#[implement(Service)]
+pub fn watch_event<'a>(&'a self, event_id: &EventId) -> impl Future<Output = ()> + Send + 'a {
+	self.db.eventid_pduid.watch_prefix_once(event_id)
 }
 
 /// Like get_non_outlier_pdu(), but without the expense of fetching and

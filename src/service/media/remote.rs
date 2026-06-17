@@ -15,9 +15,13 @@ use tuwunel_core::{
 	Err, Error, Result, debug_warn, err, implement,
 	utils::content_disposition::make_content_disposition,
 };
+use url::Url;
 
 use super::{Dim, Media};
-use crate::federation::scheme::{FedAuth, FedPath};
+use crate::{
+	client::read_response_capped,
+	federation::scheme::{FedAuth, FedPath},
+};
 
 #[implement(super::Service)]
 #[tracing::instrument(level = "debug", skip(self))]
@@ -253,13 +257,27 @@ async fn handle_location(&self, mxc: &Mxc<'_>, location: &str) -> Result<Media> 
 
 #[implement(super::Service)]
 async fn location_request(&self, location: &str) -> Result<Media> {
+	let url = Url::parse(location)
+		.map_err(|e| err!(Request(Unknown("Invalid media location URL: {e}"))))?;
+
+	self.check_url_host(&url)?;
+
 	let response = self
 		.services
 		.client
 		.extern_media
-		.get(location)
+		.get(url.as_str())
 		.send()
 		.await?;
+
+	if let Some(remote_addr) = response.remote_addr()
+		&& !self
+			.services
+			.client
+			.valid_cidr_range_ip(remote_addr.ip())
+	{
+		return Err!(Request(Forbidden("Requesting from this address is forbidden")));
+	}
 
 	let content_type = response
 		.headers()
@@ -275,20 +293,18 @@ async fn location_request(&self, location: &str) -> Result<Media> {
 		.map(TryFrom::try_from)
 		.and_then(Result::ok);
 
-	response
-		.bytes()
-		.await
-		.map(Vec::from)
-		.map_err(Into::into)
-		.map(|content| Media {
-			content,
-			content_type: content_type.clone(),
-			content_disposition: Some(make_content_disposition(
-				content_disposition.as_ref(),
-				content_type.as_deref(),
-				None,
-			)),
-		})
+	let limit = self.services.server.config.max_response_size;
+	let content = read_response_capped(response, limit).await?;
+
+	Ok(Media {
+		content: content.to_vec(),
+		content_type: content_type.clone(),
+		content_disposition: Some(make_content_disposition(
+			content_disposition.as_ref(),
+			content_type.as_deref(),
+			None,
+		)),
+	})
 }
 
 #[implement(super::Service)]

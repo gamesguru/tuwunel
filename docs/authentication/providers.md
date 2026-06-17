@@ -5,6 +5,14 @@ configured provider appears as an option on the client's login page. Users are
 redirected to the provider to authenticate, then returned to Tuwunel which
 maps their identity to a Matrix account.
 
+The same providers serve two login paths. Legacy clients use them directly
+through the `m.login.sso` flow. Next-generation clients reach them indirectly:
+Tuwunel's built-in [OIDC Authorization Server](oidc-server.md) is what those
+clients authenticate against, and it in turn redirects the user to a provider
+configured here to perform the actual login. A working next-gen setup therefore
+needs at least one provider on this page plus the issuer URL described on the
+OIDC server page.
+
 ### Provider guides
 
 - [Authelia](providers/authelia.md)

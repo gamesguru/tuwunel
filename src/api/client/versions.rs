@@ -1,7 +1,11 @@
 use std::iter::once;
 
-use ruma::api::client::discovery::get_supported_versions;
-use tuwunel_core::Result;
+use ruma::api::client::discovery::get_supported_versions::{self, Server};
+use tuwunel_core::{
+	Result,
+	info::rustc::version as rustc_version,
+	version::{name as package_name, version as package_version},
+};
 
 use crate::Ruma;
 
@@ -20,6 +24,12 @@ use crate::Ruma;
 pub(crate) async fn get_supported_versions_route(
 	_body: Ruma<get_supported_versions::Request>,
 ) -> Result<get_supported_versions::Response> {
+	// MSC4383: client-side parity with /_matrix/federation/v1/version.
+	let server = Server {
+		compiler: rustc_version().map(Into::into),
+		..Server::new(package_name().into(), package_version().into())
+	};
+
 	Ok(get_supported_versions::Response {
 		versions: VERSIONS.into_iter().map(Into::into).collect(),
 
@@ -29,17 +39,11 @@ pub(crate) async fn get_supported_versions_route(
 			.zip(once(true).cycle())
 			.collect(),
 
-		// MSC4383: client-side parity with /_matrix/federation/v1/version.
-		server: Some(get_supported_versions::Server {
-			name: Some(tuwunel_core::version::name().into()),
-			version: Some(tuwunel_core::version::version().into()),
-			compiler: tuwunel_core::info::rustc::version().map(Into::into),
-			..Default::default()
-		}),
+		server: Some(server),
 	})
 }
 
-static VERSIONS: [&str; 17] = [
+static VERSIONS: [&str; 25] = [
 	"r0.0.1", /* Historical */
 	"r0.1.0", /* Historical */
 	"r0.2.0", /* Historical */
@@ -51,14 +55,23 @@ static VERSIONS: [&str; 17] = [
 	"v1.1",   /* Stable; Tested */
 	"v1.2",   /* Stable; Tested */
 	"v1.3",   /* Stable; Tested */
-	"v1.4",   /* Stable; Tested */
+	"v1.4",   /* Tested; private read receipts, threads */
 	"v1.5",   /* Stable; Tested */
+	"v1.6",   /* jump to date (element-web labs gate) */
+	"v1.7",   /* intentional mentions */
+	"v1.8",   /* no action */
+	"v1.9",   /* no action */
 	"v1.10",  /* Tested; relations recursion */
 	"v1.11",  /* Tested; authenticated media */
-	"v1.12", "v1.15",
+	"v1.12",  /* no action */
+	"v1.13",  /* no action */
+	"v1.14",  /* no action */
+	"v1.15",  /* OIDC auth metadata */
+	"v1.16",  /* extended profiles (MSC4133) */
+	"v1.17",  /* no action */
 ];
 
-static UNSTABLE_FEATURES: [&str; 34] = [
+static UNSTABLE_FEATURES: [&str; 35] = [
 	"org.matrix.e2e_cross_signing",
 	// private read receipts (https://github.com/matrix-org/matrix-spec-proposals/pull/2285)
 	"org.matrix.msc2285.stable",
@@ -98,6 +111,8 @@ static UNSTABLE_FEATURES: [&str; 34] = [
 	"org.matrix.simplified_msc3575",
 	// Allow room moderators to view redacted event content (https://github.com/matrix-org/matrix-spec-proposals/pull/2815)
 	"fi.mau.msc2815",
+	// OIDC-native auth umbrella (https://github.com/matrix-org/matrix-spec-proposals/pull/3861)
+	"org.matrix.msc3861",
 	// OIDC-native auth: authorization code grant (https://github.com/matrix-org/matrix-spec-proposals/pull/2964)
 	"org.matrix.msc2964",
 	// OIDC-native auth: auth issuer discovery (https://github.com/matrix-org/matrix-spec-proposals/pull/2965)

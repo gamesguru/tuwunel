@@ -27,7 +27,7 @@ use tuwunel_core::{
 	matrix::{Event, EventHash, PduEvent, event::TypeExt},
 	utils::stream::IterStream,
 };
-use tuwunel_service::rooms::state_res::{AuthSet, StateMap};
+use tuwunel_service::rooms::state_res::{AuthSet, StateMap, topological_sort};
 
 criterion_group!(
 	benches,
@@ -57,7 +57,7 @@ fn lexico_topo_sort(c: &mut Criterion) {
 		};
 
 		c.to_async(FuturesExecutor).iter(async || {
-			_ = tuwunel_service::rooms::state_res::topological_sort(&graph, &async |_id| {
+			_ = topological_sort(graph.clone(), &async |_id| {
 				Ok((int!(0).into(), MilliSecondsSinceUnixEpoch(uint!(0))))
 			})
 			.await;

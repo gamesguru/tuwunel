@@ -1,5 +1,6 @@
+use futures::StreamExt;
 use ruma::OwnedUserId;
-use tuwunel_core::{Err, Result, apply, err, itertools::Itertools};
+use tuwunel_core::{Err, Result, apply, err, itertools::Itertools, utils::stream::ReadyExt};
 
 use crate::admin_command;
 
@@ -9,6 +10,7 @@ pub(super) async fn oauth_associate(
 	provider: String,
 	user_id: OwnedUserId,
 	claim: Vec<String>,
+	force: bool,
 ) -> Result {
 	if !self.services.globals.user_is_local(&user_id) {
 		return Err!(Request(NotFound("User {user_id:?} does not belong to this server.")));
@@ -41,17 +43,42 @@ pub(super) async fn oauth_associate(
 		.map_ok(apply!(2, ToOwned::to_owned))
 		.collect::<Result<_>>()?;
 
+	let committed = self
+		.services
+		.oauth
+		.user_sessions(&user_id)
+		.ready_filter_map(Result::ok)
+		.count()
+		.await;
+
+	if committed > 0 && !force {
+		return Err!(
+			"{user_id} already has {committed} committed OAuth session(s); the pending claim \
+			 would be shadowed at login. Re-run with --force to replace existing sessions, or \
+			 run `query oauth delete {user_id} --force` first."
+		);
+	}
+
+	if committed > 0 {
+		self.services
+			.oauth
+			.delete_user_sessions(&user_id)
+			.await;
+	}
+
 	let replaced = self
 		.services
 		.oauth
 		.sessions
 		.set_user_association_pending(provider.id(), &user_id, claim);
 
-	let action = replaced.map_or("added", |_| "replaced");
-	writeln!(
-		self,
-		"Pending association {action} for {user_id} on provider {}.",
-		provider.id()
-	)
-	.await
+	let lead = match committed {
+		| 0 => format!("Pending association {}", replaced.map_or("added", |_| "replaced")),
+		| n => format!(
+			"Replaced {n} committed session(s) across all providers and added pending \
+			 association"
+		),
+	};
+
+	writeln!(self, "{lead} for {user_id} on provider {}.", provider.id()).await
 }

@@ -1,5 +1,6 @@
 use ruma::OwnedServerName;
 use tuwunel_core::{Err, Result};
+use tuwunel_service::client::read_response_capped;
 
 use crate::admin_command;
 
@@ -13,19 +14,13 @@ pub(super) async fn fetch_support_well_known(&self, server_name: OwnedServerName
 		.send()
 		.await?;
 
-	let text = response.text().await?;
+	let body = read_response_capped(response, 1500).await?;
 
-	if text.is_empty() {
+	if body.is_empty() {
 		return Err!("Response text/body is empty.");
 	}
 
-	if text.len() > 1500 {
-		return Err!(
-			"Response text/body is over 1500 characters, assuming no support well-known.",
-		);
-	}
-
-	let json: serde_json::Value = match serde_json::from_str(&text) {
+	let json: serde_json::Value = match serde_json::from_slice(&body) {
 		| Ok(json) => json,
 		| Err(_) => {
 			return Err!("Response text/body is not valid JSON.",);

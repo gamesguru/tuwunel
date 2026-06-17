@@ -1,3 +1,8 @@
+#[cfg(test)]
+mod tests;
+
+mod account_deactivate;
+mod cross_signing_reset;
 mod profile;
 mod profile_saved;
 mod session_end_confirm;
@@ -23,14 +28,24 @@ use tuwunel_service::{Services, users::propagation_default};
 use url::Url;
 
 use self::{
-	profile::profile_html, profile_saved::profile_saved_html,
-	session_end_confirm::session_end_confirm_html, session_end_execute::session_end_execute_html,
-	session_list::sessions_list_html, session_view::session_view_html,
+	account_deactivate::{account_deactivate_confirm_html, account_deactivate_execute_html},
+	cross_signing_reset::{cross_signing_reset_confirm_html, cross_signing_reset_execute_html},
+	profile::profile_html,
+	profile_saved::profile_saved_html,
+	session_end_confirm::session_end_confirm_html,
+	session_end_execute::session_end_execute_html,
+	session_list::sessions_list_html,
+	session_view::session_view_html,
 };
 use super::url_encode;
 
 pub(crate) static ACCOUNT_MANAGEMENT_ACTIONS_SUPPORTED: &[&str] = &[
 	"org.matrix.profile",
+	"org.matrix.devices_list",
+	"org.matrix.device_view",
+	"org.matrix.device_delete",
+	"org.matrix.account_deactivate",
+	"org.matrix.cross_signing_reset",
 	"org.matrix.sessions_list",
 	"org.matrix.session_view",
 	"org.matrix.session_end",
@@ -171,6 +186,9 @@ async fn handle_account_callback(
 	account_management_idp_id(services)?;
 	validate_account_action(action)?;
 
+	// MSC4191 stable action names dispatch through the prototype aliases.
+	let action = normalize_account_action(action);
+
 	// Read-only pages consume the token immediately. Pages with a POST confirmation
 	// step peek at the token so it can be embedded in the form and consumed only
 	// when the user confirms the action. This avoids creating a second short-lived
@@ -279,6 +297,18 @@ async fn handle_account_callback(
 			)
 			.await
 		},
+		| "org.matrix.account_deactivate" if method == Method::POST =>
+			account_deactivate_execute_html(services, &user_id).await,
+
+		| "org.matrix.account_deactivate" if method == Method::GET =>
+			account_deactivate_confirm_html(&user_id, login_token.unwrap_or_default()).await,
+
+		| "org.matrix.cross_signing_reset" if method == Method::POST =>
+			cross_signing_reset_execute_html(services, &user_id).await,
+
+		| "org.matrix.cross_signing_reset" if method == Method::GET =>
+			cross_signing_reset_confirm_html(&user_id, login_token.unwrap_or_default()).await,
+
 		| _ => Err!(Request(InvalidParam("Unsupported account management action"))),
 	}
 }
@@ -396,12 +426,6 @@ async fn peek_login_token(services: &Services, token: Option<&str>) -> Result<ru
 }
 
 fn account_management_idp_id(services: &Services) -> Result<String> {
-	if services.config.identity_provider.len() != 1 {
-		return Err!(Request(InvalidParam(
-			"Account management requires exactly one configured identity provider"
-		)));
-	}
-
 	services
 		.oauth
 		.providers
@@ -413,6 +437,15 @@ fn validate_account_action(action: &str) -> Result {
 	ACCOUNT_MANAGEMENT_ACTIONS_SUPPORTED
 		.contains(&action)
 		.ok_or_else(|| err!(Request(InvalidParam("Unsupported account management action"))))
+}
+
+fn normalize_account_action(action: &str) -> &str {
+	match action {
+		| "org.matrix.devices_list" => "org.matrix.sessions_list",
+		| "org.matrix.device_view" => "org.matrix.session_view",
+		| "org.matrix.device_delete" => "org.matrix.session_end",
+		| other => other,
+	}
 }
 
 fn ts_cell(ts_secs: u64) -> String {

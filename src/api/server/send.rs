@@ -8,8 +8,8 @@ use std::{
 use axum::extract::State;
 use futures::{FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use ruma::{
-	CanonicalJsonObject, OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, ServerName,
-	TransactionId, UserId,
+	CanonicalJsonObject, CanonicalJsonValue, MilliSecondsSinceUnixEpoch, OwnedEventId,
+	OwnedRoomId, OwnedUserId, RoomId, ServerName, TransactionId, UserId,
 	api::{
 		error::ErrorKind,
 		federation::transactions::{
@@ -22,8 +22,10 @@ use ruma::{
 		},
 	},
 	events::receipt::{ReceiptEvent, ReceiptEventContent, ReceiptType},
+	int,
 	serde::Raw,
 	to_device::DeviceIdOrAllDevices,
+	uint,
 };
 use tuwunel_core::{
 	Err, Error, Result, debug,
@@ -43,6 +45,7 @@ use tuwunel_core::{
 };
 use tuwunel_service::{
 	Services,
+	rooms::state_res::{is_topologically_sorted_in_place, topological_sort},
 	sending::{EDU_LIMIT, PDU_LIMIT},
 };
 
@@ -198,7 +201,7 @@ async fn handle_pdus(
 		.map_ok(IterStream::try_stream)
 		.try_flatten_stream()
 		.broad_and_then(async |(room_id, pdus)| {
-			handle_room(services, client, origin, txn_id, started, room_id, pdus.into_iter())
+			handle_room(services, client, origin, txn_id, started, room_id, pdus)
 				.map_ok(ResolvedMap::into_iter)
 				.map_ok(IterStream::try_stream)
 				.await
@@ -221,14 +224,17 @@ async fn handle_room(
 	txn_id: &TransactionId,
 	txn_start_time: Instant,
 	ref room_id: OwnedRoomId,
-	pdus: impl Iterator<Item = (usize, Pdu)> + Send,
+	pdus: TxnPdus,
 ) -> Result<ResolvedMap> {
+	let pdus = sort_pdus(pdus).await;
+
 	services
 		.event_handler
 		.mutex_federation
 		.lock(room_id)
 		.then(async |_lock| {
-			pdus.enumerate()
+			pdus.into_iter()
+				.enumerate()
 				.try_stream()
 				.and_then(async |pdu| {
 					services.server.check_running().map(|()| pdu) // interruption point
@@ -242,6 +248,71 @@ async fn handle_room(
 				.await
 		})
 		.await
+}
+
+/// Reorder a room's transaction PDUs so each event follows the in-batch events
+/// it references. An already-ordered batch is returned unchanged; references to
+/// events outside the batch are non-edges. The sort is an optimization, so a
+/// failure falls back to the arrival order.
+async fn sort_pdus(mut pdus: TxnPdus) -> TxnPdus {
+	if already_sorted(&pdus) {
+		return pdus;
+	}
+
+	let event_ids: BTreeMap<&str, &OwnedEventId> = pdus
+		.iter()
+		.map(|(_, (_, event_id, _))| (event_id.as_str(), event_id))
+		.collect();
+
+	let graph = pdus
+		.iter()
+		.map(|(_, (_, event_id, value))| {
+			let references = prev_event_ids(value)
+				.filter_map(|prev| event_ids.get(prev).copied())
+				.map(ToOwned::to_owned)
+				.collect();
+
+			(event_id.clone(), references)
+		})
+		.collect();
+
+	// Causal order alone matters here, so the tie-break inputs are constant.
+	let query = async |_event_id: OwnedEventId| {
+		Ok((int!(0).into(), MilliSecondsSinceUnixEpoch(uint!(0))))
+	};
+
+	let Ok(order) = topological_sort(graph, &query).await else {
+		return pdus;
+	};
+
+	let position: BTreeMap<&str, usize> = order
+		.iter()
+		.enumerate()
+		.map(|(i, event_id)| (event_id.as_str(), i))
+		.collect();
+
+	pdus.sort_by_key(|(_, (_, event_id, _))| position.get(event_id.as_str()).copied());
+	pdus
+}
+
+/// Whether the batch is already in causal order, in which case the sort can be
+/// skipped.
+fn already_sorted(pdus: &[(usize, Pdu)]) -> bool {
+	is_topologically_sorted_in_place(
+		pdus,
+		|(_, (_, id, _))| id.as_str(),
+		|(_, (_, _, value))| prev_event_ids(value),
+	)
+}
+
+/// The `prev_events` of a PDU held as canonical JSON.
+fn prev_event_ids(value: &CanonicalJsonObject) -> impl Iterator<Item = &str> + '_ {
+	value
+		.get("prev_events")
+		.and_then(CanonicalJsonValue::as_array)
+		.into_iter()
+		.flatten()
+		.filter_map(CanonicalJsonValue::as_str)
 }
 
 #[tracing::instrument(
@@ -700,4 +771,124 @@ async fn handle_edu_signing_key_update(
 		.await
 		.log_err()
 		.ok();
+}
+
+#[cfg(test)]
+mod tests {
+	use ruma::{CanonicalJsonObject, OwnedEventId, event_id, room_id};
+	use serde_json::json;
+
+	use super::{Pdu, TxnPdus, already_sorted, prev_event_ids, sort_pdus};
+
+	fn pdu(index: usize, id: &OwnedEventId, prev: &[&OwnedEventId]) -> (usize, Pdu) {
+		let prev_events: Vec<&str> = prev.iter().map(|e| e.as_str()).collect();
+		let value: CanonicalJsonObject =
+			serde_json::from_value(json!({ "prev_events": prev_events }))
+				.expect("valid canonical json");
+
+		(index, (room_id!("!r:example.com").to_owned(), id.clone(), value))
+	}
+
+	fn ids() -> (OwnedEventId, OwnedEventId, OwnedEventId) {
+		(
+			event_id!("$a:example.com").to_owned(),
+			event_id!("$b:example.com").to_owned(),
+			event_id!("$c:example.com").to_owned(),
+		)
+	}
+
+	fn order(pdus: &[(usize, Pdu)]) -> Vec<&str> {
+		pdus.iter()
+			.map(|(_, (_, id, _))| id.as_str())
+			.collect()
+	}
+
+	#[test]
+	fn sorted_when_parents_lead() {
+		let (a, b, c) = ids();
+		let pdus = [pdu(0, &a, &[]), pdu(1, &b, &[&a]), pdu(2, &c, &[&b])];
+
+		assert!(already_sorted(&pdus));
+	}
+
+	#[test]
+	fn unsorted_when_child_leads() {
+		let (a, b, _c) = ids();
+		let pdus = [pdu(0, &b, &[&a]), pdu(1, &a, &[])];
+
+		assert!(!already_sorted(&pdus));
+	}
+
+	#[test]
+	fn sorted_ignores_out_of_batch_references() {
+		let (a, b, c) = ids();
+		let pdus = [pdu(0, &b, &[&c]), pdu(1, &a, &[&c])];
+
+		assert!(already_sorted(&pdus));
+	}
+
+	#[tokio::test]
+	async fn sort_orders_parents_before_children() {
+		let (a, b, c) = ids();
+		let pdus: TxnPdus = [pdu(0, &c, &[&b]), pdu(1, &b, &[&a]), pdu(2, &a, &[])]
+			.into_iter()
+			.collect();
+
+		let sorted = sort_pdus(pdus).await;
+
+		assert_eq!(order(&sorted), ["$a:example.com", "$b:example.com", "$c:example.com"]);
+	}
+
+	#[tokio::test]
+	async fn sort_is_noop_when_already_ordered() {
+		let (a, b, c) = ids();
+		let pdus: TxnPdus = [pdu(0, &a, &[]), pdu(1, &b, &[&a]), pdu(2, &c, &[&b])]
+			.into_iter()
+			.collect();
+
+		let sorted = sort_pdus(pdus.clone()).await;
+
+		assert_eq!(order(&sorted), order(&pdus));
+	}
+
+	#[tokio::test]
+	async fn sort_preserves_duplicates() {
+		let (a, b, _c) = ids();
+		let pdus: TxnPdus = [pdu(0, &b, &[&a]), pdu(1, &a, &[]), pdu(2, &b, &[&a])]
+			.into_iter()
+			.collect();
+
+		let sorted = sort_pdus(pdus).await;
+
+		assert_eq!(sorted.len(), 3);
+	}
+
+	#[tokio::test]
+	async fn sort_preserves_a_cycle() {
+		let (a, b, _c) = ids();
+		let pdus: TxnPdus = [pdu(0, &a, &[&b]), pdu(1, &b, &[&a])]
+			.into_iter()
+			.collect();
+
+		let sorted = sort_pdus(pdus).await;
+
+		assert_eq!(sorted.len(), 2);
+	}
+
+	#[test]
+	fn prev_event_ids_reads_the_array() {
+		let (a, b, _c) = ids();
+		let (_, (_, _, value)) = pdu(0, &a, &[&b]);
+
+		let prev: Vec<&str> = prev_event_ids(&value).collect();
+
+		assert_eq!(prev, ["$b:example.com"]);
+	}
+
+	#[test]
+	fn prev_event_ids_empty_when_absent() {
+		let value = CanonicalJsonObject::new();
+
+		assert_eq!(prev_event_ids(&value).count(), 0);
+	}
 }

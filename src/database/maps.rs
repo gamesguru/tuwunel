@@ -68,6 +68,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "eventid_backoff",
+		..descriptor::RANDOM_SMALL_CACHE
+	},
+	Descriptor {
 		name: "eventid_originalpdu",
 		key_size_hint: Some(48),
 		val_size_hint: Some(1520),
@@ -95,6 +99,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 	},
 	Descriptor {
 		name: "eventid_policysigstate",
+		..descriptor::RANDOM_SMALL_CACHE
+	},
+	Descriptor {
+		name: "eventid_resolvedstate",
 		..descriptor::RANDOM_SMALL_CACHE
 	},
 	Descriptor {
@@ -166,6 +174,16 @@ pub(super) static MAPS: &[Descriptor] = &[
 	Descriptor {
 		name: "oidcdevice_userdeviceid",
 		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "oidcdevicecode_devicegrant",
+		ttl: 60 * 60 * 24,
+		..descriptor::RANDOM_SMALL_CACHE
+	},
+	Descriptor {
+		name: "oidcusercode_devicecode",
+		ttl: 60 * 60 * 24,
+		..descriptor::RANDOM_SMALL_CACHE
 	},
 	Descriptor {
 		name: "oidccskeybypass_userid",
@@ -340,6 +358,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL_CACHE
 	},
 	Descriptor {
+		name: "servername_status",
+		..descriptor::RANDOM_SMALL_CACHE
+	},
+	Descriptor {
 		name: "servernameevent_data",
 		cache_disp: CacheDisp::Unique,
 		val_size_hint: Some(128),
@@ -422,6 +444,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "spentrefresh_userdeviceid",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "token_userdeviceid",
 		..descriptor::RANDOM_SMALL
 	},
@@ -448,7 +474,15 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "userdeviceid_spentrefresh",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "userdeviceid_token",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "userdeviceidtoken_index",
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {

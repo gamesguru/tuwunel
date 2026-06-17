@@ -128,6 +128,7 @@ pub async fn exchange_auth_code(
 	client_id: &str,
 	redirect_uri: &str,
 	code_verifier: Option<&str>,
+	require_pkce: bool,
 ) -> Result<AuthCodeSession> {
 	let session: AuthCodeSession = self
 		.db
@@ -151,6 +152,14 @@ pub async fn exchange_auth_code(
 	}
 
 	let Some(challenge) = &session.code_challenge else {
+		// Reject a challenge-less code when PKCE is required: the knob is
+		// reloadable and codes outlive an off->on flip of it.
+		if require_pkce {
+			return Err!(Request(Forbidden(
+				"the authorization request carried no PKCE code_challenge"
+			)));
+		}
+
 		return Ok(session);
 	};
 

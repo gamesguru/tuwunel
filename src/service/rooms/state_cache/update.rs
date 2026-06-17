@@ -152,6 +152,9 @@ pub async fn update_membership(
 				self.forget(room_id, user_id);
 			}
 		},
+		| MembershipState::Knock => {
+			self.mark_as_knocked(user_id, room_id, count, last_state);
+		},
 		| _ => {},
 	}
 
@@ -319,7 +322,7 @@ pub(crate) fn mark_as_left(&self, user_id: &UserId, room_id: &RoomId, count: Pdu
 /// `update_membership` instead
 #[implement(super::Service)]
 #[tracing::instrument(skip(self), level = "debug")]
-pub(crate) fn _mark_as_knocked(
+pub(crate) fn mark_as_knocked(
 	&self,
 	user_id: &UserId,
 	room_id: &RoomId,

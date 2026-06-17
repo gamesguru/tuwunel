@@ -61,7 +61,7 @@ pub(super) async fn do_check(
 	let mut event_map: HashMap<OwnedEventId, PduEvent> = HashMap::new();
 	let mut state_at_event: HashMap<OwnedEventId, StateMap<OwnedEventId>> = HashMap::new();
 
-	let sorted = super::topological_sort(&graph, &async |_id| {
+	let sorted = super::topological_sort(graph.clone(), &async |_id| {
 		Ok((int!(0).into(), MilliSecondsSinceUnixEpoch(uint!(0))))
 	})
 	.await

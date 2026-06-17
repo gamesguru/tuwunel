@@ -1,0 +1,151 @@
+name: Compliance
+
+on:
+  workflow_call:
+    inputs:
+      flavor:
+        type: string
+        description: Flavour label
+      job_name:
+        type: string
+        description: Display name
+      runner:
+        type: string
+        default: 'het'
+        description: Runner mask
+      script:
+        type: string
+        description: Driver script
+      summariser:
+        type: string
+        description: Summariser script
+      results_path:
+        type: string
+        description: Results jsonl path
+      logs_path:
+        type: string
+        description: Logs jsonl path
+      runtime_metrics_path:
+        type: string
+        description: Runtime metrics archive path
+      verbose:
+        type: string
+        default: 'false'
+        description: Verbose flag
+      results_artifact_prefix:
+        type: string
+        description: Results artifact prefix
+      output_artifact_prefix:
+        type: string
+        description: Log-output artifact prefix
+      metrics_artifact_prefix:
+        type: string
+        description: Runtime-metrics artifact prefix
+      cargo_profiles:
+        type: string
+      feat_sets:
+        type: string
+      rust_toolchains:
+        type: string
+      rust_targets:
+        type: string
+      sys_names:
+        type: string
+      sys_versions:
+        type: string
+      sys_targets:
+        type: string
+      machines:
+        type: string
+      excludes:
+        type: string
+        default: '[]'
+      includes:
+        type: string
+        default: '[]'
+      checkout:
+        type: string
+        default: 'HEAD'
+
+jobs:
+  compliance:
+    name: ${{inputs.job_name}}
+    runs-on: ["${{matrix.machine}}", "${{inputs.runner}}"]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        cargo_profile: ${{fromJSON(inputs.cargo_profiles)}}
+        feat_set: ${{fromJSON(inputs.feat_sets)}}
+        rust_toolchain: ${{fromJSON(inputs.rust_toolchains)}}
+        sys_name: ${{fromJSON(inputs.sys_names)}}
+        sys_version: ${{fromJSON(inputs.sys_versions)}}
+        rust_target: ${{fromJSON(inputs.rust_targets)}}
+        sys_target: ${{fromJSON(inputs.sys_targets)}}
+        machine: ${{fromJSON(inputs.machines)}}
+        exclude: ${{fromJSON(inputs.excludes)}}
+        include: ${{fromJSON(inputs.includes)}}
+
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        ref: ${{inputs.checkout}}
+
+    - name: Execute
+      id: execute
+      env:
+        cargo_profile: ${{matrix.cargo_profile}}
+        rust_toolchain: ${{matrix.rust_toolchain}}
+        rust_target: ${{matrix.rust_target}}
+        feat_set: ${{matrix.feat_set}}
+        sys_name: ${{matrix.sys_name}}
+        sys_target: ${{matrix.sys_target}}
+        sys_version: ${{matrix.sys_version}}
+        machine: ${{matrix.machine}}
+        complement_verbose: ${{inputs.verbose && 1 || 0}}
+        complement_crypto_verbose: ${{inputs.verbose && 1 || 0}}
+
+      run: |
+        ${{inputs.script}}
+
+    - if: success() || (failure() && steps.execute.outcome == 'failure')
+      name: Summarise
+      id: summarise
+      env:
+        feat_set: ${{matrix.feat_set}}
+        sys_name: ${{matrix.sys_name}}
+        sys_target: ${{matrix.sys_target}}
+        GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
+      run: |
+        ${{inputs.summariser}}
+
+    - if: success() || failure() && steps.execute.outcome == 'failure'
+      name: Upload New Results
+      id: upload-result
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{inputs.results_artifact_prefix}}-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}.jsonl
+        path: ./${{inputs.results_path}}
+
+    - if: success() || (failure() && steps.execute.outcome == 'failure')
+      name: Upload Log Output
+      id: upload-output
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{inputs.output_artifact_prefix}}-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}.jsonl
+        path: ./${{inputs.logs_path}}
+        if-no-files-found: ignore
+
+    - if: success() || (failure() && steps.execute.outcome == 'failure')
+      name: Upload Runtime Metrics
+      id: upload-metrics
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{inputs.metrics_artifact_prefix}}-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}.tar.zst
+        path: ./${{inputs.runtime_metrics_path}}
+        if-no-files-found: ignore
+
+    - name: Accept
+      id: accept
+      run: |
+        git diff --exit-code --color --color-moved

@@ -9,6 +9,7 @@ struct ProviderMetadata {
 	issuer: String,
 	authorization_endpoint: String,
 	token_endpoint: String,
+	device_authorization_endpoint: Option<String>,
 	registration_endpoint: Option<String>,
 	revocation_endpoint: Option<String>,
 	jwks_uri: String,
@@ -45,6 +46,8 @@ pub(crate) async fn openid_configuration_route(
 
 		token_endpoint: format!("{base}/_tuwunel/oidc/token"),
 
+		device_authorization_endpoint: Some(format!("{base}/_tuwunel/oidc/device_authorization")),
+
 		jwks_uri: format!("{base}/_tuwunel/oidc/jwks"),
 
 		account_management_uri: Some(format!("{base}/_tuwunel/oidc/account")),
@@ -68,6 +71,7 @@ pub(crate) async fn openid_configuration_route(
 		grant_types_supported: Some(vec![
 			"authorization_code".to_owned(),
 			"refresh_token".to_owned(),
+			"urn:ietf:params:oauth:grant-type:device_code".to_owned(),
 		]),
 
 		token_endpoint_auth_methods_supported: Some(vec![
@@ -78,7 +82,9 @@ pub(crate) async fn openid_configuration_route(
 
 		scopes_supported: Some(vec![
 			"openid".to_owned(),
+			"urn:matrix:client:api:*".to_owned(),
 			"urn:matrix:org.matrix.msc2967.client:api:*".to_owned(),
+			"urn:matrix:client:device:*".to_owned(),
 			"urn:matrix:org.matrix.msc2967.client:device:*".to_owned(),
 		]),
 

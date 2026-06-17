@@ -8,14 +8,16 @@ use std::{
 	iter::{from_fn, once},
 	ops::Range,
 	sync::Arc,
+	time::Duration,
 };
 
 use bytes::Bytes;
 use derive_more::Debug;
 use futures::{FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
+use http::Method;
 use object_store::{
 	Attributes, CopyMode, DynObjectStore, GetResult, MultipartUpload, ObjectMeta, ObjectStore,
-	ObjectStoreExt, PutPayload, PutResult, path::Path,
+	ObjectStoreExt, PutPayload, PutResult, path::Path, signer::Signer,
 };
 use tuwunel_core::{
 	Error, Result,
@@ -29,6 +31,7 @@ use tuwunel_core::{
 		stream::{IterStream, TryReadyExt},
 	},
 };
+use url::Url;
 
 #[derive(Debug)]
 pub struct Provider {
@@ -37,6 +40,9 @@ pub struct Provider {
 	pub config: StorageProvider,
 
 	pub(crate) provider: Box<DynObjectStore>,
+
+	#[debug(skip)]
+	pub(crate) signer: Option<Arc<dyn Signer>>,
 
 	pub(crate) base_path: Option<Path>,
 
@@ -318,6 +324,33 @@ pub async fn load(&self, path: &str) -> Result<GetResult> {
 	self.provider
 		.get(&path)
 		.map_err(Error::from)
+		.await
+}
+
+/// Presign a time-limited GET URL for an object, when this provider supports
+/// signing (S3).
+#[implement(Provider)]
+#[tracing::instrument(
+	level = "debug",
+	err(level = "debug"),
+	skip_all,
+	fields(
+		provider = %self.name,
+		?path,
+		?ttl,
+	)
+)]
+pub async fn signed_get_url(&self, path: &str, ttl: Duration) -> Result<Option<Url>> {
+	let Some(signer) = self.signer.as_ref() else {
+		return Ok(None);
+	};
+
+	let path = self.to_abs_path(path)?;
+
+	signer
+		.signed_url(Method::GET, &path, ttl)
+		.map_err(Error::from)
+		.map_ok(Some)
 		.await
 }
 

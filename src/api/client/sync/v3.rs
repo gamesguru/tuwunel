@@ -42,7 +42,7 @@ use tuwunel_core::{
 	extract_variant, is_equal_to, is_false, is_true,
 	matrix::{
 		Event,
-		event::Matches,
+		event::{Matches, trim_event_fields},
 		pdu::{EventHash, PduCount, PduEvent},
 	},
 	pair_of, ref_at,
@@ -761,7 +761,9 @@ async fn handle_left_room(
 			signatures: None,
 		};
 
-		let state = StateEvents { events: vec![event.into_format()] };
+		let state = StateEvents {
+			events: vec![trim_event_fields(event.into_format(), filter.event_fields.as_deref())],
+		};
 
 		let state = if use_state_after {
 			RoomState::After(state)
@@ -902,6 +904,8 @@ async fn load_left_room(
 		.is_encrypted_room(room_id)
 		.await;
 
+	let event_fields = filter.event_fields.as_deref();
+
 	let state_events = state_events
 		.into_iter()
 		.filter(|pdu| filter.room.state.matches(pdu))
@@ -909,7 +913,7 @@ async fn load_left_room(
 		.chain(timeline_sender_member)
 		.stream()
 		.wide_then(|pdu| with_membership(services, pdu, sender_user, encrypted))
-		.map(Event::into_format)
+		.map(|pdu| trim_event_fields(pdu.into_format(), event_fields))
 		.collect();
 
 	let left_prev_batch = timeline_limit
@@ -963,7 +967,7 @@ async fn load_left_room(
 			limited: limited || timeline_limit == 0,
 			events: timeline_events
 				.into_iter()
-				.map(Event::into_format)
+				.map(|pdu| trim_event_fields(pdu.into_format(), event_fields))
 				.collect(),
 		},
 	}))
@@ -1207,7 +1211,15 @@ async fn assemble_join_state_events(
 		filter.matches(event) && (full_state || use_state_after || !is_in_timeline(event))
 	};
 
-	assemble_state_events(services, state_events, sender_user, encrypted, include_in_state).await
+	assemble_state_events(
+		services,
+		state_events,
+		sender_user,
+		encrypted,
+		include_in_state,
+		filter.event_fields.as_deref(),
+	)
+	.await
 }
 
 async fn load_join_timeline(
@@ -1397,28 +1409,31 @@ async fn finalize_joined_room(
 		in_window,
 	);
 
-	let joined_room = build_joined_room(BuildJoinedRoom {
-		receipt_events,
-		typing_events,
-		private_read_events,
-		state_events,
-		account_data_events,
-		room_events,
-		heroes,
-		joined_member_count,
-		invited_member_count,
-		unread_notifications,
-		unread_thread_notifications,
-		use_state_after,
-		limited,
-		joined_since_last_sync,
-		prev_batch,
-	});
+	let joined_room = build_joined_room(
+		BuildJoinedRoom {
+			receipt_events,
+			typing_events,
+			private_read_events,
+			state_events,
+			account_data_events,
+			room_events,
+			heroes,
+			joined_member_count,
+			invited_member_count,
+			unread_notifications,
+			unread_thread_notifications,
+			use_state_after,
+			limited,
+			joined_since_last_sync,
+			prev_batch,
+		},
+		filter.event_fields.as_deref(),
+	);
 
 	(joined_room, device_list_updates, left_encrypted_users)
 }
 
-fn build_joined_room(args: BuildJoinedRoom) -> JoinedRoom {
+fn build_joined_room(args: BuildJoinedRoom, event_fields: Option<&[String]>) -> JoinedRoom {
 	let BuildJoinedRoom {
 		receipt_events,
 		typing_events,
@@ -1472,7 +1487,7 @@ fn build_joined_room(args: BuildJoinedRoom) -> JoinedRoom {
 			prev_batch: prev_batch.as_ref().map(ToString::to_string),
 			events: room_events
 				.into_iter()
-				.map(Event::into_format)
+				.map(|pdu| trim_event_fields(pdu.into_format(), event_fields))
 				.collect(),
 		},
 		unread_notifications,
@@ -1905,13 +1920,14 @@ async fn assemble_state_events(
 	sender_user: &UserId,
 	encrypted: bool,
 	include_in_state: impl Fn(&PduEvent) -> bool + Send + Sync,
+	event_fields: Option<&[String]>,
 ) -> Vec<Raw<AnySyncStateEvent>> {
 	state_events
 		.into_iter()
 		.filter(include_in_state)
 		.stream()
 		.wide_then(|pdu| with_membership(services, pdu, sender_user, encrypted))
-		.map(Event::into_format)
+		.map(|pdu| trim_event_fields(pdu.into_format(), event_fields))
 		.collect()
 		.await
 }

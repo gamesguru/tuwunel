@@ -6,6 +6,7 @@ mod info;
 mod list;
 mod moderation;
 mod prune_empty;
+mod purge_user;
 
 use clap::Subcommand;
 use ruma::OwnedRoomId;
@@ -71,5 +72,29 @@ pub(super) enum RoomCommand {
 	PruneEmpty {
 		#[arg(short, long)]
 		force: bool,
+	},
+
+	/// - Delete every room a user is joined to
+	///
+	/// Useful for cleaning up after spam invitations or a faulty appservice
+	/// registration. With --regex the argument is a pattern matched against
+	/// every joined member of each room, so a whole namespace
+	/// (e.g. `@bot_[A-Za-z0-9]+:example\.com`) can be cleared at once.
+	PurgeUser {
+		/// A user ID, or (with --regex) a pattern matched against the joined
+		/// members of every room
+		user_id: String,
+
+		/// Interpret user_id as a regular expression
+		#[arg(long)]
+		regex: bool,
+
+		/// Only delete rooms where the matched user is the only joined member
+		#[arg(long)]
+		sole_member: bool,
+
+		/// List the rooms that would be deleted without deleting them
+		#[arg(long)]
+		dry_run: bool,
 	},
 }

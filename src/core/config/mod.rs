@@ -38,11 +38,7 @@ use self::{
 };
 use crate::{
 	Err, Result, err, redacted_debug,
-	utils::{
-		self,
-		bytes::{deserialize_bytesize_u64, deserialize_bytesize_usize},
-		sys,
-	},
+	utils::{self, bytes::deserialize_bytesize_usize, sys},
 };
 
 /// All the config options for tuwunel.
@@ -69,8 +65,8 @@ use crate::{
 ### For more information, see:
 ### https://tuwunel.chat/configuration.html
 "#,
-	ignore = "catchall well_known tls blurhashing allow_invalid_tls_certificates ldap jwt \
-	          appservice identity_provider storage_provider"
+	ignore = "catchall well_known tls allow_invalid_tls_certificates ldap jwt appservice \
+	          identity_provider storage_provider"
 )]
 pub struct Config {
 	/// The server_name is the pretty name of this server. It is used as a
@@ -445,6 +441,21 @@ pub struct Config {
 	)]
 	pub max_request_size: usize,
 
+	/// Maximum size of a response body buffered from a remote server. Applies
+	/// to federation requests, push gateway and appservice transactions, and
+	/// remote media fetched for URL previews. A peer cannot be trusted to honor
+	/// a requested limit, so this bounds the response held in memory
+	/// regardless, guarding against a remote driving the process out of
+	/// memory. Accepts an integer byte count or a string with SI/IEC suffix
+	/// such as "256 MiB".
+	///
+	/// default: 256 MiB
+	#[serde(
+		default = "default_max_response_size",
+		deserialize_with = "deserialize_bytesize_usize"
+	)]
+	pub max_response_size: usize,
+
 	/// Maximum number of concurrently pending (asynchronous) media uploads a
 	/// user can have.
 	///
@@ -480,6 +491,18 @@ pub struct Config {
 	/// default: 192
 	#[serde(default = "default_max_fetch_prev_events")]
 	pub max_fetch_prev_events: u16,
+
+	/// Maximum time, in milliseconds, to wait for the missing prev_events of an
+	/// incoming timeline event to arrive on their own before fetching them over
+	/// federation. A gap that closes within this window skips the fetch. The
+	/// wait is event-driven and wakes the instant the events arrive, so this is
+	/// a ceiling on added latency, not a fixed cost. Set to 0 to fetch
+	/// immediately.
+	///
+	/// reloadable: yes
+	/// default: 750
+	#[serde(default = "default_fetch_prev_wait_ms")]
+	pub fetch_prev_wait_ms: u64,
 
 	/// Default/base connection timeout (seconds). This is used only by URL
 	/// previews and update/news endpoint checks.
@@ -520,6 +543,45 @@ pub struct Config {
 	#[serde(default = "default_request_idle_per_host")]
 	pub request_idle_per_host: u16,
 
+	/// Allow the outbound HTTP client to negotiate gzip with other servers:
+	/// advertise it in Accept-Encoding and transparently decompress responses.
+	/// This covers federation, media, and URL preview traffic, and is separate
+	/// from `gzip_compression`, which compresses tuwunel's own responses.
+	///
+	/// Enabled by default. Set to false to force the client to neither request
+	/// nor decompress gzip. Does nothing unless tuwunel was built with the
+	/// `gzip_compression` feature.
+	///
+	/// default: true
+	#[serde(default = "true_fn")]
+	pub request_gzip: bool,
+
+	/// Allow the outbound HTTP client to negotiate brotli with other servers:
+	/// advertise it in Accept-Encoding and transparently decompress responses.
+	/// This covers federation, media, and URL preview traffic, and is separate
+	/// from `brotli_compression`, which compresses tuwunel's own responses.
+	///
+	/// Enabled by default. Set to false to force the client to neither request
+	/// nor decompress brotli. Does nothing unless tuwunel was built with the
+	/// `brotli_compression` feature.
+	///
+	/// default: true
+	#[serde(default = "true_fn")]
+	pub request_brotli: bool,
+
+	/// Allow the outbound HTTP client to negotiate zstd with other servers:
+	/// advertise it in Accept-Encoding and transparently decompress responses.
+	/// This covers federation, media, and URL preview traffic, and is separate
+	/// from `zstd_compression`, which compresses tuwunel's own responses.
+	///
+	/// Enabled by default. Set to false to force the client to neither request
+	/// nor decompress zstd. Does nothing unless tuwunel was built with the
+	/// `zstd_compression` feature.
+	///
+	/// default: true
+	#[serde(default = "true_fn")]
+	pub request_zstd: bool,
+
 	/// Federation well-known resolution connection timeout (seconds).
 	///
 	/// default: 6
@@ -539,6 +601,18 @@ pub struct Config {
 	/// default: 300
 	#[serde(default = "default_federation_timeout")]
 	pub federation_timeout: u64,
+
+	/// Timeout (seconds) for client-initiated federation key lookups, namely
+	/// /keys/query and /keys/claim against remote servers. Should be well
+	/// below `federation_timeout` so an interactive request to an unresponsive
+	/// server does not outlast the requesting client's own send deadline. A
+	/// lookup that exceeds this bound records a transient federation failure
+	/// for that server, so subsequent lookups back off instead of blocking
+	/// again.
+	///
+	/// default: 8
+	#[serde(default = "default_federation_keys_timeout")]
+	pub federation_keys_timeout: u64,
 
 	/// Federation client idle connection pool timeout (seconds).
 	///
@@ -788,6 +862,40 @@ pub struct Config {
 	#[serde(default = "true_fn")]
 	pub allow_federation: bool,
 
+	/// (EXPERIMENTAL) Resolve the base event of a room context request by
+	/// fetching it from federation when the server never received it.
+	///
+	/// When a client requests
+	/// `/_matrix/client/v3/rooms/{roomId}/context/{eventId}` for an event
+	/// the server does not hold locally, the server fetches it from a room
+	/// peer and persists it before responding, rather than returning a
+	/// 404. This is gated on `allow_federation`; with federation disabled
+	/// it has no effect. Other on-demand federation fetch sites are gated
+	/// separately.
+	///
+	/// reloadable: yes
+	/// default: false
+	#[serde(default)]
+	pub fetch_unreceived_contexts_over_federation: bool,
+
+	/// Per-round ceiling on how many servers a federation event fetch contacts
+	/// concurrently. Tightens the built-in fan-out profile of every fetch kind;
+	/// it never widens one. 0 leaves the profiles unchanged.
+	///
+	/// reloadable: yes
+	/// default: 0
+	#[serde(default)]
+	pub fetch_fanout_max_width: usize,
+
+	/// Ceiling on how many staged rounds a federation event fetch runs before
+	/// giving up. Tightens the built-in round count of every fetch kind; it
+	/// never raises one. 0 leaves the profiles unchanged.
+	///
+	/// reloadable: yes
+	/// default: 0
+	#[serde(default)]
+	pub fetch_fanout_rounds: usize,
+
 	/// Sets the default `m.federate` property for newly created rooms when the
 	/// client does not request one. If `allow_federation` is set to false at
 	/// the same this value is set to false it then always overrides the client
@@ -937,6 +1045,22 @@ pub struct Config {
 		alias = "allow_profile_lookup_federation_requests"
 	)]
 	pub allow_inbound_profile_lookup_federation_requests: bool,
+
+	/// Config option to allow or disallow this homeserver from fetching
+	/// remote users' profiles over federation
+	/// (`GET /_matrix/federation/v1/query/profile`) when answering the
+	/// client-server full-profile endpoint
+	/// `GET /_matrix/client/v3/profile/{userId}`.
+	///
+	/// When disabled, that endpoint does not query other servers: it serves a
+	/// locally cached copy if one exists, and otherwise returns
+	/// `403 M_FORBIDDEN` (MSC3550) rather than `404`, so clients can tell a
+	/// withheld profile apart from a missing user. The per-field profile
+	/// endpoints (displayname, avatar_url) are not affected.
+	///
+	/// reloadable: yes
+	#[serde(default = "true_fn")]
+	pub allow_outbound_profile_lookup_federation_requests: bool,
 
 	/// Allow standard users to create rooms. Appservices and admins are always
 	/// allowed to create rooms
@@ -1308,6 +1432,142 @@ pub struct Config {
 	/// default: false
 	#[serde(default)]
 	pub refresh_token_hard_logout: bool,
+
+	/// Grace window in seconds for a benign refresh-token double-submit.
+	///
+	/// After a refresh token rotates, the spent token is retained for one
+	/// generation so a later reuse is detectable. If that spent token is
+	/// presented again within this window while its successor is still the
+	/// device's current refresh token, the request is treated as a client that
+	/// lost the rotated response: a fresh access token is issued for the
+	/// unchanged refresh token rather than revoking the device. Outside the
+	/// window, or once the chain has advanced, a replayed refresh token revokes
+	/// the device as a suspected compromise. Set to `0` to treat every reuse as
+	/// a compromise.
+	///
+	/// reloadable: yes
+	/// default: 15
+	#[serde(default = "default_refresh_token_reuse_grace")]
+	pub refresh_token_reuse_grace: u64,
+
+	/// Whether a detected refresh-token reuse revokes the device.
+	///
+	/// When true (default), presenting a refresh token that was already rotated
+	/// (outside the `refresh_token_reuse_grace` window) removes the device, the
+	/// RFC 6819 stance that treats reuse as a compromised session. When false,
+	/// the replayed request is rejected but the device is left intact, the
+	/// laxer behaviour an operator fronting another OAuth client may prefer.
+	///
+	/// reloadable: yes
+	/// default: true
+	#[serde(default = "true_fn")]
+	pub refresh_token_reuse_revoke: bool,
+
+	/// Require OIDC clients (next-gen auth) to request an MSC2967 device scope.
+	///
+	/// When false, a client that omits the `urn:matrix:client:device:<id>`
+	/// scope is assigned a server-generated device id, which is echoed back in
+	/// the granted scope. When true, the authorization-code grant is rejected
+	/// unless the client supplies a device scope, per the MSC2967 expectation
+	/// that the client owns its device id.
+	///
+	/// reloadable: yes
+	/// default: false
+	#[serde(default)]
+	pub oidc_require_device_scope: bool,
+
+	/// Require PKCE (RFC 7636) with the S256 method on the OIDC
+	/// authorization-code grant.
+	///
+	/// When true, the authorize endpoint rejects a request that carries no
+	/// `code_challenge`, as MSC2964 mandates for public clients. A present
+	/// challenge must always use S256; the `plain` method is rejected
+	/// regardless of this setting. Set to false only as a transition escape
+	/// hatch for a legacy client that cannot send a challenge.
+	///
+	/// reloadable: yes
+	/// default: true
+	#[serde(default = "true_fn")]
+	pub oidc_require_pkce: bool,
+
+	/// Reject an OIDC authorization-code grant that requests a scope this
+	/// server does not recognise, instead of narrowing the granted scope down
+	/// to the recognised tokens.
+	///
+	/// When false (default), an unrecognised scope token is dropped and the
+	/// narrowed `scope` is echoed back to the client per RFC 6749. When true,
+	/// an unrecognised scope is rejected. `openid` and the MSC2967 device and
+	/// api scopes (both spellings) are always recognised.
+	///
+	/// reloadable: yes
+	/// default: false
+	#[serde(default)]
+	pub oidc_strict_scope: bool,
+
+	/// Initial access token required to register an OIDC client dynamically
+	/// (RFC 7591).
+	///
+	/// When set, the registration endpoint requires the caller to present this
+	/// token as an `Authorization: Bearer` credential. The default (empty)
+	/// leaves dynamic client registration open.
+	///
+	/// reloadable: yes
+	/// default:
+	#[serde(default)]
+	pub oidc_registration_access_token: String,
+
+	/// Allowlist of hostnames permitted in a dynamically-registered OIDC
+	/// client's redirect_uris.
+	///
+	/// When non-empty, every redirect_uri presented at registration must have a
+	/// host in this list or the registration is rejected. The default (empty)
+	/// imposes no host restriction.
+	///
+	/// reloadable: yes
+	/// default: []
+	#[serde(default)]
+	pub oidc_registration_allowed_redirect_hosts: Vec<String>,
+
+	/// Require a `client_uri` in dynamic client registration requests
+	/// (RFC 7591 / MSC2966).
+	///
+	/// When false (default), `client_uri` is optional; a client that supplies
+	/// one still has it validated (https, host, no userinfo) and the other URLs
+	/// in the request must share its host or a subdomain. When true, a
+	/// registration without an https `client_uri` is rejected with
+	/// `invalid_client_metadata`, enforcing the MSC2966 common-base model on
+	/// every client.
+	///
+	/// reloadable: yes
+	/// default: false
+	#[serde(default)]
+	pub oidc_registration_require_client_uri: bool,
+
+	/// Token-bucket refill rate (requests per second) for the OIDC endpoints.
+	///
+	/// Applies a shared per-client-IP throttle across the authorize, token,
+	/// dynamic-registration and device-grant endpoints. The default of `0`
+	/// disables the throttle, preserving open
+	/// access; raise it together with `oidc_rc_burst_count` to protect a server
+	/// exposed to a hostile network. The key is the client IP, so a rate low
+	/// enough to bite a brute-force attempt can also throttle many users behind
+	/// one NAT; size the burst accordingly.
+	///
+	/// reloadable: yes
+	/// default: 0
+	#[serde(default)]
+	pub oidc_rc_per_second: u32,
+
+	/// Token-bucket depth (burst size) for the OIDC endpoint throttle.
+	///
+	/// The number of requests a single client IP may make in a burst before the
+	/// `oidc_rc_per_second` refill rate governs. Ignored while
+	/// `oidc_rc_per_second` is `0`.
+	///
+	/// reloadable: yes
+	/// default: 0
+	#[serde(default)]
+	pub oidc_rc_burst_count: u32,
 
 	/// Static TURN username to provide the client if not using a shared secret
 	/// ("turn_secret"), It is recommended to use a shared secret over static
@@ -1980,6 +2240,17 @@ pub struct Config {
 	/// default: []
 	#[serde(default)]
 	pub store_media_on_providers: BTreeSet<String>,
+
+	/// Redirect local media downloads to a presigned object-store URL when the
+	/// client sends `allow_redirect=true` (MSC3860). When a configured storage
+	/// provider can presign the object (S3), the download responds with a 307
+	/// to a short-lived URL instead of proxying the bytes. Media held only on
+	/// the local filesystem is always served directly.
+	///
+	/// reloadable: yes
+	/// default: false
+	#[serde(default)]
+	pub media_allow_redirect: bool,
 
 	/// Vector list of regex patterns of server names that tuwunel will refuse
 	/// to download remote media from.
@@ -2746,6 +3017,29 @@ pub struct Config {
 	#[serde(default)]
 	pub force_migration: bool,
 
+	/// When importing a Conduit database in place, the filesystem path to
+	/// Conduit's media directory. Leave unset to use `<database_path>/media`,
+	/// which is Conduit's own default location.
+	///
+	/// example: "/var/lib/matrix-conduit/media"
+	pub conduit_source_media_path: Option<PathBuf>,
+
+	/// When importing a Conduit database, the sharding depth of Conduit's media
+	/// directory (0 for a flat directory). Must match the importing Conduit's
+	/// `media.directory_structure`; the default matches Conduit's own default
+	/// of `Deep { length = 2, depth = 2 }`.
+	///
+	/// default: 2
+	#[serde(default = "default_conduit_media_directory_depth")]
+	pub conduit_media_directory_depth: u8,
+
+	/// When importing a Conduit database, the shard-segment length of Conduit's
+	/// media directory. Paired with `conduit_media_directory_depth`.
+	///
+	/// default: 2
+	#[serde(default = "default_conduit_media_directory_length")]
+	pub conduit_media_directory_length: u8,
+
 	/// Set this to true for excluding unencrypted rooms from the common-rooms
 	/// calculation deciding the receivers of device list updates.
 	///
@@ -2754,10 +3048,6 @@ pub struct Config {
 	/// reloadable: yes
 	#[serde(default)]
 	pub device_key_update_encrypted_rooms_only: bool,
-
-	// external structure; separate section
-	#[serde(default)]
-	pub blurhashing: BlurhashConfig,
 
 	// external structure; separate section
 	#[serde(default)]
@@ -2867,12 +3157,11 @@ pub struct WellKnownConfig {
 	pub support_mxid: Option<OwnedUserId>,
 
 	/// The PGP key (i.e. OpenPGP) that one may use for encrypted communications
-	/// for the above support role. No specific format is mandated for this
-	/// field or by the spec proposal. This field can contain a URL to a PGP
-	/// key, the 64-bit long ID, the OPENPGPKEY DNS record, or just the full
-	/// fingerprint.
-	///
-	/// Full/raw key content must not be here.
+	/// for the above support role. The value must be a URI. Use a web URL
+	/// pointing to the key (for example "https://example.com/key.asc"), an
+	/// OPENPGPKEY DNS record ("dns:..."), or a fingerprint carried with the
+	/// "openpgp4fpr:" scheme. A bare fingerprint without a scheme, or raw
+	/// inlined key material, is rejected at startup.
 	///
 	/// As this is a spec proposal (MSC4439), the identifier/prefix for this
 	/// field is currently "dev.zirco.msc4439.pgp_key"
@@ -2989,12 +3278,11 @@ pub struct SupportContact {
 	pub matrix_id: Option<OwnedUserId>,
 
 	/// The PGP key (i.e. OpenPGP) that one may use for encrypted communications
-	/// for the above support role. No specific format is mandated for this
-	/// field or by the spec proposal. This field can contain a URL to a PGP
-	/// key, the 64-bit long ID, the OPENPGPKEY DNS record, or just the full
-	/// fingerprint.
-	///
-	/// Full/raw key content must not be here.
+	/// for the above support role. The value must be a URI. Use a web URL
+	/// pointing to the key (for example "https://example.com/key.asc"), an
+	/// OPENPGPKEY DNS record ("dns:..."), or a fingerprint carried with the
+	/// "openpgp4fpr:" scheme. A bare fingerprint without a scheme, or raw
+	/// inlined key material, is rejected at startup.
 	///
 	/// As this is a spec proposal (MSC4439), the identifier/prefix for this
 	/// field is currently "dev.zirco.msc4439.pgp_key"
@@ -3012,41 +3300,6 @@ impl From<SupportContact> for ruma::api::client::discovery::discover_support::Co
 			pgp_key: conf.pgp_key,
 		}
 	}
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Default)]
-#[expect(rustdoc::bare_urls)]
-#[config_example_generator(
-	filename = "tuwunel-example.toml",
-	section = "global.blurhashing"
-)]
-pub struct BlurhashConfig {
-	/// blurhashing x component, 4 is recommended by https://blurha.sh/
-	///
-	/// reloadable: yes
-	/// default: 4
-	#[serde(default = "default_blurhash_x_component")]
-	pub components_x: u32,
-	/// blurhashing y component, 3 is recommended by https://blurha.sh/
-	///
-	/// reloadable: yes
-	/// default: 3
-	#[serde(default = "default_blurhash_y_component")]
-	pub components_y: u32,
-	/// Max raw size that the server will blurhash, this is the size of the
-	/// image after converting it to raw data, it should be higher than the
-	/// upload limit but not too high. The higher it is the higher the
-	/// potential load will be for clients requesting blurhashes. Accepts an
-	/// integer byte count or a string with SI/IEC suffix such as "32 MiB".
-	/// Setting it to 0 disables blurhashing.
-	///
-	/// reloadable: yes
-	/// default: 33554432
-	#[serde(
-		default = "default_blurhash_max_raw_size",
-		deserialize_with = "deserialize_bytesize_u64"
-	)]
-	pub blurhash_max_raw_size: u64,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -3918,6 +4171,10 @@ fn default_server_name() -> OwnedServerName { ruma::owned_server_name!("localhos
 
 fn default_database_path() -> PathBuf { "/var/lib/tuwunel".to_owned().into() }
 
+fn default_conduit_media_directory_depth() -> u8 { 2 }
+
+fn default_conduit_media_directory_length() -> u8 { 2 }
+
 fn default_port() -> ListeningPort { ListeningPort { ports: Left(8008) } }
 
 fn default_unix_socket_perms() -> u32 { 660 }
@@ -3980,6 +4237,8 @@ fn default_ip_lookup_strategy() -> u8 { 5 }
 
 fn default_max_request_size() -> usize { 24 * 1024 * 1024 }
 
+fn default_max_response_size() -> usize { 256 * 1024 * 1024 }
+
 fn default_max_pending_media_uploads() -> usize { 5 }
 
 fn default_media_create_unused_expiration_time() -> u64 { 86400 }
@@ -4004,6 +4263,8 @@ fn default_well_known_timeout() -> u64 { 10 }
 
 fn default_federation_timeout() -> u64 { 25 }
 
+fn default_federation_keys_timeout() -> u64 { 8 }
+
 fn default_federation_idle_timeout() -> u64 { 25 }
 
 fn default_federation_idle_per_host() -> u16 { 1 }
@@ -4021,6 +4282,8 @@ fn default_appservice_idle_timeout() -> u64 { 300 }
 fn default_pusher_idle_timeout() -> u64 { 15 }
 
 fn default_max_fetch_prev_events() -> u16 { 192_u16 }
+
+fn default_fetch_prev_wait_ms() -> u64 { 750 }
 
 fn default_tracing_flame_filter() -> String {
 	cfg!(debug_assertions)
@@ -4212,14 +4475,6 @@ fn default_client_shutdown_timeout() -> u64 { 15 }
 
 fn default_sender_shutdown_timeout() -> u64 { 5 }
 
-// blurhashing defaults recommended by https://blurha.sh/
-// 2^25
-fn default_blurhash_max_raw_size() -> u64 { 33_554_432 }
-
-fn default_blurhash_x_component() -> u32 { 4 }
-
-fn default_blurhash_y_component() -> u32 { 3 }
-
 fn default_ldap_search_filter() -> String { "(objectClass=*)".to_owned() }
 
 fn default_ldap_uid_attribute() -> String { String::from("uid") }
@@ -4237,6 +4492,8 @@ fn default_client_sync_timeout_default() -> u64 { 30000 }
 fn default_client_sync_timeout_max() -> u64 { 90000 }
 
 fn default_access_token_ttl() -> u64 { 604_800 }
+
+fn default_refresh_token_reuse_grace() -> u64 { 15 }
 
 fn default_deprioritize_joins_through_servers() -> RegexSet {
 	RegexSet::new([r"matrix\.org"]).expect("valid set of regular expressions")

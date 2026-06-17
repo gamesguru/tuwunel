@@ -109,7 +109,9 @@ jobs:
 
     name: Containers
     runs-on: ${{matrix.machine}}
-    permissions: write-all
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: true
       matrix:
@@ -179,7 +181,9 @@ jobs:
     name: Bundles
     needs: [containers]
     runs-on: 'het'
-    permissions: write-all
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: true
       matrix:
@@ -302,7 +306,9 @@ jobs:
     name: Delivery
     needs: [bundles, documents]
     runs-on: 'het'
-    permissions: write-all
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: GitHub Login
         uses: docker/login-action@v4

@@ -74,7 +74,7 @@ on:
 jobs:
   compliance:
     name: ${{inputs.job_name}}
-    runs-on: ["${{matrix.machine}}", "${{inputs.runner}}"]
+    runs-on: ${{ github.event.repository.fork && 'ubuntu-latest' || fromJSON(format('["{0}", "{1}"]', matrix.machine, inputs.runner)) }}
 
     strategy:
       fail-fast: false

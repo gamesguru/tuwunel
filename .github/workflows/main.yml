@@ -141,11 +141,11 @@ jobs:
       enable_test_rustsdk: ${{fromJSON(inputs.enable_test_rustsdk || 'true')}}
       enable_test_complement: ${{fromJSON(inputs.enable_test_complement || 'true')}}
       complement_verbose: ${{fromJSON(inputs.complement_verbose || 'false')}}
-      complement_runner: 'het'
+      complement_runner: ${{ github.event.repository.fork && 'ubuntu-latest' || 'het' }}
       enable_test_complement_crypto: ${{fromJSON(inputs.enable_test_complement_crypto || 'true')}}
       complement_crypto_verbose: ${{fromJSON(inputs.complement_crypto_verbose || 'false')}}
       enable_test_playwright: ${{fromJSON(inputs.enable_test_playwright || env.is_dev || 'false') && vars.TUWUNEL_GH_ACTIONS_DISABLE_HEAVY == ''}}
-      playwright_runner: 'het'
+      playwright_runner: ${{ github.event.repository.fork && 'ubuntu-latest' || 'het' }}
       playwright_shards: ${{inputs.playwright_shards || vars.PLAYWRIGHT_SHARDS || '8'}}
       playwright_workers: ${{inputs.playwright_workers || vars.PLAYWRIGHT_WORKERS || '1'}}
       enable_package: ${{fromJSON(inputs.enable_package || 'true') && vars.TUWUNEL_GH_ACTIONS_DISABLE_HEAVY == ''}}
@@ -172,7 +172,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        runner: ${{fromJSON(inputs.runners || vars.RUNNERS || '["het"]')}}
+        runner: ${{fromJSON(github.event.repository.fork && '["ubuntu-latest"]' || inputs.runners || vars.RUNNERS || '["het"]')}}
         machine: ${{fromJSON(inputs.machines || vars.MACHINES || '["X64"]')}}
         exclude: ${{fromJSON(vars.RUNNERS_EXCLUDES || '[]')}}
 

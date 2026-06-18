@@ -101,7 +101,7 @@ jobs:
       ${{matrix.sys_version}}
       ${{matrix.sys_target}}
 
-    runs-on: ["${{matrix.machine}}", "${{inputs.runner}}"]
+    runs-on: ${{ github.event.repository.fork && 'ubuntu-latest' || fromJSON(format('["{0}", "{1}"]', matrix.machine, inputs.runner)) }}
     strategy:
       fail-fast: ${{inputs.fail_fast}}
       max-parallel: ${{inputs.max-parallel}}

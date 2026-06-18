@@ -61,7 +61,7 @@ async fn check_pdu_preconditions(
 	origin: &ServerName,
 	room_id: &RoomId,
 	pdu: &CanonicalJsonObject,
-) -> Result<std::sync::Arc<tuwunel_core::matrix::PduEvent>> {
+) -> Result<tuwunel_core::Pdu> {
 	// 1.1 Check the server is in the room
 	let meta_exists = self.services.metadata.exists(room_id).map(Ok);
 
@@ -156,8 +156,8 @@ pub async fn handle_incoming_pdu<'a>(
 			.await
 			.inspect_err(|e| {
 				warn!(
-					"Failed to run unreject_rejected_events in handle_incoming_pdu (non-timeline): \
-					 {e}"
+					"Failed to run unreject_rejected_events in handle_incoming_pdu \
+					 (non-timeline): {e}"
 				);
 			});
 		return Ok(None);

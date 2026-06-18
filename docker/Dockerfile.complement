@@ -60,6 +60,7 @@ COPY <<EOF complement.toml
     allow_registration = true
     create_admin_room = false
     database_path = "/database"
+    db_pool_max_workers = 64
     dns_attempts = 20
     dns_timeout = 60
     error_on_unknown_config_opts = true
@@ -80,6 +81,7 @@ COPY <<EOF complement.toml
     request_timeout = 120
     rocksdb_log_level = "debug"
     rocksdb_max_log_files = 1
+    rocksdb_parallelism_threads = 2
     rocksdb_paranoid_file_checks = true
     rocksdb_recovery_mode = 0
     sender_idle_timeout = 300

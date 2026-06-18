@@ -22,6 +22,14 @@ pub(super) fn handle_login(
 		return Err!(Request(MissingToken("Missing appservice token.")));
 	};
 
+	// MSC4190: an appservice managing its own devices does not use appservice
+	// login; it creates devices directly via PUT /devices/{deviceId}.
+	if info.registration.device_management {
+		return Err!(Request(AppserviceLoginUnsupported(
+			"Appservice has MSC4190 device management enabled; appservice login is unsupported."
+		)));
+	}
+
 	let user_id = extract!(
 		identifier,
 		x in Some(uiaa::UserIdentifier::Matrix(uiaa::MatrixUserIdentifier { user: x, .. }))

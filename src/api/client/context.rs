@@ -159,10 +159,12 @@ pub(crate) async fn get_context_route(
 			.as_ref()
 			.map(ToString::to_string),
 
+		// `end` is one past the base so a backward page from it still yields the base;
+		// `start` stays at `base_count` (a bare count can't suit both directions).
 		end: events_after
 			.last()
 			.map(at!(0))
-			.or(Some(base_count))
+			.or_else(|| Some(base_count.saturating_add(1)))
 			.as_ref()
 			.map(ToString::to_string),
 

@@ -1,11 +1,15 @@
-use std::cmp;
+use std::cmp::{self, Ordering};
 
 use futures::{FutureExt, StreamExt};
-use ruma::{MxcUri, OwnedUserId, RoomId, UserId, events::room::member::MembershipState};
+use ruma::{
+	MilliSecondsSinceUnixEpoch, MxcUri, OwnedRoomId, OwnedUserId, RoomId, UserId,
+	events::room::member::MembershipState,
+};
+use serde::Deserialize;
 use tuwunel_core::{
 	Err, Result, debug, debug_info, debug_warn, err, info,
 	itertools::Itertools,
-	matrix::PduCount,
+	matrix::{PduCount, pdu::RawPduId},
 	result::NotFound,
 	utils,
 	utils::{
@@ -16,7 +20,9 @@ use tuwunel_core::{
 };
 use tuwunel_database::{Deserialized, SEP};
 
-use crate::{Services, media};
+use crate::{Services, media, rooms::timeline::bias_count};
+
+mod conduit;
 
 /// The current schema version.
 /// - If database is opened at greater version we reject with error. The
@@ -39,8 +45,39 @@ pub(crate) async fn migrations(services: &Services) -> Result {
 		return fresh(services).await;
 	}
 
+	check_database_version(services).await?;
 	check_server_name(services).await?;
 	migrate(services).await
+}
+
+/// Gate the discovered schema version before migrations and the server_name
+/// backfill run. The integer is comparable only within tuwunel's own lineage; a
+/// foreign database (Conduit and forks) numbers schema on a colliding ladder
+/// and never writes SERVER_NAME_KEY, so its absence marks a foreign lineage
+/// whose number is not gated. Within our lineage a version below 13 is refused
+/// as unmigratable and one above this build as too new to open safely;
+/// force_migration overrides the latter for a deliberate downgrade.
+async fn check_database_version(services: &Services) -> Result {
+	let discovered = services.globals.db.database_version().await;
+
+	if discovered < 13 {
+		return Err!(Database("Database schema version {discovered} is no longer supported"));
+	}
+
+	let foreign_lineage = services.db["global"]
+		.get(SERVER_NAME_KEY)
+		.await
+		.is_not_found();
+
+	if discovered > DATABASE_VERSION && !foreign_lineage && !services.config.force_migration {
+		return Err!(Database(
+			"Database schema version {discovered} is newer than this build supports \
+			 ({DATABASE_VERSION}). Upgrade tuwunel, or set force_migration = true to open it \
+			 anyway; a downgrade may cause permanent data loss."
+		));
+	}
+
+	Ok(())
 }
 
 /// Matrix resource ownership is based on the server name; changing it
@@ -100,6 +137,7 @@ async fn fresh(services: &Services) -> Result {
 
 	db["global"].insert(SERVER_NAME_KEY, services.server.name.as_str());
 	db["global"].insert(b"feat_sha256_media", []);
+	db["global"].insert(b"fix_pdu_missing_room_id", []);
 	db["global"].insert(b"fix_bad_double_separator_in_state_cache", []);
 	db["global"].insert(b"retroactively_fix_bad_data_from_roomuserid_joined", []);
 	db["global"].insert(b"fix_referencedevents_missing_sep", []);
@@ -107,6 +145,7 @@ async fn fresh(services: &Services) -> Result {
 	db["global"].insert(b"fix_hashed_sentinel_passwords", []);
 	db["global"].insert(b"upgrade_legacy_mediaid_user", []);
 	db["global"].insert(b"remove_remote_media_userid", []);
+	db["global"].insert(b"rebuild_roomid_tscount_pducount", []);
 
 	// Create the admin room and server user on first run
 	if services.config.create_admin_room {
@@ -123,26 +162,18 @@ async fn fresh(services: &Services) -> Result {
 /// Apply any migrations
 async fn migrate(services: &Services) -> Result {
 	let db = &services.db;
-	let config = &services.server.config;
 
 	let target_version = DATABASE_VERSION;
-	let discovered_version = async || services.globals.db.database_version().await;
 
-	if discovered_version().await < 13 {
-		return Err!(Database(
-			"Database schema version {} is no longer supported",
-			discovered_version().await,
-		));
-	}
+	migrate_media(services).await?;
 
 	if db["global"]
-		.get(b"feat_sha256_media")
+		.get(b"fix_pdu_missing_room_id")
 		.await
 		.is_not_found()
 	{
-		media::migrations::migrate_sha256_media(services).await?;
-	} else if config.media_startup_check {
-		media::migrations::checkup_sha256_media(services).await?;
+		conduit::migrate_conduit_pdus(services).await?;
+		db["global"].insert(b"fix_pdu_missing_room_id", []);
 	}
 
 	if db["global"]
@@ -201,35 +232,31 @@ async fn migrate(services: &Services) -> Result {
 		remove_remote_media_userid(services).await?;
 	}
 
-	if discovered_version().await < target_version {
-		services
-			.globals
-			.db
-			.bump_database_version(target_version);
-
-		info!(
-			"Database: Migrated schema version from {} to {target_version}",
-			discovered_version().await
-		);
-	} else if discovered_version().await != target_version && config.force_migration {
-		services
-			.globals
-			.db
-			.bump_database_version(target_version);
-
-		warn!(
-			"Database: Forced migration from schema version {} to {target_version}",
-			discovered_version().await,
-		);
+	if db["global"]
+		.get(b"rebuild_roomid_tscount_pducount")
+		.await
+		.is_not_found()
+	{
+		rebuild_roomid_tscount_pducount(services).await?;
 	}
 
-	assert_eq!(
-		target_version,
-		discovered_version().await,
-		"Failed asserting local database version {} is equal to known latest tuwunel database \
-		 version {target_version}",
-		discovered_version().await,
-	);
+	// A newer same-lineage database was already refused; stamping ours is safe.
+	let discovered = services.globals.db.database_version().await;
+
+	services
+		.globals
+		.db
+		.bump_database_version(target_version);
+
+	match discovered.cmp(&target_version) {
+		| Ordering::Less =>
+			info!("Database: migrated schema version from {discovered} to {target_version}."),
+		| Ordering::Greater => warn!(
+			"Database: stamped schema version {target_version} over a higher discovered version \
+			 {discovered} (forced downgrade or foreign import)."
+		),
+		| Ordering::Equal => {},
+	}
 
 	if !services.config.forbidden_usernames.is_empty() {
 		services
@@ -292,6 +319,38 @@ async fn migrate(services: &Services) -> Result {
 	Ok(())
 }
 
+/// Imports a Conduit database's content-addressed media into tuwunel's
+/// key-addressed store when it is present and not yet imported; otherwise runs
+/// the key-addressed media migrations.
+async fn migrate_media(services: &Services) -> Result {
+	let db = &services.db;
+	let config = &services.server.config;
+
+	let sha256_done = !db["global"]
+		.get(b"feat_sha256_media")
+		.await
+		.is_not_found();
+
+	// The foreign CF persists, so the marker (not its presence) is the latch.
+	if !sha256_done
+		&& db
+			.open_cf("servernamemediaid_metadata")?
+			.is_some()
+	{
+		conduit::migrate_conduit_media(services).await?;
+		db["global"].insert(b"feat_sha256_media", []);
+		return Ok(());
+	}
+
+	if !sha256_done {
+		media::migrations::migrate_sha256_media(services).await?;
+	} else if config.media_startup_check {
+		media::migrations::checkup_sha256_media(services).await?;
+	}
+
+	Ok(())
+}
+
 async fn fix_bad_double_separator_in_state_cache(services: &Services) -> Result {
 	warn!("Fixing bad double separator in state_cache roomuserid_joined");
 
@@ -307,10 +366,10 @@ async fn fix_bad_double_separator_in_state_cache(services: &Services) -> Result 
 			let mut key = key.to_vec();
 			iter_count = iter_count.saturating_add(1);
 			debug_info!(%iter_count);
-			let first_sep_index = key
-				.iter()
-				.position(|&i| i == 0xFF)
-				.expect("found 0xFF delim");
+			let Some(first_sep_index) = key.iter().position(|&i| i == 0xFF) else {
+				debug_warn!(?key, "roomuserid_joined key has no 0xFF separator; skipping");
+				return;
+			};
 
 			if key
 				.iter()
@@ -381,7 +440,7 @@ async fn retroactively_fix_bad_data_from_roomuserid_joined(services: &Services) 
 					.state_accessor
 					.get_member(room_id, user_id)
 					.map(|member| {
-						member.is_ok_and(|member| member.membership == MembershipState::Join)
+						member.is_ok_and(|member| member.membership != MembershipState::Join)
 					})
 			})
 			.collect::<Vec<_>>()
@@ -680,5 +739,45 @@ async fn remove_remote_media_userid(services: &Services) -> Result {
 	);
 
 	db["global"].insert(b"remove_remote_media_userid", []);
+	db.engine.sort()
+}
+
+#[derive(Deserialize)]
+struct PduRoomTs {
+	room_id: OwnedRoomId,
+	origin_server_ts: MilliSecondsSinceUnixEpoch,
+}
+
+async fn rebuild_roomid_tscount_pducount(services: &Services) -> Result {
+	let db = &services.db;
+	let cork = db.cork_and_sync();
+	let pduid_pdu = db["pduid_pdu"].clone();
+	let roomid_tscount_pducount = db["roomid_tscount_pducount"].clone();
+
+	warn!("Rebuilding roomid_tscount_pducount index for same-timestamp event ordering");
+
+	let count = pduid_pdu
+		.raw_stream()
+		.ignore_err()
+		.ready_fold(0_usize, |count, (key, value)| {
+			let Ok(pdu) = serde_json::from_slice::<PduRoomTs>(value) else {
+				return count;
+			};
+
+			let ts = u64::from(pdu.origin_server_ts.get());
+			let pdu_id = RawPduId::from(key);
+			let count_key = bias_count(pdu_id.count());
+			let room_id: &RoomId = &pdu.room_id;
+
+			roomid_tscount_pducount.put_raw((room_id, ts, count_key), pdu_id.count());
+
+			count.saturating_add(1)
+		})
+		.await;
+
+	drop(cork);
+	info!(%count, "Rebuilt roomid_tscount_pducount index");
+
+	db["global"].insert(b"rebuild_roomid_tscount_pducount", []);
 	db.engine.sort()
 }

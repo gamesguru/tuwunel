@@ -183,6 +183,7 @@ rustflags = [
 static_rustflags = [
     "-C relocation-model=static",
     "-C target-feature=+crt-static",
+    "-C link-arg=-Wno-unused-command-line-argument",
 ]
 
 static_libs = [
@@ -1943,6 +1944,7 @@ target "ingredients" {
         )
         RUST_BACKTRACE = "full"
         ROCKSDB_LIB_DIR="/usr/lib/${sys_target_triple(sys_target)}"
+        ROCKSDB_INCLUDE_DIR="/usr/lib/${sys_target_triple(sys_target)}/include"
         JEMALLOC_OVERRIDE="/usr/lib/${sys_target_triple(sys_target)}/libjemalloc.a"
         ZSTD_SYS_USE_PKG_CONFIG = (
             contains(split(",", cargo_feat_sets[feat_set]), "zstd_compression")? 1: 0

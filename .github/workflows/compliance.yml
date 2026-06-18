@@ -41,6 +41,10 @@ on:
       metrics_artifact_prefix:
         type: string
         description: Runtime-metrics artifact prefix
+      runtime_history:
+        type: boolean
+        default: false
+        description: Maintain a runtime-metrics history digest in the Actions cache
       cargo_profiles:
         type: string
       feat_sets:
@@ -108,6 +112,24 @@ jobs:
       run: |
         ${{inputs.script}}
 
+    - if: inputs.runtime_history && (success() || (failure() && steps.execute.outcome == 'failure'))
+      name: Restore Runtime History
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{runner.temp}}/digest/${{github.ref_name}}.json
+        key: rt-digest-${{github.ref_name}}-${{inputs.metrics_artifact_prefix}}-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}-${{github.run_id}}-${{github.run_attempt}}
+        restore-keys: |
+          rt-digest-${{github.ref_name}}-${{inputs.metrics_artifact_prefix}}-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}-
+
+    - if: inputs.runtime_history && github.ref_name != (github.event.repository.default_branch || 'main') && (success() || (failure() && steps.execute.outcome == 'failure'))
+      name: Restore Main Baseline
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{runner.temp}}/digest/${{github.event.repository.default_branch || 'main'}}.json
+        key: rt-digest-${{github.event.repository.default_branch || 'main'}}-${{inputs.metrics_artifact_prefix}}-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}-readonly
+        restore-keys: |
+          rt-digest-${{github.event.repository.default_branch || 'main'}}-${{inputs.metrics_artifact_prefix}}-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}-
+
     - if: success() || (failure() && steps.execute.outcome == 'failure')
       name: Summarise
       id: summarise
@@ -116,6 +138,9 @@ jobs:
         sys_name: ${{matrix.sys_name}}
         sys_target: ${{matrix.sys_target}}
         GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
+        RUNTIME_DIGEST_OWN: ${{inputs.runtime_history && format('{0}/digest/{1}.json', runner.temp, github.ref_name) || ''}}
+        RUNTIME_DIGEST_MAIN: ${{(inputs.runtime_history && github.ref_name != (github.event.repository.default_branch || 'main')) && format('{0}/digest/{1}.json', runner.temp, github.event.repository.default_branch || 'main') || ''}}
+        RUNTIME_DIGEST_KEEP: ${{github.ref_name == (github.event.repository.default_branch || 'main') && '1' || '3'}}
       run: |
         ${{inputs.summariser}}
 
@@ -144,6 +169,14 @@ jobs:
         name: ${{inputs.metrics_artifact_prefix}}-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}.tar.zst
         path: ./${{inputs.runtime_metrics_path}}
         if-no-files-found: ignore
+
+    - if: inputs.runtime_history && steps.execute.outcome == 'success'
+      name: Save Runtime History
+      continue-on-error: true
+      uses: actions/cache/save@v5
+      with:
+        path: ${{runner.temp}}/digest/${{github.ref_name}}.json
+        key: rt-digest-${{github.ref_name}}-${{inputs.metrics_artifact_prefix}}-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}-${{github.run_id}}-${{github.run_attempt}}
 
     - name: Accept
       id: accept

@@ -836,6 +836,20 @@ pub struct Config {
 	/// example: "/etc/tuwunel/.reg_shared_secret"
 	pub registration_shared_secret_file: Option<PathBuf>,
 
+	/// Shared secret the Matrix Authentication Service (MAS) authenticates its
+	/// provisioning calls with. When set, the `/_synapse/mas/*` endpoints
+	/// accept only requests bearing this exact secret as their bearer token,
+	/// rejecting all others; when unset, those endpoints reject every request.
+	///
+	/// Use a high-entropy value and keep it identical to the secret configured
+	/// on the MAS side.
+	///
+	/// reloadable: yes
+	/// example: "kZ2hN5pQ8wXyL4mR7tBfCgJxV3aD6sE1u"
+	///
+	/// display: sensitive
+	pub mas_secret: Option<String>,
+
 	/// Controls whether encrypted rooms and events are allowed.
 	/// reloadable: yes
 	#[serde(default = "true_fn")]
@@ -3017,6 +3031,29 @@ pub struct Config {
 	#[serde(default)]
 	pub force_migration: bool,
 
+	/// When importing a Conduit database in place, the filesystem path to
+	/// Conduit's media directory. Leave unset to use `<database_path>/media`,
+	/// which is Conduit's own default location.
+	///
+	/// example: "/var/lib/matrix-conduit/media"
+	pub conduit_source_media_path: Option<PathBuf>,
+
+	/// When importing a Conduit database, the sharding depth of Conduit's media
+	/// directory (0 for a flat directory). Must match the importing Conduit's
+	/// `media.directory_structure`; the default matches Conduit's own default
+	/// of `Deep { length = 2, depth = 2 }`.
+	///
+	/// default: 2
+	#[serde(default = "default_conduit_media_directory_depth")]
+	pub conduit_media_directory_depth: u8,
+
+	/// When importing a Conduit database, the shard-segment length of Conduit's
+	/// media directory. Paired with `conduit_media_directory_depth`.
+	///
+	/// default: 2
+	#[serde(default = "default_conduit_media_directory_length")]
+	pub conduit_media_directory_length: u8,
+
 	/// Set this to true for excluding unencrypted rooms from the common-rooms
 	/// calculation deciding the receivers of device list updates.
 	///
@@ -4147,6 +4184,10 @@ fn some_true_fn() -> Option<bool> { Some(true) }
 fn default_server_name() -> OwnedServerName { ruma::owned_server_name!("localhost") }
 
 fn default_database_path() -> PathBuf { "/var/lib/tuwunel".to_owned().into() }
+
+fn default_conduit_media_directory_depth() -> u8 { 2 }
+
+fn default_conduit_media_directory_length() -> u8 { 2 }
 
 fn default_port() -> ListeningPort { ListeningPort { ports: Left(8008) } }
 

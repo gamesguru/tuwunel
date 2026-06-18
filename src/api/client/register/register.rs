@@ -45,6 +45,19 @@ pub(crate) async fn register_route(
 
 	gate_registration_allowed(services, &body, is_guest)?;
 
+	// MSC4190: an appservice managing its own devices must register with
+	// inhibit_login set; it cannot mint a login session via /register.
+	if !body.inhibit_login
+		&& body
+			.appservice_info
+			.as_ref()
+			.is_some_and(|appservice| appservice.registration.device_management)
+	{
+		return Err!(Request(AppserviceLoginUnsupported(
+			"Appservice has MSC4190 device management enabled; inhibit_login must be true."
+		)));
+	}
+
 	let user_id =
 		resolve_registration_user_id(services, &body, is_guest, emergency_mode_enabled).await?;
 

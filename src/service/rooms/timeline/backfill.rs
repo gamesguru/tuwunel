@@ -5,7 +5,11 @@ use futures::{
 	future::{join, try_join, try_join4},
 };
 use rand::seq::SliceRandom;
-use ruma::{CanonicalJsonObject, EventId, RoomId, ServerName, events::TimelineEventType};
+use ruma::{
+	CanonicalJsonObject, EventId, MilliSecondsSinceUnixEpoch, OwnedEventId, RoomId, ServerName,
+	api::Direction, events::TimelineEventType,
+};
+use serde::Deserialize;
 use serde_json::value::RawValue as RawJsonValue;
 use tuwunel_core::{
 	Result, at, debug, debug_warn, implement, is_false,
@@ -21,7 +25,7 @@ use tuwunel_core::{
 };
 use tuwunel_database::Json;
 
-use super::ExtractBody;
+use super::{ExtractBody, bias_count};
 use crate::{
 	federation::Candidates,
 	fetcher::{Op, Opts},
@@ -29,6 +33,14 @@ use crate::{
 
 /// Events requested per backfill batch.
 const BACKFILL_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
+
+/// The `event_id` and timestamp parsed back out of an [`Op::TimestampToEvent`]
+/// fetch outcome.
+#[derive(Deserialize)]
+struct TimestampHit {
+	event_id: OwnedEventId,
+	origin_server_ts: MilliSecondsSinceUnixEpoch,
+}
 
 #[implement(super::Service)]
 #[tracing::instrument(name = "backfill", level = "debug", skip(self))]
@@ -65,6 +77,52 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 		return Ok(());
 	}
 
+	let eligible = self.backfill_candidates(room_id).await;
+
+	let no_backfill = || {
+		warn!(%room_id, "No servers could backfill, but backfill was needed");
+		Ok(())
+	};
+
+	// Empty here, rather than deferring to the fetcher, keeps backfill scoped to
+	// the authoritative servers; the fetcher would otherwise fall back to the
+	// room's whole population.
+	if eligible.is_empty() {
+		return no_backfill();
+	}
+
+	let opts = Opts::new(Op::Backfill, room_id.to_owned())
+		.event_id(first_pdu.event_id().to_owned())
+		.candidates(eligible)
+		.backfill_limit(BACKFILL_LIMIT);
+
+	let Ok(outcome) = self
+		.services
+		.fetcher
+		.fetch(opts)
+		.inspect_err(|e| warn!(%room_id, "Backfilling failed: {e}"))
+		.await
+	else {
+		return no_backfill();
+	};
+
+	let pdus: Vec<Box<RawJsonValue>> = serde_json::from_slice(&outcome.bytes)?;
+
+	pdus.into_iter()
+		.stream()
+		.for_each(async |pdu| {
+			self.backfill_pdu(room_id, &outcome.origin, pdu)
+				.await
+				.inspect_err(|e| debug_warn!(%room_id, "Failed to add backfilled pdu: {e}"))
+				.ok();
+		})
+		.await;
+
+	Ok(())
+}
+
+#[implement(super::Service)]
+async fn backfill_candidates(&self, room_id: &RoomId) -> Candidates {
 	let canonical_alias = self
 		.services
 		.state_accessor
@@ -125,7 +183,7 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 		.map(ToOwned::to_owned)
 		.stream();
 
-	let eligible: Candidates = power_servers
+	power_servers
 		.chain(canonical_room_alias_server)
 		.chain(trusted_servers)
 		.ready_filter(|server_name| !self.services.globals.server_is_ours(server_name))
@@ -137,34 +195,98 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 				.then_some(server_name)
 		})
 		.collect()
-		.await;
+		.await
+}
 
-	let no_backfill = || {
-		warn!(%room_id, "No servers could backfill, but backfill was needed");
-		Ok(())
+#[implement(super::Service)]
+pub async fn get_event_id_near_ts_with_fallback(
+	&self,
+	room_id: &RoomId,
+	ts: MilliSecondsSinceUnixEpoch,
+	dir: Direction,
+) -> Result<(MilliSecondsSinceUnixEpoch, OwnedEventId)> {
+	let local = self.get_event_id_near_ts(room_id, ts, dir).await;
+
+	// Federate on a local miss, or a forward hit at the start edge of our history.
+	let federate = match &local {
+		| Err(_) => true,
+		| Ok((_, event_id)) =>
+			dir == Direction::Forward && self.is_start_edge_hit(room_id, event_id).await,
 	};
 
-	// Empty here, rather than deferring to the fetcher, keeps backfill scoped to
-	// the authoritative servers; the fetcher would otherwise fall back to the
-	// room's whole population.
-	if eligible.is_empty() {
-		return no_backfill();
+	if !federate {
+		return local;
 	}
 
+	let candidates = self.backfill_candidates(room_id).await;
+	if candidates.is_empty() {
+		return local;
+	}
+
+	let opts = Opts::new(Op::TimestampToEvent, room_id.to_owned())
+		.ts(ts)
+		.dir(dir)
+		.candidates(candidates)
+		.checks(false);
+
+	let Ok(outcome) = self.services.fetcher.fetch(opts).await else {
+		return local;
+	};
+
+	let Ok(TimestampHit { event_id, origin_server_ts }) = serde_json::from_slice(&outcome.bytes)
+	else {
+		return local;
+	};
+
+	// Keep the local hit when it is no farther from the timestamp than the remote.
+	if let Ok((local_ts, local_id)) = &local
+		&& !nearer(dir, origin_server_ts, *local_ts)
+	{
+		return Ok((*local_ts, local_id.clone()));
+	}
+
+	// Fail closed: an un-ingested event can't be visibility-checked, so keep local.
+	let Ok(()) = self
+		.backfill_event(room_id, &event_id, &outcome.origin)
+		.await
+		.inspect_err(|e| debug_warn!(%room_id, "timestamp fallback backfill failed: {e}"))
+	else {
+		return local;
+	};
+
+	Ok((origin_server_ts, event_id))
+}
+
+#[implement(super::Service)]
+async fn is_start_edge_hit(&self, room_id: &RoomId, event_id: &EventId) -> bool {
+	self.first_item_in_room(room_id)
+		.await
+		.is_ok_and(|(_, first)| {
+			*first.event_type() != TimelineEventType::RoomCreate && first.event_id() == event_id
+		})
+}
+
+/// Whether `a` is nearer the queried timestamp than `b` for a search in `dir`.
+fn nearer(dir: Direction, a: MilliSecondsSinceUnixEpoch, b: MilliSecondsSinceUnixEpoch) -> bool {
+	match dir {
+		| Direction::Forward => a < b,
+		| Direction::Backward => a > b,
+	}
+}
+
+#[implement(super::Service)]
+async fn backfill_event(
+	&self,
+	room_id: &RoomId,
+	event_id: &EventId,
+	origin: &ServerName,
+) -> Result {
 	let opts = Opts::new(Op::Backfill, room_id.to_owned())
-		.event_id(first_pdu.event_id().to_owned())
-		.candidates(eligible)
+		.event_id(event_id.to_owned())
+		.candidates([origin.to_owned()])
 		.backfill_limit(BACKFILL_LIMIT);
 
-	let Ok(outcome) = self
-		.services
-		.fetcher
-		.fetch(opts)
-		.inspect_err(|e| warn!(%room_id, "Backfilling failed: {e}"))
-		.await
-	else {
-		return no_backfill();
-	};
+	let outcome = self.services.fetcher.fetch(opts).await?;
 
 	let pdus: Vec<Box<RawJsonValue>> = serde_json::from_slice(&outcome.bytes)?;
 
@@ -296,7 +418,9 @@ fn prepend_backfill_pdu(
 
 	self.db.eventid_outlierpdu.remove(event_id);
 
+	let count_key = bias_count(pdu_id.count());
+
 	self.db
-		.roomid_ts_pducount
-		.put_raw((room_id, origin_server_ts), pdu_id.count());
+		.roomid_tscount_pducount
+		.put_raw((room_id, origin_server_ts, count_key), pdu_id.count());
 }

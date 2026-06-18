@@ -26,7 +26,7 @@ pub(crate) async fn get_event_by_timestamp_route(
 	// get the closest event to the given timestamp
 	let (origin_server_ts, event_id) = services
 		.timeline
-		.get_event_id_near_ts(room_id, body.ts, body.dir)
+		.get_event_id_near_ts_with_fallback(room_id, body.ts, body.dir)
 		.await?;
 
 	if !services

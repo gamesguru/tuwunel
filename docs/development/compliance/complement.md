@@ -10,9 +10,9 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
   - ❌ `fail`: 32
   - ⬛ `skip`: 2
 
-- Subtests: 594. Passing: **71.5%**
-  - ✅ `pass`: 425
-  - ❌ `fail`: 156
+- Subtests: 594. Passing: **72.2%**
+  - ✅ `pass`: 429
+  - ❌ `fail`: 152
   - ⬛ `skip`: 13
 
 ## All Top-Level Tests
@@ -92,7 +92,7 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 | `TestJoinFederatedRoomWithUnverifiableEvents` | ✅ | 4/0/0 |
 | `TestJoinViaRoomIDAndServerName` | ✅ | – |
 | `TestJson` | ✅ | 3/0/0 |
-| `TestJumpToDateEndpoint` | 🟨 | 6/9/0 |
+| `TestJumpToDateEndpoint` | 🟨 | 10/5/0 |
 | `TestKeyChangesLocal` | ✅ | 1/0/0 |
 | `TestKeyClaimOrdering` | ✅ | – |
 | `TestKeysQueryWithDeviceIDAsObjectFails` | ✅ | – |

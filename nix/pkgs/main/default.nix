@@ -235,8 +235,13 @@ craneLib.buildPackage (
     nativeBuildInputs = (commonAttrs.nativeBuildInputs or [ ]) ++ [
       autoPatchelfHook
     ];
-    # This is needed for tests to link
-    LD_LIBRARY_PATH = lib.makeLibraryPath buildInputs;
+    # The check phase runs the freshly built test binaries before
+    # autoPatchelfHook rewrites their RPATH, so every shared library they
+    # load must be reachable through LD_LIBRARY_PATH. rocksdb' covers the
+    # system backend; stdenv.cc.cc supplies libstdc++.so.6, which the
+    # rust-rocksdb system backend links directly (rustc-link-lib=dylib=stdc++)
+    # rather than transitively through librocksdb.
+    LD_LIBRARY_PATH = lib.makeLibraryPath (buildInputs ++ [ stdenv.cc.cc ]);
 
     nativeCheckInputs = [
       pkgsBuildHost.libredirect.hook

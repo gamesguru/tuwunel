@@ -16,7 +16,7 @@ default_sys_target="x86_64-v1-linux-gnu"
 default_sys_version="testing-slim"
 
 default_playwright_run=".*"
-default_playwright_skip="Read.receipts"
+default_playwright_skip="Read.receipts|oidc-native|backups-mas|login-sso|soft_logout_oauth|register/email|forgot-password"
 default_playwright_shard="1/1"
 default_playwright_count=1
 default_playwright_workers=1
@@ -24,12 +24,16 @@ default_playwright_retries=0
 
 run="${1:-$default_playwright_run}"
 
-# Skip-list: alternation of regexes matched against test titles. Mirrors the
-# equivalent block in docker/complement.sh, and like it stays space-free so the
-# value survives the unquoted docker arg below. "Read.receipts" holds out the
-# entire read-receipts directory (every spec there nests under the "Read
-# receipts" describe; the dot matches that space) pending a fix for
-# position-blind notification counts.
+# Skip-list: alternation of regexes matched against each test id (its file path
+# and title). Mirrors the equivalent block in docker/complement.sh, and like it
+# stays space-free so the value survives the unquoted docker arg below.
+#   "Read.receipts" holds out the entire read-receipts directory (every spec
+# there nests under the "Read receipts" describe; the dot matches that space)
+# pending a fix for position-blind notification counts.
+#   The trailing stems hold out specs that need a MAS, OAuth, or SMTP sidecar
+# the harness does not provision (no-ops in docker/playwright.tuwunel.ts):
+# element-web builds those fixtures before its own homeserver-type skip, so
+# against tuwunel they error in setup instead of skipping themselves.
 skip="${default_playwright_skip}"
 
 set -a
@@ -42,9 +46,10 @@ sys_target="${sys_target:-$default_sys_target}"
 sys_version="${sys_version:-$default_sys_version}"
 set +a
 
-# Per-shard static-server port so concurrent shards on the shared host network
-# do not contend for a single :8080. Pairs SERVE_PORT (element-web CI
-# webServer) with BASE_URL (Playwright baseURL and health check).
+# Per-shard static-server port for the element-web CI webServer. The tester
+# serves and reaches the app over its own loopback (npx serve + Chromium share
+# the tester netns), so this only needs to be stable within a shard; pairs
+# SERVE_PORT with BASE_URL (Playwright baseURL and health check).
 shard_spec="${playwright_shard:-$default_playwright_shard}"
 base_port=$(( 8080 + ${shard_spec%%/*} - 1 ))
 
@@ -64,8 +69,15 @@ tester_image="playwright-tester--${sys_name}--${sys_version}--${sys_target}"
 testee_image="playwright-testee--${cargo_profile}--${rust_toolchain}--${rust_target}--${feat_set}--${sys_name}--${sys_version}--${sys_target}"
 shard_slug=$(printf '%s' "${playwright_shard:-$default_playwright_shard}" | tr '/' '_')
 name="playwright_tester__${sys_name}__${sys_version}__${sys_target}__${shard_slug}"
+# Per-shard user-defined bridge isolating this shard from the others sharing the
+# daemon. The tester and the testees it spawns join it; each testee binds the
+# container-internal :8008 in its own netns (no host port, no cross-shard port
+# contention) and is reached by container-name DNS. Off host networking, the
+# tester's Chromium no longer sees sibling veth churn (net::ERR_NETWORK_CHANGED).
+net="playwright_net__${sys_name}__${sys_version}__${sys_target}__${shard_slug}"
+envs="$envs -e PLAYWRIGHT_NETWORK=$net"
 sock="/var/run/docker.sock"
-arg="--name $name -v $sock:$sock --network=host $envs $tester_image"
+arg="--name $name -v $sock:$sock --network $net $envs $tester_image"
 set +x
 
 if test "$CI_VERBOSE_ENV" = "true"; then
@@ -74,6 +86,8 @@ if test "$CI_VERBOSE_ENV" = "true"; then
 fi
 
 docker rm -f "$name" 2>/dev/null || true
+docker network rm "$net" 2>/dev/null || true
+docker network create "$net" >/dev/null 2>&1 || true
 
 arg="-d $arg"
 cid=$(docker run $arg)
@@ -86,7 +100,12 @@ result_src="$cid:/playwright/out/results.json"
 result_dst="tests/playwright/results.json"
 output_src="$cid:/playwright/out/output.log"
 output_dst="tests/playwright/output.log"
-mkdir -p tests/playwright
+# Per-failure traces, videos, and error-context.md, which Playwright writes to
+# the config outputDir. Only populated when a test fails, so the upload step
+# ignores an empty result.
+artifacts_src="$cid:/usr/src/element-web/apps/web/playwright/test-results/."
+artifacts_dst="tests/playwright/test-results"
+mkdir -p tests/playwright "$artifacts_dst"
 
 extract_output() {
 	docker cp "$output_src" "$output_dst" 2>/dev/null || true
@@ -94,13 +113,17 @@ extract_output() {
 extract_results() {
 	docker cp "$result_src" "$result_dst" 2>/dev/null || true
 }
+extract_artifacts() {
+	docker cp "$artifacts_src" "$artifacts_dst" 2>/dev/null || true
+}
 
-trap 'extract_output; extract_results; set +x; date; echo -e "\033[1;41;37mERROR\033[0m"' ERR
-trap 'docker container stop $cid; extract_output; extract_results' INT
+trap 'extract_output; extract_results; extract_artifacts; set +x; date; echo -e "\033[1;41;37mERROR\033[0m"' ERR
+trap 'docker container stop $cid; extract_output; extract_results; extract_artifacts' INT
 docker logs -f "$cid"
 docker wait "$cid" >/dev/null 2>&1 || true
 
 extract_results
 extract_output
+extract_artifacts
 
 echo -e "\033[1;42;30mACCEPT\033[0m"

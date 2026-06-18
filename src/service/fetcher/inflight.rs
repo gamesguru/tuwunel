@@ -11,7 +11,7 @@ use std::{
 	sync::{Arc, Weak},
 };
 
-use ruma::{OwnedEventId, OwnedRoomId};
+use ruma::{MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, api::Direction};
 use tokio::sync::watch::{Receiver, Sender};
 use tuwunel_core::smallvec::SmallVec;
 
@@ -24,7 +24,7 @@ type WindowRefs<'a> = SmallVec<[&'a OwnedEventId; 1]>;
 /// Single-flight dedup key. `MissingEvents` keys on a content hash of its
 /// request window instead of a single event_id, so two callers asking for the
 /// same window coalesce regardless of event order; see [`window_hash`].
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct Key {
 	/// Endpoint class; two ops over the same event do not coalesce.
 	pub(super) op: Op,
@@ -38,6 +38,27 @@ pub(super) struct Key {
 	/// Content hash of the [`Op::MissingEvents`] window; `None` for every other
 	/// op, so their coalescing is byte-identical to before.
 	pub(super) window_hash: Option<u64>,
+
+	/// [`Op::TimestampToEvent`] search timestamp; `None` for every other op, so
+	/// distinct-timestamp queries for one room do not coalesce.
+	pub(super) ts: Option<MilliSecondsSinceUnixEpoch>,
+
+	/// [`Op::TimestampToEvent`] search direction; `None` for every other op, so
+	/// opposite-direction queries for one room do not coalesce.
+	pub(super) dir: Option<Direction>,
+}
+
+impl Hash for Key {
+	fn hash<H: Hasher>(&self, state: &mut H) {
+		self.op.hash(state);
+		self.room_id.hash(state);
+		self.event_id.hash(state);
+		self.window_hash.hash(state);
+		self.ts.hash(state);
+		self.dir
+			.map(|dir| matches!(dir, Direction::Forward))
+			.hash(state);
+	}
 }
 
 /// Outcome shared by every caller coalesced onto one fetch. Cheap to clone so
@@ -70,6 +91,8 @@ impl Key {
 			room_id: opts.room_id.clone(),
 			event_id: opts.event_id.clone(),
 			window_hash: matches!(opts.op, Op::MissingEvents).then(|| window_hash(opts)),
+			ts: opts.ts,
+			dir: opts.dir,
 		}
 	}
 }

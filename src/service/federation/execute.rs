@@ -17,7 +17,8 @@ use tuwunel_core::{
 };
 
 use super::{
-	Classification, ShouldAttempt,
+	ShouldAttempt,
+	peer::classify_error,
 	scheme::{FedAuth, FedPath},
 };
 use crate::{client::read_response_capped, resolver::actual::ActualDest};
@@ -102,7 +103,10 @@ where
 
 	match &result {
 		| Ok(_) => self.record_success(dest),
-		| Err(_) => self.record_failure(dest, Classification::Transient),
+		| Err(error) =>
+			if let Some(class) = classify_error(error) {
+				self.record_failure(dest, class);
+			},
 	}
 
 	result

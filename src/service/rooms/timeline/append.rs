@@ -22,7 +22,7 @@ use tuwunel_core::{
 };
 use tuwunel_database::Json;
 
-use super::{ExtractBody, ExtractRelatesTo, ExtractRelatesToEventId, RoomMutexGuard};
+use super::{ExtractBody, ExtractRelatesTo, ExtractRelatesToEventId, RoomMutexGuard, bias_count};
 use crate::rooms::{short::ShortRoomId, state_compressor::CompressedState};
 
 /// Append the incoming event setting the state snapshot to the state from
@@ -351,7 +351,9 @@ fn append_pdu_json(&self, pdu_id: &RawPduId, pdu: &PduEvent, json: &CanonicalJso
 		.remove(pdu.event_id.as_bytes());
 
 	let ts = u64::from(pdu.origin_server_ts);
+	let count_key = bias_count(pdu_id.count());
+
 	self.db
-		.roomid_ts_pducount
-		.put_raw((pdu.room_id(), ts), pdu_id.count());
+		.roomid_tscount_pducount
+		.put_raw((pdu.room_id(), ts, count_key), pdu_id.count());
 }

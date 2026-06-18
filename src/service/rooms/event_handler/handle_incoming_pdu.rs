@@ -56,27 +56,12 @@ type Handled = Option<(RawPduId, bool)>;
 /// 14. Check if the event passes auth based on the "current state" of the room,
 ///     if not soft fail it
 #[implement(super::Service)]
-#[tracing::instrument(
-	name = "pdu",
-	level = INFO_SPAN_LEVEL,
-	skip_all,
-	fields(%room_id, %event_id),
-	ret(level = "debug"),
-)]
-pub async fn handle_incoming_pdu<'a>(
-	&'a self,
-	origin: &'a ServerName,
-	room_id: &'a RoomId,
-	event_id: &'a EventId,
-	pdu: CanonicalJsonObject,
-	is_timeline_event: bool,
-) -> Result<Handled> {
-	// 1. Skip the PDU if we already have it as a timeline event
-	if let Ok(pdu_id) = self.services.timeline.get_pdu_id(event_id).await {
-		debug!(?pdu_id, "Exists.");
-		return Ok(Some((pdu_id, false)));
-	}
-
+async fn check_pdu_preconditions(
+	&self,
+	origin: &ServerName,
+	room_id: &RoomId,
+	pdu: &CanonicalJsonObject,
+) -> Result<std::sync::Arc<tuwunel_core::matrix::PduEvent>> {
 	// 1.1 Check the server is in the room
 	let meta_exists = self.services.metadata.exists(room_id).map(Ok);
 
@@ -107,7 +92,7 @@ pub async fn handle_incoming_pdu<'a>(
 			.state_accessor
 			.room_state_get(room_id, &StateEventType::RoomCreate, "");
 
-	let (meta_exists, is_disabled, (), (), ref create_event) = try_join5(
+	let (meta_exists, is_disabled, (), (), create_event) = try_join5(
 		meta_exists,
 		is_disabled,
 		origin_acl_check,
@@ -124,7 +109,36 @@ pub async fn handle_incoming_pdu<'a>(
 		return Err!(Request(Forbidden("Federation of this room is disabled by this server.")));
 	}
 
-	let room_version = room_version::from_create_event(create_event)?;
+	Ok(create_event)
+}
+
+#[implement(super::Service)]
+#[tracing::instrument(
+	name = "pdu",
+	level = INFO_SPAN_LEVEL,
+	skip_all,
+	fields(%room_id, %event_id),
+	ret(level = "debug"),
+)]
+pub async fn handle_incoming_pdu<'a>(
+	&'a self,
+	origin: &'a ServerName,
+	room_id: &'a RoomId,
+	event_id: &'a EventId,
+	pdu: CanonicalJsonObject,
+	is_timeline_event: bool,
+) -> Result<Handled> {
+	// 1. Skip the PDU if we already have it as a timeline event
+	if let Ok(pdu_id) = self.services.timeline.get_pdu_id(event_id).await {
+		debug!(?pdu_id, "Exists.");
+		return Ok(Some((pdu_id, false)));
+	}
+
+	let create_event = self
+		.check_pdu_preconditions(origin, room_id, &pdu)
+		.await?;
+
+	let room_version = room_version::from_create_event(&create_event)?;
 	let recursion_level = 0;
 
 	let (incoming_pdu, pdu) = self
@@ -137,15 +151,15 @@ pub async fn handle_incoming_pdu<'a>(
 			kind = ?incoming_pdu.event_type(),
 			"Not a timeline event.",
 		);
-		if let Err(e) = self
+		let _: Result<()> = self
 			.unreject_rejected_events(origin, room_id, &room_version)
 			.await
-		{
-			warn!(
-				"Failed to run unreject_rejected_events in handle_incoming_pdu (non-timeline): \
-				 {e}"
-			);
-		}
+			.inspect_err(|e| {
+				warn!(
+					"Failed to run unreject_rejected_events in handle_incoming_pdu (non-timeline): \
+					 {e}"
+				);
+			});
 		return Ok(None);
 	}
 
@@ -250,12 +264,12 @@ pub async fn handle_incoming_pdu<'a>(
 		.await;
 
 	if res.is_ok() {
-		if let Err(e) = self
+		let _: Result<()> = self
 			.unreject_rejected_events(origin, room_id, &room_version)
 			.await
-		{
-			warn!("Failed to run unreject_rejected_events in handle_incoming_pdu: {e}");
-		}
+			.inspect_err(|e| {
+				warn!("Failed to run unreject_rejected_events in handle_incoming_pdu: {e}");
+			});
 	}
 
 	res

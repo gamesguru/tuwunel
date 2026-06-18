@@ -104,11 +104,19 @@ where
 					{
 						if next_id == id {
 							pdus.push((pdu, Some(json)));
+							let _: tuwunel_core::Result = self
+								.unreject_rejected_events(origin, room_id, room_version)
+								.await
+								.inspect_err(|e| {
+									warn!(
+										?room_id,
+										?origin,
+										"Failed to run unreject_rejected_events in fetch_auth: \
+										 {e:?}"
+									);
+								});
 						}
 						self.record_success(Context::Auth, &next_id).await;
-						let _: tuwunel_core::Result = self
-							.unreject_rejected_events(origin, room_id, room_version)
-							.await;
 					} else {
 						self.record_outcome(Context::Auth, &next_id, Disposition::Transient);
 					}

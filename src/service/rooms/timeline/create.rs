@@ -25,7 +25,6 @@ use tuwunel_core::{
 
 use super::RoomMutexGuard;
 use crate::rooms::state_res;
-
 #[implement(super::Service)]
 async fn determine_room_version(
 	&self,
@@ -33,26 +32,29 @@ async fn determine_room_version(
 	event_type: &TimelineEventType,
 	content: &serde_json::value::RawValue,
 ) -> Result<(ruma::RoomVersionId, RoomVersionRules)> {
-	self.services
+	let room_version = match self
+		.services
 		.state
 		.get_room_version(room_id)
 		.await
-		.or_else(|_| {
-			if *event_type == TimelineEventType::RoomCreate {
+	{
+		| Ok(version) => version,
+		| Err(e) => {
+			let is_not_found = match &e {
+				| Error::Request(ruma::api::error::ErrorKind::NotFound, ..) => true,
+				| _ => false,
+			};
+			if is_not_found && *event_type == TimelineEventType::RoomCreate {
 				let content: RoomCreateEventContent = serde_json::from_str(content.get())?;
-				Ok(content.room_version)
+				content.room_version
 			} else {
-				Err(Error::InconsistentRoomState(
-					"non-create event for room of unknown version",
-					room_id.to_owned(),
-				))
+				return Err(e);
 			}
-		})
-		.and_then(|room_version| {
-			Ok((room_version.clone(), room_version::rules(&room_version)?))
-		})
-}
+		},
+	};
 
+	Ok((room_version.clone(), room_version::rules(&room_version)?))
+}
 #[implement(super::Service)]
 async fn calculate_depth(&self, prev_events: &PrevEvents) -> ruma::UInt {
 	prev_events
@@ -76,16 +78,32 @@ async fn build_unsigned_field(
 	unsigned_opt: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 ) -> Result<Option<Box<serde_json::value::RawValue>>> {
 	let mut unsigned = unsigned_opt.unwrap_or_default();
-	if let Some(state_key) = state_key
-		&& let Ok(prev_pdu) = self
+	if let Some(state_key) = state_key {
+		match self
 			.services
 			.state_accessor
 			.room_state_get(room_id, &event_type.to_string().into(), state_key)
 			.await
-	{
-		unsigned.insert("prev_content".to_owned(), prev_pdu.get_content_as_value());
-		unsigned.insert("prev_sender".to_owned(), serde_json::to_value(prev_pdu.sender())?);
-		unsigned.insert("replaces_state".to_owned(), serde_json::to_value(prev_pdu.event_id())?);
+		{
+			| Ok(prev_pdu) => {
+				unsigned.insert("prev_content".to_owned(), prev_pdu.get_content_as_value());
+				unsigned
+					.insert("prev_sender".to_owned(), serde_json::to_value(prev_pdu.sender())?);
+				unsigned.insert(
+					"replaces_state".to_owned(),
+					serde_json::to_value(prev_pdu.event_id())?,
+				);
+			},
+			| Err(e) => {
+				let is_not_found = match &e {
+					| Error::Request(ruma::api::error::ErrorKind::NotFound, ..) => true,
+					| _ => false,
+				};
+				if !is_not_found {
+					return Err(e);
+				}
+			},
+		}
 	}
 
 	if unsigned.is_empty() {

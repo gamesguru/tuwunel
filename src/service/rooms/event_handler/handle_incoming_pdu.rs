@@ -137,8 +137,15 @@ pub async fn handle_incoming_pdu<'a>(
 			kind = ?incoming_pdu.event_type(),
 			"Not a timeline event.",
 		);
-		self.unreject_rejected_events(origin, room_id, &room_version)
-			.await?;
+		if let Err(e) = self
+			.unreject_rejected_events(origin, room_id, &room_version)
+			.await
+		{
+			warn!(
+				"Failed to run unreject_rejected_events in handle_incoming_pdu (non-timeline): \
+				 {e}"
+			);
+		}
 		return Ok(None);
 	}
 
@@ -243,8 +250,12 @@ pub async fn handle_incoming_pdu<'a>(
 		.await;
 
 	if res.is_ok() {
-		self.unreject_rejected_events(origin, room_id, &room_version)
-			.await?;
+		if let Err(e) = self
+			.unreject_rejected_events(origin, room_id, &room_version)
+			.await
+		{
+			warn!("Failed to run unreject_rejected_events in handle_incoming_pdu: {e}");
+		}
 	}
 
 	res

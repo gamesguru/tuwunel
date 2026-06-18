@@ -28,42 +28,47 @@ pub fn unreject_rejected_events<'a>(
 
 		let room_rules = room_version::rules(room_version)?;
 
+		let mut rejected_outliers = Vec::new();
+		let mut db_stream = Box::pin(
+			self.services
+				.timeline
+				.db
+				.eventid_outlierpdu
+				.stream::<OwnedEventId, CanonicalJsonObject>(),
+		);
+
+		while let Some(item_res) = db_stream.next().await {
+			let Ok(item) = item_res else {
+				continue;
+			};
+
+			let pdu_room_id = item
+				.1
+				.get("room_id")
+				.and_then(CanonicalJsonValue::as_str);
+
+			if pdu_room_id != Some(room_id.as_str()) {
+				continue;
+			}
+
+			let is_rejected = item
+				.1
+				.get("rejected")
+				.and_then(CanonicalJsonValue::as_bool)
+				.unwrap_or(false);
+
+			if !is_rejected {
+				continue;
+			}
+
+			rejected_outliers.push(item);
+		}
+
 		loop {
 			let mut promoted_this_pass = false;
-			let mut stream = Box::pin(
-				self.services
-					.timeline
-					.db
-					.eventid_outlierpdu
-					.stream::<OwnedEventId, CanonicalJsonObject>(),
-			);
 
-			while let Some(item_res) = stream.next().await {
-				let Ok(item) = item_res else {
-					continue;
-				};
-
-				let pdu_room_id = item
-					.1
-					.get("room_id")
-					.and_then(CanonicalJsonValue::as_str);
-
-				if pdu_room_id != Some(room_id.as_str()) {
-					continue;
-				}
-
-				let is_rejected = item
-					.1
-					.get("rejected")
-					.and_then(CanonicalJsonValue::as_bool)
-					.unwrap_or(false);
-
-				if !is_rejected {
-					continue;
-				}
-
-				let event_id = &item.0;
-				let mut pdu_json = item.1;
+			for i in 0..rejected_outliers.len() {
+				let (event_id, pdu_json) = &rejected_outliers[i];
 
 				// Convert to PduEvent
 				let Ok((event, _)) = PduEvent::from_object_federation(
@@ -131,6 +136,7 @@ pub fn unreject_rejected_events<'a>(
 
 					match handle_res {
 						| Ok(_) => {
+							let mut pdu_json = pdu_json.clone();
 							// Remove the "rejected" flag
 							pdu_json.remove("rejected");
 
@@ -139,6 +145,7 @@ pub fn unreject_rejected_events<'a>(
 								.timeline
 								.add_pdu_outlier(event_id, &pdu_json);
 
+							rejected_outliers.swap_remove(i);
 							promoted_this_pass = true;
 							break;
 						},

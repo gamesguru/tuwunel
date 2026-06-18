@@ -3,6 +3,8 @@ mod format;
 mod peer;
 mod rank;
 pub mod scheme;
+#[cfg(test)]
+mod tests;
 
 use std::{sync::Arc, time::Duration};
 

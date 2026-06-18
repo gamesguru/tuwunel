@@ -76,8 +76,7 @@ pub(crate) fn is_empty_account_data_event<T>(event: &Raw<T>) -> bool {
 	}
 
 	serde_json::from_str::<ContentOnly<'_>>(event.json().get())
-		.ok()
-		.is_some_and(|c| is_empty_object_json(c.content))
+		.is_ok_and(|c| is_empty_object_json(c.content))
 }
 
 fn is_empty_object_json(s: &RawJsonValue) -> bool {

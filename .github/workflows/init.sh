@@ -1,7 +1,33 @@
 #!/bin/bash
 
 set +e
-docker buildx inspect "${GITHUB_ACTOR}"
+
+builder="${GITHUB_ACTOR}"
+seed_builder="${seed_builder:-jevolk}"
+
+# Commit-message (or workflow_dispatch) directives controlling the per-actor
+# buildx builder, so the runner cache can be reset without an ssh trip:
+#   [ci clean]          discard the builder so it is recreated from scratch,
+#                       picking up the current nightly toolchain and a fresh
+#                       buildkit.
+#   [ci clean nocache]  ...and recreate cold, skipping the seed-from-seed_builder
+#                       step below.
+#   [ci clean-rust]     refresh the rust toolchain. A rust-and-above prune that
+#                       keeps the base system is not matchable by buildx, so for
+#                       now this settles for the same cold rebuild as nocache.
+clean=
+nocache=
+case "$pipeline" in
+*"[ci clean nocache]"*) clean=1; nocache=1 ;;
+*"[ci clean-rust]"*)    clean=1; nocache=1 ;;
+*"[ci clean]"*)         clean=1 ;;
+esac
+
+if test -n "$clean"; then
+	docker buildx rm "$builder"
+fi
+
+docker buildx inspect "$builder"
 if test x"$?" = x"0"; then
 	exit 0
 fi
@@ -81,9 +107,49 @@ cat <<EOF > ./buildkitd.toml
   all = true
 EOF
 
-docker buildx create \
-	--bootstrap \
-	--driver docker-container \
-	--buildkitd-config ./buildkitd.toml \
-	--name "${GITHUB_ACTOR}" \
-	--buildkitd-flags "--allow-insecure-entitlement network.host"
+# Seed a brand-new builder from seed_builder's cache so it starts warm instead
+# of from scratch; buildkit reuses the layers that match and rebuilds the rest
+# per the new actor's needs. The buildkit state lives in a docker volume named
+# for the builder, so the seed is a volume copy done before bootstrap. When the
+# seed builder is absent (its state volume does not exist), or for the seed
+# builder itself, [ci clean nocache], and [ci clean-rust], this is skipped and
+# the builder is cold-created.
+seed_state="buildx_buildkit_${seed_builder}0_state"
+this_state="buildx_buildkit_${builder}0_state"
+seeded=
+if test -z "$nocache" \
+	&& test "$builder" != "$seed_builder" \
+	&& docker volume inspect "$seed_state" >/dev/null 2>&1
+then
+	docker volume create "$this_state"
+	if docker run --rm \
+		-v "${seed_state}:/seed:ro" \
+		-v "${this_state}:/state" \
+		busybox sh -c 'cp -a /seed/. /state/'
+	then
+		seeded=1
+	else
+		docker volume rm -f "$this_state"
+	fi
+fi
+
+create_builder() {
+	docker buildx create \
+		--bootstrap \
+		--driver docker-container \
+		--buildkitd-config ./buildkitd.toml \
+		--name "$builder" \
+		--buildkitd-flags "--allow-insecure-entitlement network.host"
+}
+
+# A seed copied from a live builder can carry a torn cache.db; if bootstrap
+# rejects it, discard the seed and cold-start so a build is never blocked.
+if ! create_builder; then
+	if test -n "$seeded"; then
+		docker buildx rm "$builder" || true
+		docker volume rm -f "$this_state" || true
+		create_builder
+	else
+		exit 1
+	fi
+fi

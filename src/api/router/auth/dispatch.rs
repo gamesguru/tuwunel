@@ -9,7 +9,7 @@ use ruma::{
 		},
 		client::voip::get_turn_server_info,
 		error::{ErrorKind, UnknownTokenErrorData},
-		federation::{authentication::ServerSignatures, openid::get_openid_userinfo},
+		federation::authentication::ServerSignatures,
 	},
 };
 use tuwunel_core::{Err, Error, Result};
@@ -69,25 +69,16 @@ impl AuthDispatch for NoAuthentication {
 	const SCHEME: Scheme = Scheme::None;
 
 	async fn dispatch(
-		services: &Services,
-		request: &mut Request,
+		_services: &Services,
+		_request: &mut Request,
 		_json_body: Option<&CanonicalJsonValue>,
 		token: Token,
-		route: TypeId,
+		_route: TypeId,
 	) -> Result<Auth> {
 		match token {
-			| Token::Invalid
-				if request.query.access_token.is_some()
-					&& route == TypeId::of::<get_openid_userinfo::v1::Request>() =>
-			{
-				// OpenID federation endpoint uses a query param with the same name; drop
-				// once query params for user auth are removed from the spec. Required to
-				// make the integration manager work.
-				Ok(Auth::default())
-			},
-
-			| Token::Invalid => unknown_token(),
-			| Token::Expired(access_token) => expired_token(services, &access_token).await,
+			// check_auth_still_required already enforced any auth-required config for
+			// these no-auth routes, so a stale or unknown token serves anonymously.
+			| Token::Invalid | Token::Expired(_) | Token::None => Ok(Auth::default()),
 
 			| Token::User(user) => Ok(Auth {
 				sender_user: Some(user.0),
@@ -100,8 +91,6 @@ impl AuthDispatch for NoAuthentication {
 				appservice_info: Some(*info),
 				..Auth::default()
 			}),
-
-			| Token::None => Ok(Auth::default()),
 		}
 	}
 }

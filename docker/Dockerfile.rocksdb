@@ -2,7 +2,7 @@
 
 FROM input AS rocksdb-fetch
 ARG rocksdb_branch="tuwunel-changes"
-ARG rust_rocksdb_branch="conduwuit-changes"
+ARG rust_rocksdb_branch="tuwunel-changes"
 ARG librocksdb_submodule="librocksdb-sys/rocksdb"
 
 WORKDIR /usr/src
@@ -90,3 +90,9 @@ EOF
 
 FROM scratch AS rocksdb
 COPY --from=rocksdb-build /usr/src/rocksdb/librocksdb-sys/rocksdb/build/librocksdb.* .
+# Ship the matching public headers next to the prebuilt library. The cargo
+# stage compiles the crate's local C-API extensions against a system rocksdb
+# (ROCKSDB_LIB_DIR), and both that compile and bindgen need rocksdb/c.h. These
+# headers are the exact sources librocksdb.* was built from, so ROCKSDB_INCLUDE_DIR
+# can point here without version skew.
+COPY --from=rocksdb-build /usr/src/rocksdb/librocksdb-sys/rocksdb/include ./include

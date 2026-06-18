@@ -60,6 +60,7 @@ COPY <<EOF complement.toml
     allow_registration = true
     create_admin_room = false
     database_path = "/database"
+    db_pool_max_workers = 64
     dns_attempts = 20
     dns_timeout = 60
     error_on_unknown_config_opts = true
@@ -80,6 +81,7 @@ COPY <<EOF complement.toml
     request_timeout = 120
     rocksdb_log_level = "debug"
     rocksdb_max_log_files = 1
+    rocksdb_parallelism_threads = 2
     rocksdb_paranoid_file_checks = true
     rocksdb_recovery_mode = 0
     sender_idle_timeout = 300
@@ -136,7 +138,7 @@ ENTRYPOINT exec valgrind \
 FROM input AS complement-base
 ARG var_cache
 ARG var_lib_apt
-ARG complement_ref="9dfabc51befa0cd3773407e559eda89c4835e925"
+ARG complement_ref="127971d030d0213d0133cf6641aaae91e3d2fc25"
 ARG complement_tags="conduwuit_blacklist"
 ARG complement_tests="./tests/..."
 ARG complement_run=".*"

@@ -37,7 +37,7 @@ use tuwunel_core::{
 };
 use tuwunel_database::{Database, Deserialized, Json, Map};
 
-pub use self::pdus::PdusIterItem;
+pub use self::pdus::{PdusIterItem, bias_count};
 use crate::rooms::short::{ShortRoomId, ShortStateHash};
 
 pub struct Service {
@@ -50,7 +50,7 @@ struct Data {
 	eventid_outlierpdu: Arc<Map>,
 	eventid_pduid: Arc<Map>,
 	pduid_pdu: Arc<Map>,
-	roomid_ts_pducount: Arc<Map>,
+	roomid_tscount_pducount: Arc<Map>,
 	db: Arc<Database>,
 }
 
@@ -88,7 +88,7 @@ impl crate::Service for Service {
 				eventid_outlierpdu: args.db["eventid_outlierpdu"].clone(),
 				eventid_pduid: args.db["eventid_pduid"].clone(),
 				pduid_pdu: args.db["pduid_pdu"].clone(),
-				roomid_ts_pducount: args.db["roomid_ts_pducount"].clone(),
+				roomid_tscount_pducount: args.db["roomid_tscount_pducount"].clone(),
 				db: args.db.clone(),
 			},
 			mutex_insert: RoomMutexMap::new(),

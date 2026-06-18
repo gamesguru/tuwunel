@@ -14,6 +14,7 @@ COPY <<EOF /playwright/playwright.toml
     port = 8008
     server_name = "localhost"
     database_path = "/database"
+    db_pool_max_workers = 64
     allow_registration = true
     yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse = true
     allow_guest_registration = false
@@ -28,6 +29,7 @@ COPY <<EOF /playwright/playwright.toml
     log_thread_ids = false
     log_span_events = "NONE"
     media_startup_check = false
+    rocksdb_parallelism_threads = 2
     startup_netburst = false
     admin_room_notices = false
     create_admin_room = false
@@ -41,7 +43,7 @@ ENTRYPOINT tuwunel -Oserver_name=\""$SERVER_NAME\""
 # Playwright runtime image with element-web pre-built. The official Microsoft
 # Playwright image already ships pinned Chromium / Firefox / WebKit and their
 # system deps. Pin its version via ARG.
-FROM mcr.microsoft.com/playwright:v1.59.1-noble AS playwright-base
+FROM mcr.microsoft.com/playwright:v1.60.0-noble AS playwright-base
 ARG element_web_ref="develop"
 
 # corepack's bundled signing keys in this image are stale relative to current
@@ -55,6 +57,14 @@ WORKDIR /usr/src
 ADD https://github.com/element-hq/element-web.git#${element_web_ref} element-web
 
 WORKDIR /usr/src/element-web
+
+# element-web pins pnpm via devEngines.packageManager with onFail "error"; the
+# npm-installed pnpm above floats to latest and would hard-fail the version
+# check, including in the child pnpm a postinstall script spawns (which a CLI
+# --pm-on-fail flag cannot reach). Relax the gate to a warning at the source so
+# every pnpm process proceeds; devEngines is not part of the frozen lockfile.
+RUN node -e "const fs=require('fs'),p=require('./package.json');if(p.devEngines?.packageManager)p.devEngines.packageManager.onFail='warn';fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
+
 RUN --mount=type=cache,target=/root/.local/share/pnpm,sharing=locked \
     pnpm install --frozen-lockfile
 
@@ -74,6 +84,7 @@ cd /usr/src/element-web
 
 SERVICES=apps/web/playwright/services.ts
 CONFIG=apps/web/playwright.config.ts
+CONFIG_JSON=packages/playwright-common/src/utils/config_json.ts
 PLUGIN=apps/web/playwright/plugins/homeserver/index.ts
 
 # 1. services.ts: import + switch arm.
@@ -115,11 +126,21 @@ if ! grep -q 'SERVE_PORT' "$CONFIG"; then
     sed -i 's#serve -p 8080 -L ./webapp#serve -p ${SERVE_PORT:-8080} -L ./webapp#' "$CONFIG"
 fi
 
-# 5. Confirm overlays applied (grep, not playwright test --list, since the
+# 5. config_json.ts: the per-test config route hardcodes :8080, but each shard
+#    binds its own $SERVE_PORT, so on shards 2..N the route never matches and
+#    the browser falls through to the image's static matrix.org config.json;
+#    every UI-login spec then times out on the homeserver picker. Widen the
+#    port to a wildcard so the injected testee config reaches every shard.
+if ! grep -qF 'http://localhost:*/config.json' "$CONFIG_JSON"; then
+    sed -i 's#http://localhost:8080/config\.json\*#http://localhost:*/config.json*#' "$CONFIG_JSON"
+fi
+
+# 6. Confirm overlays applied (grep, not playwright test --list, since the
 #    playwright-common package's lib/ is not built yet).
 grep -q 'TuwunelContainer' "$SERVICES"
 grep -q 'name: "Tuwunel"' "$CONFIG"
 grep -q 'SERVE_PORT' "$CONFIG"
+grep -qF 'http://localhost:*/config.json' "$CONFIG_JSON"
 EOF
 RUN chmod +x /playwright/patch.sh && /playwright/patch.sh
 

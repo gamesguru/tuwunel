@@ -58,7 +58,7 @@ pub enum Error {
 	#[error(transparent)]
 	Extension(#[from] axum::extract::rejection::ExtensionRejection),
 	#[error(transparent)]
-	Figment(#[from] figment::error::Error),
+	Figment(Box<figment::error::Error>),
 	#[error(transparent)]
 	HtmlFormDe(#[from] serde_html_form::de::Error),
 	#[error(transparent)]
@@ -260,6 +260,12 @@ impl<T> From<PoisonError<T>> for Error {
 	#[cold]
 	#[inline(never)]
 	fn from(e: PoisonError<T>) -> Self { Self::Poison(e.to_string().into()) }
+}
+
+impl From<figment::error::Error> for Error {
+	#[cold]
+	#[inline(never)]
+	fn from(e: figment::error::Error) -> Self { Self::Figment(Box::new(e)) }
 }
 
 #[expect(clippy::fallible_impl_from)]

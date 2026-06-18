@@ -58,6 +58,7 @@ crypto/event-shields.spec.ts :: should show the correct shield on edited e2e eve
 crypto/history-sharing.spec.ts :: Messages sent when we believed the room history was unshared should not be visible
 crypto/history-sharing.spec.ts :: We should share history when sending invites
 crypto/invisible-crypto.spec.ts :: Messages fail to decrypt when sender is previously verified
+crypto/logout.spec.ts :: Ask to set up recovery on logout even if not in encrypted room
 crypto/logout.spec.ts :: Ask to set up recovery on logout if not setup
 crypto/logout.spec.ts :: If backup is set up show standard confirm
 crypto/logout.spec.ts :: Logout directly if the user has no room keys
@@ -88,6 +89,7 @@ knock/knock-into-room.spec.ts :: should knock into the room then knock is approv
 knock/knock-into-room.spec.ts :: should knock into the room then knock is approved and user joins the room then user is kicked and joins again
 knock/knock-into-room.spec.ts :: should knock into the room then knock is cancelled by another user and room is forgotten
 lazy-loading/lazy-loading.spec.ts :: should handle lazy loading properly even when offline
+left-panel/room-list-panel/room-list-custom-sections.spec.ts :: should accept drag and drop into a section created after another section exists
 left-panel/room-list-panel/room-list-custom-sections.spec.ts :: should add a room to a custom section via the More Options menu
 left-panel/room-list-panel/room-list-custom-sections.spec.ts :: should cancel section creation when dialog is dismissed
 left-panel/room-list-panel/room-list-custom-sections.spec.ts :: should collapse all sections when 'Collapse all sections' button is clicked
@@ -207,6 +209,7 @@ pinned-messages/pinned-messages.spec.ts :: should show the empty state when ther
 pinned-messages/pinned-messages.spec.ts :: should unpin all messages
 pinned-messages/pinned-messages.spec.ts :: should unpin one message
 polls/pollHistory.spec.ts :: Should display active and past polls
+polls/polls.spec.ts :: should be displayed correctly in thread panel
 read-receipts/editing-messages-thread-roots.spec.ts :: An edit of a thread root leaves the room read
 read-receipts/high-level.spec.ts :: Looking in thread view to find old threads that were never read makes the room unread
 read-receipts/high-level.spec.ts :: Paging up to find old threads that were never read keeps the room unread

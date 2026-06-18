@@ -1,7 +1,7 @@
 #!/usr/bin/env -S python3 -S
 """Aggregate Tuwunel runtime-metrics dumps from a Complement run."""
 
-import argparse, json, re, subprocess, sys, tarfile
+import argparse, json, os, re, subprocess, sys, tarfile, time
 from collections import defaultdict
 from pathlib import Path
 
@@ -289,24 +289,38 @@ def header_line(curr, version):
 	bits.append(f"{curr.get('testees', 0)} testees across {curr.get('tests', 0)} tests")
 	return ", ".join(bits) + "."
 
-def table_header(with_baseline, label):
-	if with_baseline:
-		return ["| Metric | This run | " + label + " | Δ |", "|---|---|---|---|"]
-	return ["| Metric | This run |", "|---|---|"]
+# Column model. Each column is (header, kind, agg):
+#   "this"  this run's value;  "delta"  signed % vs the column's agg (markers);
+#   "value" a prior run's raw value (no delta).
 
-def table_row(curr, baseline, label, fmt, direction, floor, with_baseline):
-	c = fmt(curr) if curr is not None else "n/a"
-	if not with_baseline:
-		return f"| {label} | {c} |"
-	p = fmt(baseline) if baseline is not None else "n/a"
-	d = fmt_delta(curr, baseline, direction, floor)
-	return f"| {label} | {c} | {p} | {d} |"
+def short_label(entry):
+	sha = (entry.get("sha") or "")[:7]
+	return sha or f"run {entry.get('run_id', '?')}"
 
-def render_table(agg, baseline, label):
-	with_b = baseline is not None
-	lines = table_header(with_b, label)
+def build_columns(curr, main_entry, history):
+	cols = [("This run", "this", curr)]
+	if main_entry is not None:
+		cols.append(("Δ vs main", "delta", main_entry["agg"]))
+		cols.append((f"main<br>`{short_label(main_entry)}`", "value", main_entry["agg"]))
+	for i, e in enumerate(history, start=1):
+		branch = e.get("branch") or "prev"
+		cols.append((f"{branch} −{i}<br>`{short_label(e)}`", "value", e["agg"]))
+	return cols
+
+def cell(curr, col, key, fmt, direction, floor):
+	_, kind, agg = col
+	if kind == "this":
+		v = curr.get(key); return fmt(v) if v is not None else "n/a"
+	if kind == "delta":
+		return fmt_delta(curr.get(key), agg.get(key), direction, floor)
+	v = agg.get(key); return fmt(v) if v is not None else "n/a"
+
+def render_table(curr, cols):
+	heads = " | ".join(c[0] for c in cols)
+	lines = ["| Metric | " + heads + " |", "|" + "---|" * (len(cols) + 1)]
 	for key, lbl, fmt, direction, floor in ROWS:
-		lines.append(table_row(agg.get(key), baseline.get(key) if with_b else None, lbl, fmt, direction, floor, with_b))
+		cells = " | ".join(cell(curr, c, key, fmt, direction, floor) for c in cols)
+		lines.append(f"| {lbl} | " + cells + " |")
 	return lines
 
 def hot_rss(rows, n=5):
@@ -325,15 +339,53 @@ def render_hot(title, items):
 	for name, value in items: out.append(f"- `{name}`: {value}")
 	return out
 
-def render(agg, baseline, rows, label, version):
-	out = ["", "#### Runtime metrics", "", header_line(agg, version), ""]
-	out += render_table(agg, baseline, label)
+def render(curr, cols, rows, version):
+	out = ["", "#### Runtime metrics", "", header_line(curr, version), ""]
+	out += render_table(curr, cols)
 	out += render_hot("Top 5 testees by peak RSS:", hot_rss(rows))
 	out += render_hot("Top 5 testees by CPU:", hot_cpu(rows))
-	if baseline is None:
-		out += ["", "_Baseline comparison unavailable; only current-run aggregates shown._"]
+	if len(cols) == 1:
+		out += ["", "_No baseline yet; history warms up over the next few green runs._"]
 	out.append("")
 	return "\n".join(out)
+
+###############################################################################
+# History ring buffer
+#
+# A small JSON document persisted per (branch, matrix slot) in the GitHub
+# Actions cache. Each green run prepends its aggregate and truncates to --keep;
+# reads tolerate a cold (absent) or corrupt cache.
+
+BUFFER_VERSION = 1
+
+def load_buffer(path):
+	if not path or not Path(path).is_file(): return None
+	try: buf = json.loads(Path(path).read_text(encoding="utf-8"))
+	except (OSError, json.JSONDecodeError): return None
+	return buf if isinstance(buf, dict) else None
+
+def buffer_runs(buf):
+	runs = buf.get("runs") if buf else None
+	return runs if isinstance(runs, list) else []
+
+def this_entry(agg):
+	env = os.environ
+	return {
+		"run_id":      env.get("GITHUB_RUN_ID", ""),
+		"run_attempt": env.get("GITHUB_RUN_ATTEMPT", ""),
+		"sha":         env.get("GITHUB_SHA", ""),
+		"branch":      env.get("GITHUB_REF_NAME", ""),
+		"ts":          int(time.time()),
+		"agg":         agg,
+	}
+
+def rotate(prev, entry, keep):
+	return {"v": BUFFER_VERSION, "runs": ([entry] + buffer_runs(prev))[:max(1, keep)]}
+
+def write_buffer(path, buf):
+	p = Path(path)
+	p.parent.mkdir(parents=True, exist_ok=True)
+	p.write_text(json.dumps(buf), encoding="utf-8")
 
 ###############################################################################
 # Entry point
@@ -344,8 +396,10 @@ def usable(path):
 def parse_args():
 	ap = argparse.ArgumentParser()
 	ap.add_argument("--tar", required=True)
-	ap.add_argument("--baseline-tar")
-	ap.add_argument("--baseline-label", default="Baseline (prev run)")
+	ap.add_argument("--history-in")
+	ap.add_argument("--main-in")
+	ap.add_argument("--history-out")
+	ap.add_argument("--keep", type=int, default=3)
 	ap.add_argument("--out", default="-")
 	ap.add_argument("--emit-json")
 	return ap.parse_args()
@@ -359,9 +413,16 @@ def main():
 	if not usable(args.tar): return 0
 	rows, version = load_tar(args.tar)
 	curr = aggregate(rows)
-	baseline = aggregate(load_tar(args.baseline_tar)[0]) if usable(args.baseline_tar) else None
+
+	prev_own = load_buffer(args.history_in)
+	history = buffer_runs(prev_own)[:max(0, args.keep)]
+	main_runs = buffer_runs(load_buffer(args.main_in))
+	main_entry = main_runs[0] if main_runs else None
+	cols = build_columns(curr, main_entry, history)
+
 	if args.emit_json: Path(args.emit_json).write_text(json.dumps(curr, indent=2))
-	write_out(args.out, render(curr, baseline, rows, args.baseline_label, version))
+	if args.history_out: write_buffer(args.history_out, rotate(prev_own, this_entry(curr), args.keep))
+	write_out(args.out, render(curr, cols, rows, version))
 	return 0
 
 if __name__ == "__main__":

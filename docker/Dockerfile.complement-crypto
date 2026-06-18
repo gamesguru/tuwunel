@@ -6,8 +6,9 @@ FROM input AS complement-crypto-deps
 ARG RUSTUP_HOME
 ARG CARGO_HOME
 ARG rust_toolchain
-ARG mrsdk_ref="tuwunel-changes"
-ARG complement_crypto_ref="63413be3a7d318d1c720a90f9e49054884ec657b"
+# matrix-sdk-ffi-0.18.0 release; carries SqliteStoreBuilder::key for complement-crypto.
+ARG mrsdk_ref="1c44fb66214667c6d00acaf72ab592493653708b"
+ARG complement_crypto_ref="989eb5491d3cf695a6e7d77a99989088a108ff3b"
 ARG MRSDK_TARGET_DIR="/usr/src/matrix-rust-sdk/target"
 
 ENV PATH="${CARGO_HOME}/bin:${PATH}"

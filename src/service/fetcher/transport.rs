@@ -9,12 +9,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use ruma::{
-	OwnedEventId, OwnedRoomId, ServerName, UInt,
+	MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, ServerName, UInt,
 	api::federation::{
 		authorization::get_event_authorization::v1::Request as EventAuthRequest,
 		backfill::get_backfill::v1::Request as BackfillRequest,
 		event::{
 			get_event::v1::Request as EventRequest,
+			get_event_by_timestamp::v1::Request as TimestampRequest,
 			get_missing_events::v1::Request as MissingEventsRequest,
 			get_room_state_ids::v1::Request as StateIdsRequest,
 		},
@@ -106,6 +107,21 @@ impl Transport for FederationTransport {
 
 				to_bytes(&res.events)
 			},
+			| Op::TimestampToEvent => {
+				let room_id = require_room_id(opts)?;
+				let ts = require_ts(opts)?;
+				let res = federation
+					.execute(
+						server,
+						TimestampRequest::new(room_id, ts, opts.dir.unwrap_or_default()),
+					)
+					.await?;
+
+				to_bytes(&serde_json::json!({
+					"event_id": res.event_id,
+					"origin_server_ts": res.origin_server_ts,
+				}))
+			},
 		}
 	}
 }
@@ -120,6 +136,11 @@ fn require_room_id(opts: &Opts) -> Result<OwnedRoomId> {
 	opts.room_id
 		.clone()
 		.ok_or_else(|| err!(Request(InvalidParam("room_id is required for op {:?}", opts.op))))
+}
+
+fn require_ts(opts: &Opts) -> Result<MilliSecondsSinceUnixEpoch> {
+	opts.ts
+		.ok_or_else(|| err!(Request(InvalidParam("ts is required for op {:?}", opts.op))))
 }
 
 fn require_latest_events(opts: &Opts) -> Result {

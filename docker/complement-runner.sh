@@ -32,6 +32,19 @@ set -x
 tester_image="${tester_image_prefix}--${sys_name}--${sys_version}--${sys_target}"
 testee_image="complement-testee--${cargo_profile}--${rust_toolchain}--${rust_target}--${feat_set}--${sys_name}--${sys_version}--${sys_target}"
 name="${container_name_prefix}__${sys_name}__${sys_version}__${sys_target}"
+
+# One CI job runs per runner registration, so RUNNER_NAME is unique across jobs
+# running at the same time and stable across a re-run on the same registration.
+# Hash it (with the cell name) into 12 lowercase hex chars: short, valid inside a
+# docker image repository name, and self-cleaning on re-run (the same token
+# recomputes, so the prior attempt's resources are reclaimed). This single token
+# both uniquifies the outer tester container and namespaces the inner Complement
+# resources (the patched harness reads COMPLEMENT_RUN_ID).
+run_seed="${RUNNER_NAME:-local-$$}"
+run_id=$(printf '%s' "${run_seed}-${name}" | sha1sum | cut -c1-12)
+name="${name}__${run_id}"
+envs="$envs -e COMPLEMENT_RUN_ID=${run_id}"
+
 sock="/var/run/docker.sock"
 
 mounts="-v $sock:$sock"

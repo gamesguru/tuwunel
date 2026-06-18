@@ -24,6 +24,7 @@ use crate::{client, oidc, server};
 pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 	let config = &server.config;
 	let router = register_client_auth_routes(router);
+	let router = register_mas_routes(router);
 	let router = register_client_profile_and_data_routes(router);
 	let router = register_client_keys_and_backup_routes(router);
 	let router = register_client_room_routes(router);
@@ -66,6 +67,22 @@ fn register_client_auth_routes(router: Router<State>) -> Router<State> {
 		.ruma_route(&client::lock_user_route)
 		.ruma_route(&client::admin_register_nonce_route)
 		.ruma_route(&client::admin_register_route)
+}
+
+fn register_mas_routes(router: Router<State>) -> Router<State> {
+	router
+		.ruma_route(&client::mas::query_user_route)
+		.ruma_route(&client::mas::provision_user_route)
+		.ruma_route(&client::mas::is_localpart_available_route)
+		.ruma_route(&client::mas::delete_user_route)
+		.ruma_route(&client::mas::reactivate_user_route)
+		.ruma_route(&client::mas::set_displayname_route)
+		.ruma_route(&client::mas::unset_displayname_route)
+		.ruma_route(&client::mas::allow_cross_signing_reset_route)
+		.ruma_route(&client::mas::upsert_device_route)
+		.ruma_route(&client::mas::delete_device_route)
+		.ruma_route(&client::mas::update_device_display_name_route)
+		.ruma_route(&client::mas::sync_devices_route)
 }
 
 fn register_client_profile_and_data_routes(router: Router<State>) -> Router<State> {

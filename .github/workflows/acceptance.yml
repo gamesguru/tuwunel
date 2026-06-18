@@ -12,12 +12,16 @@ on:
         description: Runner mask
       workers:
         type: string
-        default: '4'
+        default: '1'
         description: Playwright workers per shard
       retries:
         type: string
         default: '1'
         description: Playwright retries
+      shards:
+        type: string
+        default: '1'
+        description: Number of test shards
       cargo_profiles:
         type: string
       feat_sets:
@@ -45,22 +49,42 @@ on:
         default: 'HEAD'
 
 jobs:
+  init:
+    name: Acceptance Initialize
+    runs-on: ["${{fromJSON(inputs.machines)[0]}}", "${{inputs.runner}}"]
+
+    outputs:
+      ids: ${{steps.gen.outputs.ids}}
+      count: ${{steps.gen.outputs.count}}
+
+    steps:
+    - id: gen
+      name: Generate Shard Matrix
+      env:
+        shards: ${{inputs.shards}}
+      run: |
+        case "$shards" in ''|*[!0-9]*) echo "invalid shards: '$shards'" >&2; exit 1;; esac
+        test "$shards" -ge 1 || { echo "shards must be >= 1" >&2; exit 1; }
+        echo "ids=[$(seq -s, 1 "$shards")]" >> "$GITHUB_OUTPUT"
+        echo "count=$shards" >> "$GITHUB_OUTPUT"
+
   acceptance:
     name: ${{inputs.job_name}}
+    needs: [init]
     runs-on: ["${{matrix.machine}}", "${{inputs.runner}}"]
     concurrency:
       group: playwright-cant-walk-and-chew-bubblegum-${{matrix.shard}}
       cancel-in-progress: false
 
     outputs:
-      shards: ${{steps.shards.outputs.count}}
+      shards: ${{needs.init.outputs.count}}
 
     strategy:
       fail-fast: false
       matrix:
-        # Sole shard-set definition; the /N split and summary expected-count
-        # derive via strategy.job-total (valid while shard is the only axis).
-        shard: ${{fromJSON('[1, 2, 3, 4]')}}
+        # Shard ids come from the init job, which expands the `shards` count
+        # into [1..N]; that count is also the /N split and summary expectation.
+        shard: ${{fromJSON(needs.init.outputs.ids)}}
         cargo_profile: ${{fromJSON(inputs.cargo_profiles)}}
         feat_set: ${{fromJSON(inputs.feat_sets)}}
         rust_toolchain: ${{fromJSON(inputs.rust_toolchains)}}
@@ -77,16 +101,12 @@ jobs:
       with:
         ref: ${{inputs.checkout}}
 
-    - id: shards
-      name: Shard Count
-      run: echo "count=${{strategy.job-total}}" >> "$GITHUB_OUTPUT"
-
     - name: Execute
       id: execute
       env:
         playwright_workers: ${{fromJSON(inputs.workers)}}
         playwright_retries: ${{fromJSON(inputs.retries)}}
-        playwright_shard: ${{matrix.shard}}/${{strategy.job-total}}
+        playwright_shard: ${{matrix.shard}}/${{needs.init.outputs.count}}
         cargo_profile: ${{matrix.cargo_profile}}
         rust_toolchain: ${{matrix.rust_toolchain}}
         rust_target: ${{matrix.rust_target}}
@@ -120,16 +140,26 @@ jobs:
         overwrite: true
 
     - if: success() || (failure() && steps.execute.outcome == 'failure')
+      name: Upload Failure Artifacts
+      id: upload-artifacts
+      uses: actions/upload-artifact@v7
+      with:
+        name: playwright_artifacts-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}-shard-${{matrix.shard}}
+        path: ./tests/playwright/test-results
+        if-no-files-found: ignore
+        overwrite: true
+
+    - if: success() || (failure() && steps.execute.outcome == 'failure')
       name: Gate
       run: |
         .github/workflows/playwright_summarise.sh gate
 
-  acceptance-summary:
+  fini:
     if: >
       !cancelled()
       && needs.acceptance.result != 'skipped'
 
-    name: Aggregate
+    name: Acceptance Aggregate
     needs: [acceptance]
     runs-on: ["${{fromJSON(inputs.machines)[0]}}", "${{inputs.runner}}"]
 
@@ -138,7 +168,7 @@ jobs:
       with:
         ref: ${{inputs.checkout}}
 
-    - name: Download Shard Results
+    - name: Collect Shard Results
       uses: actions/download-artifact@v7
       with:
         pattern: playwright_results-*

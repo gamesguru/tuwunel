@@ -35,6 +35,7 @@ COPY <<EOF tuwunel.toml
     allow_public_room_directory_without_auth = true
     allow_registration = true
     create_admin_room = false
+    db_pool_max_workers = 64
     error_on_unknown_config_opts = true
     ip_range_denylist = []
     log = "debug,tuwunel=trace,h2=warn,hyper=warn"
@@ -48,6 +49,7 @@ COPY <<EOF tuwunel.toml
     query_trusted_key_servers_first_on_join = false
     rocksdb_log_level = "debug"
     rocksdb_max_log_files = 1
+    rocksdb_parallelism_threads = 2
     rocksdb_paranoid_file_checks = true
     rocksdb_recovery_mode = 0
     trusted_servers = []

@@ -1,4 +1,5 @@
 {"Action":"pass","Test":"TestACLs"}
+{"Action":"fail","Test":"TestACLsForEDUs"}
 {"Action":"pass","Test":"TestAddAccountData"}
 {"Action":"pass","Test":"TestAddAccountData/Can_add_global_account_data"}
 {"Action":"pass","Test":"TestAddAccountData/Can_add_room_account_data"}
@@ -212,9 +213,10 @@
 {"Action":"fail","Test":"TestJumpToDateEndpoint"}
 {"Action":"fail","Test":"TestJumpToDateEndpoint/parallel"}
 {"Action":"fail","Test":"TestJumpToDateEndpoint/parallel/federation"}
-{"Action":"fail","Test":"TestJumpToDateEndpoint/parallel/federation/can_paginate_after_getting_remote_event_from_timestamp_to_event_endpoint"}
-{"Action":"fail","Test":"TestJumpToDateEndpoint/parallel/federation/looking_backwards,_should_be_able_to_find_event_that_was_sent_before_we_joined"}
-{"Action":"fail","Test":"TestJumpToDateEndpoint/parallel/federation/looking_forwards,_should_be_able_to_find_event_that_was_sent_before_we_joined"}
+{"Action":"pass","Test":"TestJumpToDateEndpoint/parallel/federation/can_paginate_backwards_after_getting_remote_event_from_timestamp_to_event_endpoint_(end)"}
+{"Action":"pass","Test":"TestJumpToDateEndpoint/parallel/federation/can_paginate_backwards_after_getting_remote_event_from_timestamp_to_event_endpoint_(start)"}
+{"Action":"pass","Test":"TestJumpToDateEndpoint/parallel/federation/looking_backwards,_should_be_able_to_find_event_that_was_sent_before_we_joined"}
+{"Action":"pass","Test":"TestJumpToDateEndpoint/parallel/federation/looking_forwards,_should_be_able_to_find_event_that_was_sent_before_we_joined"}
 {"Action":"fail","Test":"TestJumpToDateEndpoint/parallel/federation/when_looking_backwards_before_the_room_was_created,_should_be_able_to_find_event_that_was_imported"}
 {"Action":"pass","Test":"TestJumpToDateEndpoint/parallel/should_find_event_after_given_timestamp"}
 {"Action":"pass","Test":"TestJumpToDateEndpoint/parallel/should_find_event_before_given_timestamp"}
@@ -469,8 +471,8 @@
 {"Action":"fail","Test":"TestPartialStateJoin/State_rejected_incorrectly"}
 {"Action":"fail","Test":"TestPartialStateJoin/User_directory_is_correctly_updated_once_state_re-sync_completes"}
 {"Action":"fail","Test":"TestPartialStateJoin/joined_members_blocks_during_partial_state_join"}
-{"Action":"fail","Test":"TestPollsLocalPushRules"}
-{"Action":"fail","Test":"TestPollsLocalPushRules/Polls_push_rules_are_correctly_presented_to_the_client"}
+{"Action":"pass","Test":"TestPollsLocalPushRules"}
+{"Action":"pass","Test":"TestPollsLocalPushRules/Polls_push_rules_are_correctly_presented_to_the_client"}
 {"Action":"pass","Test":"TestPowerLevels"}
 {"Action":"pass","Test":"TestPowerLevels/GET_/rooms/:room_id/state/m.room.power_levels_can_fetch_levels"}
 {"Action":"pass","Test":"TestPowerLevels/PUT_/rooms/:room_id/state/m.room.power_levels_can_set_levels"}
@@ -621,7 +623,7 @@
 {"Action":"fail","Test":"TestRoomCreationReportsEventsToMyself"}
 {"Action":"fail","Test":"TestRoomCreationReportsEventsToMyself/parallel"}
 {"Action":"pass","Test":"TestRoomCreationReportsEventsToMyself/parallel/Joining_room_twice_is_idempotent"}
-{"Action":"fail","Test":"TestRoomCreationReportsEventsToMyself/parallel/Room_creation_reports_m.room.create_to_myself"}
+{"Action":"pass","Test":"TestRoomCreationReportsEventsToMyself/parallel/Room_creation_reports_m.room.create_to_myself"}
 {"Action":"pass","Test":"TestRoomCreationReportsEventsToMyself/parallel/Room_creation_reports_m.room.member_to_myself"}
 {"Action":"pass","Test":"TestRoomCreationReportsEventsToMyself/parallel/Setting_room_topic_reports_m.room.topic_to_myself"}
 {"Action":"fail","Test":"TestRoomCreationReportsEventsToMyself/parallel/Setting_state_twice_is_idempotent"}

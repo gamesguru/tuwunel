@@ -351,7 +351,7 @@ default-features = false
 
 [workspace.dependencies.ruma]
 git = "https://github.com/matrix-construct/ruma"
-rev = "0b7aad2371a7b51a8226d819b544c1ca9edeb696"
+rev = "c8684a452f59bf391fb344781e4ede031f371cb8"
 features = [
     "__compat",
     "appservice-api-c",
@@ -400,7 +400,7 @@ features = [
 
 [workspace.dependencies.synapse-admin-api]
 git = "https://github.com/matrix-construct/synapse-admin-api"
-rev = "d8e73952506a09f280a7c253003fafc131206612"
+rev = "de385da46b0f5e4987e20a31da8849a113becd4b"
 features = ["server"]
 
 [workspace.dependencies.rustls]
@@ -414,7 +414,7 @@ default-features = false
 
 [workspace.dependencies.rust-rocksdb]
 git = "https://github.com/matrix-construct/rust-rocksdb"
-rev = "c11395350bc1f2090a0152f2d15c8c5847821eba"
+rev = "8d92399498d85b486707c6febb278ad902d3aba3"
 default-features = false
 features = [
 	"bzip2",
@@ -616,15 +616,15 @@ version = "1.0"
 # https://github.com/girlbossceo/rustyline-async/commit/67d8c49aeac03a5ef4e818f663eaa94dd7bf339b
 [patch.crates-io.rustyline-async]
 git = "https://github.com/matrix-construct/rustyline-async"
-rev = "ba743cae940659e95d7b8604bbd6fdd755171c8c"
+rev = "879968ba99c2558ae234fd67a057b7ea6f761fd3"
 
 # adds LIFO queue scheduling; this should be updated with PR progress.
 [patch.crates-io.event-listener]
 git = "https://github.com/matrix-construct/event-listener"
-rev = "fe4aebeeaae435af60087ddd56b573a2e0be671d"
+rev = "18af85c4df39a11b44b39629783ed3ddec6a8853"
 [patch.crates-io.async-channel]
 git = "https://github.com/matrix-construct/async-channel"
-rev = "92e5e74063bf2a3b10414bcc8a0d68b235644280"
+rev = "debb93f14a20fa7c1989042c2f07f53654d75908"
 
 # adds affinity masks for selecting more than one core at a time
 [patch.crates-io.core_affinity]
@@ -634,14 +634,14 @@ rev = "ff148c2985cbaff3e6e953d45cda4d7696f38d75"
 # reverts hyperium#148 conflicting with our delicate federation resolver hooks
 [patch.crates-io.hyper-util]
 git = "https://github.com/matrix-construct/hyper-util"
-rev = "a3f59c4e51af19570a9f92839ecfe0ad6482e9e5"
+rev = "0510e3a3cba7aedd504b4ee0d69fbf41e76a524f"
 
 # allows no-aaaa option in resolv.conf
 # bumps rust edition and toolchain to 1.86.0 and 2024
 # use sat_add on line number errors
 [patch.crates-io.resolv-conf]
 git = "https://github.com/matrix-construct/resolv-conf"
-rev = "200e958941d522a70c5877e3d846f55b5586c68d"
+rev = "ab5c3e44016bc76b8798ec837a5a9cf9d88bf233"
 
 #
 # Our crates

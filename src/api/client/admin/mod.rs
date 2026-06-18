@@ -2,6 +2,7 @@ mod get_nonce;
 mod is_user_locked;
 mod is_user_suspended;
 mod lock_user;
+pub(crate) mod mas;
 mod register;
 mod suspend_user;
 

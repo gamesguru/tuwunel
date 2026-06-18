@@ -25,7 +25,9 @@ pub(crate) async fn get_device_route(
 
 /// # `PUT /_matrix/client/r0/devices/{deviceId}`
 ///
-/// Updates the metadata on a given device of the sender user.
+/// Updates the metadata on a given device of the sender user, or creates the
+/// device when called by an appservice with MSC4190 enabled, returning 201 on
+/// creation and 200 on update.
 #[tracing::instrument(skip_all, fields(%client), name = "update_device")]
 pub(crate) async fn update_device_route(
 	State(services): State<crate::State>,
@@ -57,7 +59,7 @@ pub(crate) async fn update_device_route(
 				.users
 				.put_device_metadata(sender_user, notify, &device);
 
-			Ok(update_device::v3::Response {})
+			Ok(update_device::v3::Response::new())
 		},
 		| Err(_) => {
 			let Some(appservice) = appservice else {
@@ -86,7 +88,7 @@ pub(crate) async fn update_device_route(
 				)
 				.await?;
 
-			return Ok(update_device::v3::Response {});
+			Ok(update_device::v3::Response::created())
 		},
 	}
 }

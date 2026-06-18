@@ -6,7 +6,10 @@
 use std::num::NonZeroUsize;
 
 use bytes::Bytes;
-use ruma::{OwnedEventId, OwnedRoomId, OwnedServerName, RoomVersionId};
+use ruma::{
+	MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedServerName, RoomVersionId,
+	api::Direction,
+};
 use tuwunel_core::smallvec::SmallVec;
 
 use crate::federation::Candidates;
@@ -38,6 +41,9 @@ pub enum Op {
 
 	/// `POST /_matrix/federation/v1/get_missing_events/{roomId}`
 	MissingEvents,
+
+	/// `GET /_matrix/federation/v1/timestamp_to_event/{roomId}?ts=&dir=`
+	TimestampToEvent,
 }
 
 /// Per-round width schedule for staged fan-out: how many candidate servers a
@@ -98,6 +104,14 @@ pub struct Opts {
 
 	/// Event to fetch (id-addressed ops) or anchor from (room-scoped ops).
 	pub event_id: Option<OwnedEventId>,
+
+	/// Timestamp the [`Op::TimestampToEvent`] search starts from; `None` for
+	/// every other op.
+	pub ts: Option<MilliSecondsSinceUnixEpoch>,
+
+	/// Direction the [`Op::TimestampToEvent`] search runs; `None` for every
+	/// other op.
+	pub dir: Option<Direction>,
 
 	/// Boundary events the requester already holds; an [`Op::MissingEvents`]
 	/// window stops its backward walk here. Empty for every other op.
@@ -169,6 +183,8 @@ impl Opts {
 			op,
 			room_id,
 			event_id: None,
+			ts: None,
+			dir: None,
 			earliest_events: EventWindow::new(),
 			latest_events: EventWindow::new(),
 			hint: None,
@@ -192,6 +208,14 @@ impl Opts {
 	pub fn event_id(self, event_id: OwnedEventId) -> Self {
 		Self { event_id: Some(event_id), ..self }
 	}
+
+	/// Set the timestamp the [`Op::TimestampToEvent`] search starts from.
+	#[must_use]
+	pub fn ts(self, ts: MilliSecondsSinceUnixEpoch) -> Self { Self { ts: Some(ts), ..self } }
+
+	/// Set the direction the [`Op::TimestampToEvent`] search runs.
+	#[must_use]
+	pub fn dir(self, dir: Direction) -> Self { Self { dir: Some(dir), ..self } }
 
 	/// Set the boundary the [`Op::MissingEvents`] backward walk stops at.
 	#[must_use]
@@ -308,7 +332,7 @@ impl Opts {
 			| Op::MissingEvents => self
 				.fanout(Geometric { base: ONE, factor: TWO })
 				.fanout_rounds(THREE),
-			| Op::Event | Op::Backfill => self,
+			| Op::Event | Op::Backfill | Op::TimestampToEvent => self,
 		}
 	}
 

@@ -6,9 +6,13 @@
 #   jsonl           Path to the per-flavour results.jsonl.
 #   metrics_tar     Optional. Path to per-run runtime_metrics.tar.zst. When
 #                   set, emit_runtime_metrics() will be wired into main.
-#   artifact_name   Optional. Name of the per-flavour runtime-metrics
-#                   artifact on the prior successful main.yml run. Required
-#                   when metrics_tar is set.
+#
+# Runtime-metrics history is read from and written to small JSON digests the
+# workflow restores from / saves to the GitHub Actions cache, passed via env:
+#   RUNTIME_DIGEST_OWN   this branch's rolling ring (read for history columns,
+#                        rewritten for the green-gated save step).
+#   RUNTIME_DIGEST_MAIN  the default branch's anchor (read only; unset on it).
+#   RUNTIME_DIGEST_KEEP  ring depth (3 off the default branch, 1 on it).
 #
 # Drivers then call `summarise_main "$@"`.
 
@@ -83,13 +87,31 @@ render_grid() {
 	' "$curr"
 }
 
+# Passing rate: accept over the row's test count (accept + errors + skips).
+# Skips stay in the denominator, so a flaky skip holds the rate below 100%
+# until it is fixed. Empty rows render "n/a" rather than dividing by zero.
+pct() {
+	awk -v a="$1" -v d="$2" 'BEGIN {
+		if (d == 0) print "n/a"; else printf "%.1f%%\n", 100 * a / d
+	}'
+}
+
+# Emit one markdown table row from its cells.
+row() { printf '| %s | %s | %s | %s | %s | %s | %s |\n' "$@"; }
+
 emit_header() {
+	local pass_sec pass_sub pass_tot
+	pass_sec=$(pct "$acc_sec" "$((acc_sec + err_sec + skip_sec))")
+	pass_sub=$(pct "$acc_sub" "$((acc_sub + err_sub + skip_sub))")
+	pass_tot=$(pct "$acc_tot" "$((acc_tot + err_tot + skip_tot))")
+
 	echo "### $track_name"
 	echo
-	echo "|  | accept | errors | skipped | advanced | regressed |"
-	echo "|---|---|---|---|---|---|"
-	echo "| sections | $acc_sec | $err_sec | $skip_sec | $nprog_sec | $nreg_sec |"
-	echo "| subtests | $acc_sub | $err_sub | $skip_sub | $nprog_sub | $nreg_sub |"
+	echo "|  | accept | errors | skipped | advanced | regressed | passing |"
+	echo "|---|---|---|---|---|---|---|"
+	row sections "$acc_sec" "$err_sec" "$skip_sec" "$nprog_sec" "$nreg_sec" "$pass_sec"
+	row subtests "$acc_sub" "$err_sub" "$skip_sub" "$nprog_sub" "$nreg_sub" "$pass_sub"
+	row total "$acc_tot" "$err_tot" "$skip_tot" "$nprog_tot" "$nreg_tot" "$pass_tot"
 	if test -n "$1"; then
 		echo
 		echo "$1"
@@ -105,41 +127,11 @@ emit_diff() {
 	echo '```'
 }
 
-# Fetch the prior successful main.yml run's runtime-metrics artifact for this
-# matrix slot. Echoes the local tar path and the run id on success, nothing
-# on miss. Soft-fails: no gh, no auth, no prior run, expired artifact all
-# yield "".
-fetch_baseline_metrics() {
-	command -v gh >/dev/null 2>&1 || return 0
-	test -n "${feat_set:-}${sys_name:-}${sys_target:-}" || return 0
-	test -n "${artifact_name:-}" || return 0
-
-	local branch="${GITHUB_REF_NAME:-}"
-	test "$branch" = "main" && return 0   # no useful comparand on main itself
-
-	local artifact="${artifact_name}-${feat_set}-${sys_name}-${sys_target}.tar.zst"
-	local prev
-	prev=$(gh run list \
-		--workflow=main.yml \
-		--branch="$branch" \
-		--status=success \
-		--limit=5 \
-		--json databaseId \
-		--jq '.[].databaseId' 2>/dev/null \
-		| grep -v "^${GITHUB_RUN_ID:-}\$" \
-		| head -1) || return 0
-	test -n "$prev" || return 0
-
-	local dir
-	dir=$(mktemp -d)
-	if ! gh run download "$prev" --name "$artifact" --dir "$dir" >/dev/null 2>&1; then
-		rm -rf "$dir"
-		return 0
-	fi
-	test -s "$dir/runtime_metrics.tar.zst" || { rm -rf "$dir"; return 0; }
-	printf '%s\t%s\n' "$dir/runtime_metrics.tar.zst" "$prev"
-}
-
+# Render the runtime-metrics table. History columns come from the cache
+# digests the workflow already restored (this branch's ring and the default
+# branch's anchor); the updated ring is written back to RUNTIME_DIGEST_OWN for
+# the workflow's green-gated save step. Soft-fails: no metrics tar, no python,
+# no digests all degrade to the current-run column alone.
 emit_runtime_metrics() {
 	test -n "${metrics_tar:-}" || return 0
 	test -s "$metrics_tar" || return 0
@@ -148,19 +140,13 @@ emit_runtime_metrics() {
 	local script="$(dirname "$BASH_SOURCE")/complement_metrics_summarise.py"
 	test -x "$script" || return 0
 
-	local pair base_tar base_run
-	pair=$(fetch_baseline_metrics || true)
-	base_tar=$(printf '%s' "$pair" | cut -f1)
-	base_run=$(printf '%s' "$pair" | cut -f2)
-
 	local args=(--tar "$metrics_tar" --out "$out")
-	if test -n "$base_tar" && test -s "$base_tar"; then
-		args+=(--baseline-tar "$base_tar" --baseline-label "Baseline (run $base_run)")
+	if test -n "${RUNTIME_DIGEST_OWN:-}"; then
+		test -s "$RUNTIME_DIGEST_OWN" && args+=(--history-in "$RUNTIME_DIGEST_OWN")
+		args+=(--history-out "$RUNTIME_DIGEST_OWN" --keep "${RUNTIME_DIGEST_KEEP:-3}")
 	fi
+	test -s "${RUNTIME_DIGEST_MAIN:-}" && args+=(--main-in "$RUNTIME_DIGEST_MAIN")
 	python3 "$script" "${args[@]}" || :
-	if test -n "$base_tar"; then
-		rm -rf "$(dirname "$base_tar")"
-	fi
 }
 
 summarise_main() {
@@ -169,8 +155,8 @@ summarise_main() {
 		exit 0
 	fi
 
-	curr=$(mktemp); prev=$(mktemp)
-	trap 'rm -f "$curr" "$prev"' EXIT
+	curr=$(mktemp); prev=$(mktemp); leaves=$(mktemp)
+	trap 'rm -f "$curr" "$prev" "$leaves"' EXIT
 	snapshot_current
 	snapshot_baseline
 
@@ -195,6 +181,27 @@ summarise_main() {
 
 	nprog_sec=$(count_sec "$progress"); nprog_sub=$(count_sub "$progress")
 	nreg_sec=$( count_sec "$regress");  nreg_sub=$( count_sub "$regress")
+
+	# Distinct leaf tests for the total row. A classified row is a leaf when no
+	# other row nests beneath it ("<name>/..."); a parent only aggregates its
+	# subtests (fail wins above), so counting parents alongside their leaves
+	# double-counts. Go nests arbitrarily deep, so leaf-ness is computed over
+	# every ancestor prefix, not just the top level. The total thus need not
+	# equal sections + subtests.
+	awk '
+		{ nm[NR] = $2; m = split($2, p, "/"); pre = p[1]
+		  for (i = 2; i <= m; i++) { internal[pre] = 1; pre = pre "/" p[i] } }
+		END { for (i = 1; i <= NR; i++) if (!(nm[i] in internal)) print nm[i] }
+	' "$curr" | sort > "$leaves"
+
+	read -r acc_tot err_tot skip_tot < <(awk '
+		NR == FNR { leaf[$0] = 1; next }
+		$2 in leaf { if ($1 == "accept") a++; else if ($1 == "error") e++; else k++ }
+		END { printf "%d %d %d\n", a + 0, e + 0, k + 0 }
+	' "$leaves" "$curr")
+
+	nprog_tot=$(printf '%s' "$progress" | grep -Fxcf "$leaves" || :)
+	nreg_tot=$( printf '%s' "$regress"  | grep -Fxcf "$leaves" || :)
 
 	# Main-branch runs are the baseline; the grid carries no diff signal there.
 	if test "${GITHUB_REF_NAME:-}" = "main"; then

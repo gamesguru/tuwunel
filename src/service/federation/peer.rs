@@ -12,9 +12,10 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::{Stream, StreamExt};
+use http::StatusCode;
 use ruma::ServerName;
 use tuwunel_core::{
-	implement,
+	Error, implement,
 	utils::{stream::TryIgnore, time::now_secs},
 };
 
@@ -168,4 +169,28 @@ fn classify(bytes: &[u8]) -> Classification {
 		.first()
 		.copied()
 		.map_or(Classification::Transient, Classification::from_byte)
+}
+
+/// Classifies a failed federation attempt for the peer-reachability store, or
+/// `None` when it carries no reachability signal. An HTTP response proves the
+/// peer reachable, so a content-level 4xx (a forbidden invite, a 403 backfill)
+/// must not count against it; only 5xx or an explicit rate-limit (429) records
+/// `Transient`. A 410 is the exception: a Matrix server never returns it for
+/// one endpoint and not another, so a received 410 is a proxy operator
+/// deliberately signaling the peer is gone, and records `Permanent`. Transport
+/// failures carry no response and are always transient.
+#[must_use]
+pub(super) fn classify_error(error: &Error) -> Option<Classification> {
+	let Error::Federation(_, response) = error else {
+		return Some(Classification::Transient);
+	};
+
+	let status = response.status_code;
+
+	match status {
+		| _ if status == StatusCode::GONE => Some(Classification::Permanent),
+		| _ if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS =>
+			Some(Classification::Transient),
+		| _ => None,
+	}
 }

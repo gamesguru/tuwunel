@@ -85,10 +85,13 @@ on:
         default: 'het'
       playwright_workers:
         type: string
-        default: '4'
+        default: '3'
       playwright_retries:
         type: string
         default: '1'
+      playwright_shards:
+        type: string
+        default: '6'
 
 jobs:
   doc:
@@ -387,9 +390,6 @@ jobs:
 
     name: Compliance (Tuwunel)
     needs: [doc, unit, bench, memcheck, smoke, nix, complement]
-    concurrency:
-      group: complement-cant-walk-and-chew-bubblegum
-      cancel-in-progress: false
 
     uses: ./.github/workflows/compliance.yml
     with:
@@ -405,6 +405,7 @@ jobs:
       results_artifact_prefix: complement_results
       output_artifact_prefix: complement_output
       metrics_artifact_prefix: complement_runtime_metrics
+      runtime_history: true
       cargo_profiles: '["bench"]'
       feat_sets: '["logging"]'
       rust_toolchains: '["nightly"]'
@@ -455,9 +456,6 @@ jobs:
 
     name: Cryptography (rust-sdk)
     needs: [doc, unit, bench, memcheck, smoke, nix, complement-crypto]
-    concurrency:
-      group: complement-cant-walk-and-chew-bubblegum
-      cancel-in-progress: false
 
     uses: ./.github/workflows/compliance.yml
     with:
@@ -529,6 +527,7 @@ jobs:
       runner: ${{inputs.playwright_runner}}
       workers: ${{inputs.playwright_workers}}
       retries: ${{inputs.playwright_retries}}
+      shards: ${{inputs.playwright_shards}}
       cargo_profiles: '["bench"]'
       feat_sets: '["logging"]'
       rust_toolchains: '["nightly"]'

@@ -12,6 +12,7 @@ use serde_json::value::to_raw_value;
 use tuwunel_core::{
 	Error, Result, err, implement,
 	matrix::{
+		RoomVersionRules,
 		event::{Event, StateKey, TypeExt},
 		pdu::{EventHash, PduBuilder, PduEvent, PrevEvents, check_rules},
 		room_version,
@@ -24,6 +25,138 @@ use tuwunel_core::{
 
 use super::RoomMutexGuard;
 use crate::rooms::state_res;
+#[implement(super::Service)]
+async fn determine_room_version(
+	&self,
+	room_id: &RoomId,
+	event_type: &TimelineEventType,
+	content: &serde_json::value::RawValue,
+) -> Result<(ruma::RoomVersionId, RoomVersionRules)> {
+	let room_version = match self
+		.services
+		.state
+		.get_room_version(room_id)
+		.await
+	{
+		| Ok(version) => version,
+		| Err(e) => {
+			let is_not_found = match &e {
+				| Error::Request(ruma::api::error::ErrorKind::NotFound, ..) => true,
+				| _ => false,
+			};
+			if is_not_found && *event_type == TimelineEventType::RoomCreate {
+				let content: RoomCreateEventContent = serde_json::from_str(content.get())?;
+				content.room_version
+			} else {
+				return Err(e);
+			}
+		},
+	};
+
+	Ok((room_version.clone(), room_version::rules(&room_version)?))
+}
+#[implement(super::Service)]
+async fn calculate_depth(&self, prev_events: &PrevEvents) -> ruma::UInt {
+	prev_events
+		.iter()
+		.stream()
+		.map(Ok)
+		.and_then(|event_id| self.get_pdu(event_id))
+		.ready_and_then(|pdu| Ok(pdu.depth))
+		.ignore_err()
+		.ready_fold(uint!(0), cmp::max)
+		.await
+		.saturating_add(uint!(1))
+}
+
+#[implement(super::Service)]
+async fn build_unsigned_field(
+	&self,
+	room_id: &RoomId,
+	event_type: &TimelineEventType,
+	state_key: Option<&StateKey>,
+	unsigned_opt: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+) -> Result<Option<Box<serde_json::value::RawValue>>> {
+	let mut unsigned = unsigned_opt.unwrap_or_default();
+	if let Some(state_key) = state_key {
+		match self
+			.services
+			.state_accessor
+			.room_state_get(room_id, &event_type.to_string().into(), state_key)
+			.await
+		{
+			| Ok(prev_pdu) => {
+				unsigned.insert("prev_content".to_owned(), prev_pdu.get_content_as_value());
+				unsigned
+					.insert("prev_sender".to_owned(), serde_json::to_value(prev_pdu.sender())?);
+				unsigned.insert(
+					"replaces_state".to_owned(),
+					serde_json::to_value(prev_pdu.event_id())?,
+				);
+			},
+			| Err(e) => {
+				let is_not_found = match &e {
+					| Error::Request(ruma::api::error::ErrorKind::NotFound, ..) => true,
+					| _ => false,
+				};
+				if !is_not_found {
+					return Err(e);
+				}
+			},
+		}
+	}
+
+	if unsigned.is_empty() {
+		Ok(None)
+	} else {
+		Ok(Some(to_raw_value(&unsigned)?))
+	}
+}
+
+#[implement(super::Service)]
+async fn hash_sign_and_validate_event(
+	&self,
+	mut pdu: PduEvent,
+	room_version: &ruma::RoomVersionId,
+	version_rules: &RoomVersionRules,
+) -> Result<(PduEvent, CanonicalJsonObject)> {
+	let mut pdu_json = to_canonical_object(&pdu).map_err(|e| {
+		err!(Request(BadJson(warn!("Failed to convert PDU to canonical JSON: {e}"))))
+	})?;
+
+	// room v12 and above removed the placeholder "room_id" field from m.room.create
+	if !version_rules
+		.event_format
+		.require_room_create_room_id
+		&& pdu.kind == TimelineEventType::RoomCreate
+	{
+		pdu_json.remove("room_id");
+	}
+
+	pdu.event_id = self
+		.services
+		.server_keys
+		.gen_id_hash_and_sign_event(&mut pdu_json, room_version)?;
+
+	// Room id is event id for V12+
+	if matches!(version_rules.room_id_format, RoomIdFormatVersion::V2)
+		&& pdu.kind == TimelineEventType::RoomCreate
+	{
+		pdu.room_id = OwnedRoomId::from_parts('!', pdu.event_id.localpart(), None)?;
+		pdu_json.insert("room_id".into(), CanonicalJsonValue::String(pdu.room_id.clone().into()));
+	}
+
+	check_rules(&pdu_json, &version_rules.event_format)?;
+
+	// Generate short event id
+	let _shorteventid = self
+		.services
+		.short
+		.get_or_create_shorteventid(&pdu.event_id)
+		.await;
+
+	Ok((pdu, pdu_json))
+}
 
 #[implement(super::Service)]
 pub async fn create_hash_and_sign_event(
@@ -52,26 +185,9 @@ pub async fn create_hash_and_sign_event(
 		.collect()
 		.await;
 
-	// If there was no create event yet, assume we are creating a room
 	let (room_version, version_rules) = self
-		.services
-		.state
-		.get_room_version(room_id)
-		.await
-		.or_else(|_| {
-			if event_type == TimelineEventType::RoomCreate {
-				let content: RoomCreateEventContent = serde_json::from_str(content.get())?;
-				Ok(content.room_version)
-			} else {
-				Err(Error::InconsistentRoomState(
-					"non-create event for room of unknown version",
-					room_id.to_owned(),
-				))
-			}
-		})
-		.and_then(|room_version| {
-			Ok((room_version.clone(), room_version::rules(&room_version)?))
-		})?;
+		.determine_room_version(room_id, &event_type, &content)
+		.await?;
 
 	let auth_events = self
 		.services
@@ -87,35 +203,11 @@ pub async fn create_hash_and_sign_event(
 		)
 		.await?;
 
-	// Our depth is the maximum depth of prev_events + 1
-	let depth = prev_events
-		.iter()
-		.stream()
-		.map(Ok)
-		.and_then(|event_id| self.get_pdu(event_id))
-		.ready_and_then(|pdu| Ok(pdu.depth))
-		.ignore_err()
-		.ready_fold(uint!(0), cmp::max)
-		.await
-		.saturating_add(uint!(1));
+	let depth = self.calculate_depth(&prev_events).await;
 
-	let mut unsigned = unsigned.unwrap_or_default();
-	if let Some(state_key) = &state_key
-		&& let Ok(prev_pdu) = self
-			.services
-			.state_accessor
-			.room_state_get(room_id, &event_type.to_string().into(), state_key)
-			.await
-	{
-		unsigned.insert("prev_content".to_owned(), prev_pdu.get_content_as_value());
-		unsigned.insert("prev_sender".to_owned(), serde_json::to_value(prev_pdu.sender())?);
-		unsigned.insert("replaces_state".to_owned(), serde_json::to_value(prev_pdu.event_id())?);
-	}
-
-	let unsigned = unsigned
-		.is_empty()
-		.eq(&false)
-		.then_some(to_raw_value(&unsigned)?);
+	let unsigned = self
+		.build_unsigned_field(room_id, &event_type, state_key.as_ref(), unsigned)
+		.await?;
 
 	let origin_server_ts = timestamp
 		.as_ref()
@@ -126,7 +218,7 @@ pub async fn create_hash_and_sign_event(
 				.expect("u64 to UInt")
 		});
 
-	let mut pdu = PduEvent {
+	let pdu = PduEvent {
 		event_id: ruma::event_id!("$thiswillbereplaced").into(),
 		room_id: room_id.to_owned(),
 		sender: sender.to_owned(),
@@ -141,6 +233,7 @@ pub async fn create_hash_and_sign_event(
 		hashes: EventHash::default(),
 		signatures: None,
 		prev_events,
+		rejected: false,
 		auth_events: auth_events
 			.values()
 			.filter(|pdu| {
@@ -168,41 +261,6 @@ pub async fn create_hash_and_sign_event(
 	)
 	.await?;
 
-	// Hash and sign
-	let mut pdu_json = to_canonical_object(&pdu).map_err(|e| {
-		err!(Request(BadJson(warn!("Failed to convert PDU to canonical JSON: {e}"))))
-	})?;
-
-	// room v12 and above removed the placeholder "room_id" field from m.room.create
-	if !version_rules
-		.event_format
-		.require_room_create_room_id
-		&& pdu.kind == TimelineEventType::RoomCreate
-	{
-		pdu_json.remove("room_id");
-	}
-
-	pdu.event_id = self
-		.services
-		.server_keys
-		.gen_id_hash_and_sign_event(&mut pdu_json, &room_version)?;
-
-	// Room id is event id for V12+
-	if matches!(version_rules.room_id_format, RoomIdFormatVersion::V2)
-		&& pdu.kind == TimelineEventType::RoomCreate
-	{
-		pdu.room_id = OwnedRoomId::from_parts('!', pdu.event_id.localpart(), None)?;
-		pdu_json.insert("room_id".into(), CanonicalJsonValue::String(pdu.room_id.clone().into()));
-	}
-
-	check_rules(&pdu_json, &version_rules.event_format)?;
-
-	// Generate short event id
-	let _shorteventid = self
-		.services
-		.short
-		.get_or_create_shorteventid(&pdu.event_id)
-		.await;
-
-	Ok((pdu, pdu_json))
+	self.hash_sign_and_validate_event(pdu, &room_version, &version_rules)
+		.await
 }

@@ -110,6 +110,7 @@ mod tests {
 			origin: None,
 			unsigned,
 			signatures: None,
+			rejected: false,
 		}
 	}
 

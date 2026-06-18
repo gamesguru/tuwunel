@@ -1,5 +1,5 @@
 use std::{
-	collections::{HashSet, VecDeque},
+	collections::{HashMap, HashSet, VecDeque},
 	time::Duration,
 };
 
@@ -10,7 +10,7 @@ use ruma::{
 };
 use tuwunel_core::{
 	debug, debug_error, debug_warn, expected, implement,
-	matrix::{PduEvent, pdu::MAX_AUTH_EVENTS},
+	matrix::{PduEvent, event::gen_event_id, pdu::MAX_AUTH_EVENTS},
 	trace,
 	utils::stream::{BroadbandExt, IterStream},
 	warn,
@@ -104,6 +104,17 @@ where
 					{
 						if next_id == id {
 							pdus.push((pdu, Some(json)));
+							let _: tuwunel_core::Result = self
+								.unreject_rejected_events(origin, room_id, room_version)
+								.await
+								.inspect_err(|e| {
+									warn!(
+										?room_id,
+										?origin,
+										"Failed to run unreject_rejected_events in fetch_auth: \
+										 {e:?}"
+									);
+								});
 						}
 						self.record_success(Context::Auth, &next_id).await;
 					} else {
@@ -145,6 +156,27 @@ async fn fetch_auth_chain(
 	let mut events_all = HashSet::new();
 	let mut events_in_reverse_order = Vec::new();
 	let mut todo_auth_events: VecDeque<_> = [event_id.to_owned()].into();
+
+	// Try to fetch the entire auth chain in a single request using Op::AuthChain
+	let mut fetched_chain = HashMap::new();
+	let chain_opts = Opts::new(Op::AuthChain, room_id.to_owned())
+		.event_id(event_id.to_owned())
+		.hint(origin.to_owned())
+		.room_version(room_version.to_owned())
+		.attempt_limit(super::EVENT_FETCH_ATTEMPT_LIMIT)
+		.fanout_for_op();
+
+	if let Ok(outcome) = self.services.fetcher.fetch(chain_opts).await
+		&& let Ok(auth_chain) = serde_json::from_slice::<Vec<CanonicalJsonObject>>(&outcome.bytes)
+	{
+		debug!(count = auth_chain.len(), "Pre-fetched entire auth chain");
+		for event_json in auth_chain {
+			if let Ok(id) = gen_event_id(&event_json, room_version) {
+				fetched_chain.insert(id, event_json);
+			}
+		}
+	}
+
 	while let Some(next_id) = todo_auth_events.pop_front() {
 		if events_all.contains(&next_id) {
 			continue;
@@ -173,29 +205,35 @@ async fn fetch_auth_chain(
 			break;
 		}
 
-		debug!("Fetching {next_id} over federation.");
-		let opts = Opts::new(Op::AuthEvent, room_id.to_owned())
-			.event_id(next_id.clone())
-			.hint(origin.to_owned())
-			.room_version(room_version.to_owned())
-			.attempt_limit(super::EVENT_FETCH_ATTEMPT_LIMIT)
-			.fanout_for_op();
+		let value = if let Some(pre_fetched) = fetched_chain.remove(&next_id) {
+			trace!("Found {next_id} in pre-fetched auth chain");
+			pre_fetched
+		} else {
+			debug!("Fetching {next_id} over federation.");
+			let opts = Opts::new(Op::AuthEvent, room_id.to_owned())
+				.event_id(next_id.clone())
+				.hint(origin.to_owned())
+				.room_version(room_version.to_owned())
+				.attempt_limit(super::EVENT_FETCH_ATTEMPT_LIMIT)
+				.fanout_for_op();
 
-		let Ok(outcome) = self
-			.services
-			.fetcher
-			.fetch(opts)
-			.inspect_err(|e| debug_error!(?next_id, "Failed to fetch event: {e}"))
-			.await
-		else {
-			debug_warn!("Backing off from {next_id}");
-			self.record_outcome(Context::Fetch, &next_id, Disposition::Transient);
-			continue;
-		};
+			let Ok(outcome) = self
+				.services
+				.fetcher
+				.fetch(opts)
+				.inspect_err(|e| debug_error!(?next_id, "Failed to fetch event: {e}"))
+				.await
+			else {
+				debug_warn!("Backing off from {next_id}");
+				self.record_outcome(Context::Fetch, &next_id, Disposition::Transient);
+				continue;
+			};
 
-		let Ok(value) = serde_json::from_slice::<CanonicalJsonObject>(&outcome.bytes) else {
-			self.record_outcome(Context::Fetch, &next_id, Disposition::Transient);
-			continue;
+			let Ok(value) = serde_json::from_slice::<CanonicalJsonObject>(&outcome.bytes) else {
+				self.record_outcome(Context::Fetch, &next_id, Disposition::Transient);
+				continue;
+			};
+			value
 		};
 
 		debug!("Got {next_id} over federation");

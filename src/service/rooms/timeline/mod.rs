@@ -42,12 +42,12 @@ use crate::rooms::short::{ShortRoomId, ShortStateHash};
 
 pub struct Service {
 	services: Arc<crate::services::OnceServices>,
-	db: Data,
+	pub db: Data,
 	pub mutex_insert: RoomMutexMap,
 }
 
-struct Data {
-	eventid_outlierpdu: Arc<Map>,
+pub struct Data {
+	pub eventid_outlierpdu: Arc<Map>,
 	eventid_pduid: Arc<Map>,
 	pduid_pdu: Arc<Map>,
 	roomid_tscount_pducount: Arc<Map>,

@@ -75,8 +75,7 @@ pub struct Pdu {
 	pub signatures: Option<Box<RawJsonValue>>,
 
 	//TODO: https://spec.matrix.org/v1.14/rooms/v11/#rejected-events
-	#[cfg(test)]
-	#[serde(default, skip_serializing)]
+	#[serde(default)]
 	pub rejected: bool,
 }
 
@@ -201,13 +200,8 @@ where
 	#[inline]
 	fn redacts(&self) -> Option<&EventId> { self.redacts.as_deref() }
 
-	#[cfg(test)]
 	#[inline]
 	fn rejected(&self) -> bool { self.rejected }
-
-	#[cfg(not(test))]
-	#[inline]
-	fn rejected(&self) -> bool { false }
 
 	#[inline]
 	fn room_id(&self) -> &RoomId { &self.room_id }
@@ -272,13 +266,8 @@ where
 	#[inline]
 	fn redacts(&self) -> Option<&EventId> { self.redacts.as_deref() }
 
-	#[cfg(test)]
 	#[inline]
 	fn rejected(&self) -> bool { self.rejected }
-
-	#[cfg(not(test))]
-	#[inline]
-	fn rejected(&self) -> bool { false }
 
 	#[inline]
 	fn room_id(&self) -> &RoomId { &self.room_id }

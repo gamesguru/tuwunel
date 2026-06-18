@@ -24,3 +24,22 @@ fn get_help_inner(input: &str) {
 	assert!(error.contains("Commands:"));
 	assert!(error.contains("Options:"));
 }
+
+#[test]
+fn test_parse_get_room_dag() {
+	use clap::Parser;
+
+	use crate::admin::AdminCommand;
+
+	let result = AdminCommand::try_parse_from([
+		"tuwunel",
+		"debug",
+		"get-room-dag",
+		"!room:example.com",
+		"0",
+		"-1",
+		"--print",
+		"--outliers",
+	]);
+	assert!(result.is_ok(), "Failed to parse get-room-dag command: {:?}", result.err());
+}

@@ -78,6 +78,10 @@ on:
         type: boolean
         default: false
         description: Enable publication stage
+      enable_test_playwright:
+        type: boolean
+        default: false
+        description: Enable Playwright tests
       playwright_shards:
         type: string
         default: '8'
@@ -153,7 +157,7 @@ jobs:
       enable_package_distro: ${{fromJSON(inputs.enable_package_distro || env.is_fat || 'false')}}
       package_distros: ${{inputs.package_distros || env.default_package_distros}}
       enable_package_checks: ${{fromJSON(inputs.enable_package_checks || env.is_test || 'false')}}
-      enable_publish: ${{fromJSON(inputs.enable_publish || 'true') && (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && vars.TUWUNEL_GH_ACTIONS_DISABLE_HEAVY == ''}}
+      enable_publish: ${{fromJSON(inputs.enable_publish || 'true') && !github.event.repository.fork && (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && vars.TUWUNEL_GH_ACTIONS_DISABLE_HEAVY == ''}}
       is_release: ${{fromJSON(env.is_release || 'false')}}
       is_main: ${{fromJSON(env.is_main || 'false')}}
       is_test: ${{fromJSON(env.is_test || 'false')}}

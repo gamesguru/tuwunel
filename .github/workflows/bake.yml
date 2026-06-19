@@ -101,7 +101,7 @@ jobs:
       ${{matrix.sys_version}}
       ${{matrix.sys_target}}
 
-    runs-on: ${{ github.event.repository.fork && 'ubuntu-latest' || fromJSON(format('["{0}", "{1}"]', matrix.machine, inputs.runner)) }}
+    runs-on: ${{ (github.event.repository.fork || github.event.pull_request.head.repo.fork) && 'ubuntu-latest' || fromJSON(format('["{0}", "{1}"]', matrix.machine, inputs.runner)) }}
     strategy:
       fail-fast: ${{inputs.fail_fast}}
       max-parallel: ${{inputs.max-parallel}}
@@ -128,6 +128,7 @@ jobs:
 
     # Call docker
     - name: Bake ${{matrix.bake_target}}
+      if: ${{ !(github.event.repository.fork || github.event.pull_request.head.repo.fork) }}
       env:
         bake_target: ${{matrix.bake_target}}
         cargo_profile: ${{matrix.cargo_profile}}
@@ -150,10 +151,50 @@ jobs:
       run: |
         docker/bake.sh "${{matrix.bake_target}}"
 
+    # Setup Rust Toolchain for fork runs
+    - name: Setup Rust Toolchain (Fork)
+      if: ${{ github.event.repository.fork || github.event.pull_request.head.repo.fork }}
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: ${{ matrix.rust_toolchain == 'nightly' && 'nightly' || 'stable' }}
+        components: rustfmt, clippy
+
+    - name: Run Host Task (Fork)
+      if: ${{ github.event.repository.fork || github.event.pull_request.head.repo.fork }}
+      run: |
+        target="${{ matrix.bake_target }}"
+        echo "Running target '$target' on host"
+        if [ "$target" = "fmt" ]; then
+          cargo fmt --all -- --check
+        elif [ "$target" = "clippy" ]; then
+          cargo clippy --all-targets --all-features -- -D warnings
+        elif [ "$target" = "check" ]; then
+          cargo check --all-targets --all-features
+        elif [ "$target" = "unit" ]; then
+          cargo test --lib --bins
+        elif [ "$target" = "integ" ]; then
+          cargo test --test '*'
+        elif [ "$target" = "doc" ]; then
+          cargo doc --no-deps
+        elif [ "$target" = "typos" ]; then
+          if ! command -v typos &>/dev/null; then
+            cargo install typos-cli || true
+          fi
+          typos
+        elif [ "$target" = "audit" ]; then
+          if ! command -v cargo-audit &>/dev/null; then
+            cargo install cargo-audit --no-default-features --features=fix || true
+          fi
+          cargo audit
+        else
+          echo "Bypassing non-host target '$target' on fork"
+        fi
+
     # Optionally extract an inner artifact
     - name: Extract Inner Artifact
       if: >
         !failure() && !cancelled()
+        && !(github.event.repository.fork || github.event.pull_request.head.repo.fork)
         && fromJSON(inputs.artifact)[matrix.bake_target].dst
         && fromJSON(inputs.artifact)[matrix.bake_target].img == null
         && fromJSON(inputs.artifact)[matrix.bake_target].runner != true
@@ -175,6 +216,7 @@ jobs:
     - name: Extract Image Artifact
       if: >
         !failure() && !cancelled()
+        && !(github.event.repository.fork || github.event.pull_request.head.repo.fork)
         && fromJSON(inputs.artifact)[matrix.bake_target].dst
         && fromJSON(inputs.artifact)[matrix.bake_target].img != null
 
@@ -191,6 +233,7 @@ jobs:
     - name: Extract Outer Artifact
       if: >
         !failure() && !cancelled()
+        && !(github.event.repository.fork || github.event.pull_request.head.repo.fork)
         && fromJSON(inputs.artifact)[matrix.bake_target].dst
         && fromJSON(inputs.artifact)[matrix.bake_target].runner == true
 
@@ -209,6 +252,7 @@ jobs:
     - name: Tar Directory Artifact
       if: >
         !failure() && !cancelled()
+        && !(github.event.repository.fork || github.event.pull_request.head.repo.fork)
         && fromJSON(inputs.artifact)[matrix.bake_target].dst
         && fromJSON(inputs.artifact)[matrix.bake_target].dir == true
 

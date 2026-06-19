@@ -86,50 +86,22 @@ on:
         type: boolean
         default: false
         description: Enable auditing stage
-      enable_test_doc:
-        type: boolean
-        default: true
-        description: Enable documentation tests
       enable_test_unit:
         type: boolean
         default: true
         description: Enable unit tests
-      enable_test_bench:
-        type: boolean
-        default: true
-        description: Enable benchmark tests
-      enable_test_memcheck:
-        type: boolean
-        default: false
-        description: Enable memory leak checks
       enable_test_smoke:
         type: boolean
         default: false
         description: Enable smoke tests
-      enable_test_nix:
-        type: boolean
-        default: true
-        description: Enable Nix build tests
-      enable_test_rustsdk:
-        type: boolean
-        default: true
-        description: Enable Rust SDK integration tests
       enable_test_complement:
         type: boolean
         default: true
         description: Enable Complement tests
-      complement_verbose:
-        type: boolean
-        default: false
-        description: Enable verbose Complement logging
       enable_test_complement_crypto:
         type: boolean
         default: true
         description: Enable Complement Crypto tests
-      complement_crypto_verbose:
-        type: boolean
-        default: false
-        description: Enable verbose Complement Crypto logging
       playwright_shards:
         type: string
         default: '8'

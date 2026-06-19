@@ -6,3 +6,9 @@
 "serialize" = "serialize"
 "consts" = "consts"
 "fpr" = "fpr"
+
+[files]
+extend-exclude = [
+    "*.csr",
+    "docs/development/compliance/msc.md"
+]

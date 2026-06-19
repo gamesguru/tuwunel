@@ -212,7 +212,7 @@ let
       # We don't actually depend on `jq`, but crane's `buildPackage` does, but
       # its `buildDepsOnly` doesn't. This causes those two derivations to have
       # differing values for `NIX_CFLAGS_COMPILE`, which contributes to spurious
-      # rebuilds of bindgen and its depedents.
+      # rebuilds of bindgen and its dependents.
       jq
     ];
   };

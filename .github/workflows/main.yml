@@ -187,25 +187,25 @@ jobs:
       enable_test_smoke: ${{fromJSON(inputs.enable_test_smoke || env.is_fat || 'false')}}
       enable_test_nix: ${{fromJSON(inputs.enable_test_nix || 'true')}}
       enable_test_rustsdk: ${{fromJSON(inputs.enable_test_rustsdk || 'true')}}
-      enable_test_complement: ${{fromJSON(inputs.enable_test_complement || 'true') && !(github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      enable_test_complement: ${{fromJSON(inputs.enable_test_complement || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
       complement_verbose: ${{fromJSON(inputs.complement_verbose || 'false')}}
-      complement_runner: ${{ (github.event.repository.fork || github.event.pull_request.head.repo.fork) && 'ubuntu-latest' || 'het' }}
-      enable_test_complement_crypto: ${{fromJSON(inputs.enable_test_complement_crypto || 'true') && !(github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      complement_runner: ${{ (github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && 'ubuntu-latest' || 'het' }}
+      enable_test_complement_crypto: ${{fromJSON(inputs.enable_test_complement_crypto || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
       complement_crypto_verbose: ${{fromJSON(inputs.complement_crypto_verbose || 'false')}}
-      enable_test_playwright: ${{fromJSON(inputs.enable_test_playwright || env.is_dev || 'false') && vars.TUWUNEL_GH_ACTIONS_DISABLE_HEAVY == '' && !(github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
-      playwright_runner: ${{ (github.event.repository.fork || github.event.pull_request.head.repo.fork) && 'ubuntu-latest' || 'het' }}
+      enable_test_playwright: ${{fromJSON(inputs.enable_test_playwright || env.is_dev || 'false') && vars.TUWUNEL_GH_ACTIONS_DISABLE_HEAVY == '' && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      playwright_runner: ${{ (github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && 'ubuntu-latest' || 'het' }}
       playwright_shards: ${{inputs.playwright_shards || vars.PLAYWRIGHT_SHARDS || '8'}}
       playwright_workers: ${{inputs.playwright_workers || vars.PLAYWRIGHT_WORKERS || '1'}}
-      enable_package: ${{fromJSON(inputs.enable_package || 'true') && vars.TUWUNEL_GH_ACTIONS_DISABLE_HEAVY == '' && !(github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
-      enable_package_book: ${{fromJSON(inputs.enable_package_book || 'true') && !(github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
-      enable_package_docs: ${{fromJSON(inputs.enable_package_docs || 'true') && !(github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
-      enable_package_binary: ${{fromJSON(inputs.enable_package_binary || 'true') && !(github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
-      enable_package_container: ${{fromJSON(inputs.enable_package_container || env.is_fat || 'true') && !(github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      enable_package: ${{fromJSON(inputs.enable_package || 'true') && vars.TUWUNEL_GH_ACTIONS_DISABLE_HEAVY == '' && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      enable_package_book: ${{fromJSON(inputs.enable_package_book || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      enable_package_docs: ${{fromJSON(inputs.enable_package_docs || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      enable_package_binary: ${{fromJSON(inputs.enable_package_binary || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      enable_package_container: ${{fromJSON(inputs.enable_package_container || env.is_fat || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
       package_containers: ${{inputs.package_containers || env.default_package_containers}}
-      enable_package_distro: ${{fromJSON(inputs.enable_package_distro || env.is_fat || 'false') && !(github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      enable_package_distro: ${{fromJSON(inputs.enable_package_distro || env.is_fat || 'false') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
       package_distros: ${{inputs.package_distros || env.default_package_distros}}
-      enable_package_checks: ${{fromJSON(inputs.enable_package_checks || env.is_test || 'false') && !(github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
-      enable_publish: ${{fromJSON(inputs.enable_publish || 'true') && !(github.event.repository.fork || github.event.pull_request.head.repo.fork) && (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && vars.TUWUNEL_GH_ACTIONS_DISABLE_HEAVY == ''}}
+      enable_package_checks: ${{fromJSON(inputs.enable_package_checks || env.is_test || 'false') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      enable_publish: ${{fromJSON(inputs.enable_publish || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && vars.TUWUNEL_GH_ACTIONS_DISABLE_HEAVY == ''}}
       is_release: ${{fromJSON(env.is_release || 'false')}}
       is_main: ${{fromJSON(env.is_main || 'false')}}
       is_test: ${{fromJSON(env.is_test || 'false')}}
@@ -220,7 +220,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        runner: ${{fromJSON((github.event.repository.fork || github.event.pull_request.head.repo.fork) && '["ubuntu-latest"]' || inputs.runners || vars.RUNNERS || '["het"]')}}
+        runner: ${{fromJSON((github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && '["ubuntu-latest"]' || inputs.runners || vars.RUNNERS || '["het"]')}}
         machine: ${{fromJSON(inputs.machines || vars.MACHINES || '["X64"]')}}
         exclude: ${{fromJSON(vars.RUNNERS_EXCLUDES || '[]')}}
 
@@ -228,7 +228,7 @@ jobs:
     - uses: actions/checkout@v6
 
     - name: Initialize Builder
-      if: ${{ !(github.event.repository.fork || github.event.pull_request.head.repo.fork) }}
+      if: ${{ !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) }}
       env:
         runner: ${{matrix.runner}}
         pipeline: ${{inputs.pipeline || github.event.head_commit.message || github.event.workflow_run.head_commit.message}}

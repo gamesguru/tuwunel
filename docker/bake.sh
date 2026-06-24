@@ -91,9 +91,10 @@ rocksdb_portable=1
 set +a
 
 # If we are running on a fork repo, bypass docker buildx bake and execute natively on the host.
-if test "${GITHUB_REPOSITORY_OWNER}" != "matrix-construct" && test -n "${GITHUB_REPOSITORY_OWNER}"; then
+# However, if we are building a complement target, do NOT bypass (run standard docker buildx bake on host's Docker).
+if test "${GITHUB_REPOSITORY_OWNER}" != "matrix-construct" && test -n "${GITHUB_REPOSITORY_OWNER}" && [[ ! "${bake_target}" =~ "complement" ]]; then
     echo "Fork detected (owner: ${GITHUB_REPOSITORY_OWNER}). Running verification natively on host."
-    
+
     # Configure the requested Rust toolchain on the host
     if [ "$rust_toolchain" = "nightly" ]; then
         rustup default nightly || rustup toolchain install nightly && rustup default nightly
@@ -141,7 +142,9 @@ fi
 
 args=""
 args="$args --provenance=false"
-args="$args --builder ${builder_name}"
+if docker buildx inspect "${builder_name}" &>/dev/null; then
+    args="$args --builder ${builder_name}"
+fi
 #args="$args --set *.platform=${sys_platform}"
 
 if test "$CI" = "true"; then

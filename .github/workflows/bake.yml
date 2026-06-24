@@ -109,14 +109,14 @@ jobs:
         exclude: ${{fromJSON(inputs.excludes)}}
         include: ${{fromJSON(inputs.includes)}}
         bake_target: ${{fromJSON(inputs.bake_targets)}}
-        cargo_profile: ${{fromJSON(inputs.cargo_profiles)}}
-        feat_set: ${{fromJSON(inputs.feat_sets)}}
-        rust_toolchain: ${{fromJSON(inputs.rust_toolchains)}}
-        sys_name: ${{fromJSON(inputs.sys_names)}}
-        sys_version: ${{fromJSON(inputs.sys_versions)}}
-        rust_target: ${{fromJSON(inputs.rust_targets)}}
-        sys_target: ${{fromJSON(inputs.sys_targets)}}
-        machine: ${{fromJSON(inputs.machines)}}
+        cargo_profile: ${{fromJSON((github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && '["test"]' || inputs.cargo_profiles)}}
+        feat_set: ${{fromJSON((github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && '["all"]' || inputs.feat_sets)}}
+        rust_toolchain: ${{fromJSON((github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && '["nightly"]' || inputs.rust_toolchains)}}
+        sys_name: ${{fromJSON((github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && '["debian"]' || inputs.sys_names)}}
+        sys_version: ${{fromJSON((github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && '["testing-slim"]' || inputs.sys_versions)}}
+        rust_target: ${{fromJSON((github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && '["x86_64-unknown-linux-gnu"]' || inputs.rust_targets)}}
+        sys_target: ${{fromJSON((github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && '["x86_64-v1-linux-gnu"]' || inputs.sys_targets)}}
+        machine: ${{fromJSON((github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && '["X64"]' || inputs.machines)}}
 
     steps:
     - uses: actions/checkout@v7
@@ -128,7 +128,7 @@ jobs:
 
     # Call docker
     - name: Bake ${{matrix.bake_target}}
-      if: ${{ !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) }}
+      if: ${{ !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) || contains(matrix.bake_target, 'complement') }}
       env:
         bake_target: ${{matrix.bake_target}}
         cargo_profile: ${{matrix.cargo_profile}}
@@ -153,14 +153,14 @@ jobs:
 
     # Setup Rust Toolchain for fork runs
     - name: Setup Rust Toolchain (Fork)
-      if: ${{ github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork }}
-      uses: actions-rust-lang/setup-rust-toolchain@v1
+      if: ${{ (github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && !contains(matrix.bake_target, 'complement') }}
+      uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
       with:
         toolchain: ${{ matrix.rust_toolchain == 'nightly' && 'nightly' || 'stable' }}
         components: rustfmt, clippy
 
     - name: Run Host Task (Fork)
-      if: ${{ github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork }}
+      if: ${{ (github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && !contains(matrix.bake_target, 'complement') }}
       run: |
         target="${{ matrix.bake_target }}"
         echo "Running target '$target' on host"
@@ -270,6 +270,7 @@ jobs:
     - name: Compress Artifact
       if: >
         !failure() && !cancelled()
+        && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)
         && fromJSON(inputs.artifact)[matrix.bake_target].dst
         && (fromJSON(inputs.artifact)[matrix.bake_target].gzip || fromJSON(inputs.artifact)[matrix.bake_target].zstd)
 
@@ -292,6 +293,7 @@ jobs:
     - name: Upload Artifact
       if: >
         !failure() && !cancelled()
+        && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)
         && fromJSON(inputs.artifact)[matrix.bake_target].dst
 
       uses: actions/upload-artifact@v7
@@ -303,6 +305,7 @@ jobs:
     - name: Upload Pages Artifact
       if: >
         !failure() && !cancelled()
+        && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)
         && fromJSON(inputs.artifact)[matrix.bake_target].dst
         && fromJSON(inputs.artifact)[matrix.bake_target].pages == true
 
@@ -315,6 +318,7 @@ jobs:
     - name: Upload Release Artifact
       if: >
         !failure() && !cancelled()
+        && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)
         && fromJSON(inputs.artifact)[matrix.bake_target].dst
         && fromJSON(inputs.artifact)[matrix.bake_target].mime
         && contains(github.ref, 'refs/tags/v')

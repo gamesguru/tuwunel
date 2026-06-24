@@ -164,7 +164,7 @@ links/messages.spec.ts :: should linkify a User ID
 links/messages.spec.ts :: should linkify a regular link 'ftp://example.org'
 links/messages.spec.ts :: should linkify a regular link 'https://example.org'
 links/messages.spec.ts :: should linkify text inside a URL preview
-links/permalinks.spec.ts :: shoud render permalinks as expected
+links/permalinks.spec.ts :: should render permalinks as expected
 links/permalinks.spec.ts :: should select entire message line when triple-clicking on message with pills
 links/topic.spec.ts :: should linkify plaintext '#aroom:example.org'
 links/topic.spec.ts :: should linkify plaintext '_@alice:example.org'

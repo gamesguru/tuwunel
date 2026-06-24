@@ -108,6 +108,30 @@ pub async fn build_and_append_pdu(
 				"Authorising user does not belong to this homeserver"
 			)));
 		}
+
+		if let Some(state_key) = &pdu.state_key {
+			if let Ok(current_member_pdu) = self
+				.services
+				.state_accessor
+				.room_state_get(room_id, &TimelineEventType::RoomMember, state_key)
+				.await
+			{
+				if let Ok(current_content) = current_member_pdu.get_content::<RoomMemberEventContent>() {
+					if current_content.membership == content.membership
+						&& current_content.displayname == content.displayname
+						&& current_content.avatar_url == content.avatar_url
+						&& current_content.blurhash == content.blurhash
+						&& current_content.reason == content.reason
+						&& current_content.join_authorized_via_users_server == content.join_authorized_via_users_server
+						&& current_content.is_direct == content.is_direct
+						&& current_content.third_party_invite == content.third_party_invite
+					{
+						tracing::debug!("Skipping append of duplicate m.room.member event: content has no changes.");
+						return Ok(current_member_pdu.event_id.clone());
+					}
+				}
+			}
+		}
 	}
 
 	// MSC4284: ask the room's policy server (if any) to sign this event before

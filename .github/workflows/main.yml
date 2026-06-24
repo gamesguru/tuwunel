@@ -436,6 +436,11 @@ jobs:
 
     name: Publish
     needs: [init, test, package]
+    permissions:
+      contents: read
+      packages: write
+      pages: write
+      id-token: write
     uses: ./.github/workflows/publish.yml
     with:
       checkout: ${{needs.init.outputs.checkout}}

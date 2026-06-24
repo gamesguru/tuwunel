@@ -39,7 +39,7 @@ pub(crate) async fn report_room_route(
 
 	services
 		.admin
-		.send_text(&format!(
+		.send_report(&format!(
 			"@room Room report received from {}\nReport Reason: {}\n\nRoom ID: {}",
 			sender_user, body.reason, body.room_id,
 		))

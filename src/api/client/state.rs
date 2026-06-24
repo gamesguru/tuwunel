@@ -431,6 +431,16 @@ async fn validate_member(
 		)));
 	}
 
+	// Already joined or invited: no restricted-join authorisation needed.
+	if services
+		.state_cache
+		.user_membership(&target_user, room_id)
+		.await
+		.is_some_and(|m| matches!(m, MembershipState::Join | MembershipState::Invite))
+	{
+		return Ok(());
+	}
+
 	if !services.globals.user_is_local(&authorising_user) {
 		return Err!(Request(InvalidParam(
 			"Authorising user {authorising_user} does not belong to this homeserver"

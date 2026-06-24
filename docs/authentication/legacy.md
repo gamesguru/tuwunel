@@ -61,6 +61,48 @@ yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse = true
 This is not recommended for public-facing servers. Consider token-based
 registration or SSO providers instead.
 
+## Email verification
+
+Tuwunel can verify that a user controls an email address by emailing a
+single-use confirmation link through your own SMTP relay. No external identity
+server is involved; each verified address binds locally to one account. Email is
+the only supported medium (phone-number verification is not supported). Verified
+email is used for adding an address to an account, resetting a forgotten
+password, and optionally [requiring email at
+registration](#requiring-email-at-registration).
+
+Point Tuwunel at an SMTP relay and set the sender mailbox. The confirmation link
+is built from `well_known.client`, so that must also be set and reachable by
+your users in a browser:
+
+```toml
+[global.smtp]
+connection_uri = "smtps://noreply%40example.com:password@mail.example.com:465"
+sender = "Example <noreply@example.com>"
+
+[global.well_known]
+client = "https://matrix.example.com"
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `connection_uri` | (unset) | Connection URL for the outbound SMTP relay. Setting it enables the email subsystem; without it, no mail is sent. Use `smtp://` for an unencrypted or STARTTLS connection and `smtps://` for implicit TLS. Credentials and host go inline (`smtps://user:pass@host:port`). The userinfo is URL-encoded, so an `@` in the username must be written as `%40`. |
+| `sender` | (unset) | The mailbox verification messages are sent from. Accepts a bare address or a display-name form (`Example <noreply@example.com>`). Required whenever `connection_uri` is set. |
+
+The subsystem is disabled by default and stays inert until `connection_uri` is
+set. If a client asks to verify an email while it is disabled, the request is
+rejected with `M_THREEPID_DENIED`.
+
+## Requiring email at registration
+
+These options gate registration on a verified email address. Both default to
+off, and both require the email verification subsystem above to be configured.
+
+| Option | Default | Description |
+|---|---|---|
+| `require_email_for_registration` | `false` | Require a verified email address to complete registration. When set, the registration flow does not finish until the user proves control of an email address. |
+| `require_email_for_token_registration` | `false` | Require a verified email address when registering with a [registration token](#token-based-registration). When set, token-based registration also demands a verified email address. |
+
 ## Guest registration
 
 Guest accounts are anonymous sessions that some clients (e.g. Element) create

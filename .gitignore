@@ -99,6 +99,10 @@ rustc-ice-*
 # complement test logs are huge
 tests/complement/logs.jsonl
 
+# interop (heterogeneous-homeserver) runs are report-only; their results do
+# not match the homogeneous baseline and are not tracked
+tests/complement/interop/
+
 # playwright results/output captured by docker/playwright.sh; results.json is
 # multi-MB per run and not suitable as a tracked baseline. The
 # known-failures.txt baseline is tracked.

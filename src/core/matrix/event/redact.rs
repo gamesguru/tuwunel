@@ -4,9 +4,10 @@ use ruma::{
 	room_version_rules::RoomVersionRules,
 };
 use serde::Deserialize;
-use serde_json::value::{RawValue as RawJsonValue, to_raw_value};
+use serde_json::value::to_raw_value;
 
 use super::Event;
+use crate::matrix::pdu::Content;
 
 /// Copies the `redacts` property of the event to the `content` dict and
 /// vice-versa.
@@ -22,28 +23,36 @@ use super::Event;
 /// > redacts property to the content of m.room.redaction events in older
 /// > room versions when serving such events over the Client-Server API.
 #[must_use]
-pub(super) fn copy<E: Event>(event: &E) -> (Option<OwnedEventId>, Box<RawJsonValue>) {
+pub(super) fn copy<E: Event>(event: &E) -> (Option<OwnedEventId>, Content) {
 	if *event.event_type() != TimelineEventType::RoomRedaction {
-		return (event.redacts().map(ToOwned::to_owned), event.content().to_owned());
+		return (
+			event.redacts().map(ToOwned::to_owned),
+			Content::from_raw_value(event.content()),
+		);
 	}
 
 	let Ok(mut content) = event.get_content::<RoomRedactionEventContent>() else {
-		return (event.redacts().map(ToOwned::to_owned), event.content().to_owned());
+		return (
+			event.redacts().map(ToOwned::to_owned),
+			Content::from_raw_value(event.content()),
+		);
 	};
 
 	if let Some(redacts) = content.redacts {
-		return (Some(redacts), event.content().to_owned());
+		return (Some(redacts), Content::from_raw_value(event.content()));
 	}
 
 	if let Some(redacts) = event.redacts().map(ToOwned::to_owned) {
 		content.redacts = Some(redacts);
 		return (
 			event.redacts().map(ToOwned::to_owned),
-			to_raw_value(&content).expect("Must be valid, we only added redacts field"),
+			Content::from_json(
+				to_raw_value(&content).expect("Must be valid, we only added redacts field"),
+			),
 		);
 	}
 
-	(event.redacts().map(ToOwned::to_owned), event.content().to_owned())
+	(event.redacts().map(ToOwned::to_owned), Content::from_raw_value(event.content()))
 }
 
 #[must_use]

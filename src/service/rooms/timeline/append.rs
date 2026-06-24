@@ -23,7 +23,9 @@ use tuwunel_core::{
 use tuwunel_database::Json;
 
 use super::{ExtractBody, ExtractRelatesTo, ExtractRelatesToEventId, RoomMutexGuard, bias_count};
-use crate::rooms::{short::ShortRoomId, state_compressor::CompressedState};
+use crate::rooms::{
+	short::ShortRoomId, state_accessor::plain_text_topic, state_compressor::CompressedState,
+};
 
 /// Append the incoming event setting the state snapshot to the state from
 /// the server that sent the event.
@@ -299,6 +301,12 @@ async fn append_pdu_effects(
 				}
 			}
 		},
+		| TimelineEventType::RoomTopic =>
+			if let Some(topic) = pdu.get_content().ok().and_then(plain_text_topic) {
+				self.services
+					.search
+					.index_pdu(shortroomid, &pdu_id, &topic);
+			},
 		| _ => {},
 	}
 

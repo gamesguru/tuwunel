@@ -10,7 +10,7 @@ use reqwest::header::{CONTENT_TYPE, HeaderValue};
 use ruma::{
 	Mxc, OwnedMxcUri, OwnedRoomId, OwnedUserId, ServerName, UserId,
 	api::client::{
-		session::{sso_callback, sso_login, sso_login_with_provider},
+		session::{SsoRedirectAction, sso_callback, sso_login, sso_login_with_provider},
 		uiaa::AuthType,
 	},
 };
@@ -60,6 +60,8 @@ struct GrantQuery<'a> {
 	code_challenge_method: &'a str,
 	code_challenge: &'a str,
 	redirect_uri: Option<&'a str>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	prompt: Option<&'a str>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -95,13 +97,14 @@ pub(crate) async fn sso_login_route(
 	}
 
 	let redirect_url = body.body.redirect_url;
+	let action = body.body.action;
 	let default_idp_id = services
 		.oauth
 		.providers
 		.get_default_id()
 		.unwrap_or_default();
 
-	handle_sso_login(&services, &client, default_idp_id, redirect_url, None)
+	handle_sso_login(&services, &client, default_idp_id, redirect_url, None, action)
 		.map_ok(|response| sso_login::v3::Response {
 			location: response.location,
 			cookie: response.cookie,
@@ -132,8 +135,9 @@ pub(crate) async fn sso_login_with_provider_route(
 	let idp_id = body.body.idp_id;
 	let redirect_url = body.body.redirect_url;
 	let login_token = body.body.login_token;
+	let action = body.body.action;
 
-	handle_sso_login(&services, &client, idp_id, redirect_url, login_token).await
+	handle_sso_login(&services, &client, idp_id, redirect_url, login_token, action).await
 }
 
 async fn handle_sso_login(
@@ -142,6 +146,7 @@ async fn handle_sso_login(
 	idp_id: String,
 	redirect_url: String,
 	login_token: Option<String>,
+	action: Option<SsoRedirectAction>,
 ) -> Result<sso_login_with_provider::v3::Response> {
 	let redirect_url: Url = redirect_url.parse().map_err(|e| {
 		err!(Request(InvalidParam(debug_warn!(
@@ -159,6 +164,9 @@ async fn handle_sso_login(
 	let code_challenge = b64.encode(sha256::hash(code_verifier.as_bytes()));
 	let callback_uri = provider.callback_url.as_ref().map(Url::as_str);
 	let scope = provider.scope.iter().join(" ");
+	let prompt = action
+		.filter(|_| provider.forward_action_prompt)
+		.and_then(|action| matches!(action, SsoRedirectAction::Register).then_some("create"));
 
 	let query = GrantQuery {
 		client_id: &provider.client_id,
@@ -169,6 +177,7 @@ async fn handle_sso_login(
 		code_challenge_method: "S256",
 		code_challenge: &code_challenge,
 		redirect_uri: callback_uri,
+		prompt,
 		scope: scope
 			.is_empty()
 			.then_some("openid email profile")

@@ -182,6 +182,11 @@ async fn handle_room(
 		.filter_map(|item| ignored_filter(services, item.clone(), sender_user))
 		.map(at!(1))
 		.wide_then(|pdu| with_membership(services, pdu, sender_user, encrypted))
+		.wide_then(|pdu| {
+			services
+				.pdu_metadata
+				.bundle_aggregations(sender_user, pdu)
+		})
 		.map(Event::into_format)
 		.collect();
 

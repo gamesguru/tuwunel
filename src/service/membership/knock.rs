@@ -12,14 +12,15 @@ use ruma::{
 	},
 };
 use tuwunel_core::{
-	Err, Event, PduCount, Result, at, debug, debug_info, debug_warn, err, extract_variant,
-	implement, info,
+	Err, Event, PduCount, Result, at, debug, debug_info, debug_warn, err, implement, info,
 	matrix::event::gen_event_id,
 	pdu::{PduBuilder, PduEvent},
 	trace, utils, warn,
 };
 
-use super::Service;
+use super::{
+	Service, StrippedCreateVerdict, enforce_stripped_create, into_client_stripped, v12_room_ids,
+};
 use crate::{
 	membership::join::get_servers_for_room,
 	rooms::{
@@ -260,11 +261,6 @@ async fn knock_room_local_federation_fallback(
 }
 
 #[implement(Service)]
-#[expect(
-	deprecated,
-	reason = "Matrix 1.16 still permits receiving the legacy stripped variant for backwards \
-	          compatibility."
-)]
 async fn finalize_knock_membership(
 	&self,
 	room_id: &RoomId,
@@ -293,7 +289,7 @@ async fn finalize_knock_membership(
 				send_knock_response
 					.knock_room_state
 					.into_iter()
-					.filter_map(|s| extract_variant!(s, RawStrippedState::Stripped))
+					.filter_map(|state| into_client_stripped(room_id, state))
 					.collect(),
 			),
 			None,
@@ -317,11 +313,6 @@ async fn finalize_knock_membership(
 }
 
 #[implement(Service)]
-#[expect(
-	deprecated,
-	reason = "Matrix 1.16 still permits receiving the legacy stripped variant for backwards \
-	          compatibility."
-)]
 async fn knock_room_helper_remote(
 	&self,
 	sender_user: &UserId,
@@ -368,7 +359,7 @@ async fn knock_room_helper_remote(
 		.map_err(|e| err!(BadServerResponse("Invalid knock event PDU: {e:?}")))?;
 
 	let state_map = self
-		.ingest_send_knock_state(&send_knock_response, &room_version_id)
+		.ingest_send_knock_state(room_id, &send_knock_response, &room_version_id)
 		.await?;
 
 	self.apply_send_knock_state(room_id, &state_map, state_lock)
@@ -395,7 +386,7 @@ async fn knock_room_helper_remote(
 				send_knock_response
 					.knock_room_state
 					.into_iter()
-					.filter_map(|s| extract_variant!(s, RawStrippedState::Stripped))
+					.filter_map(|state| into_client_stripped(room_id, state))
 					.collect(),
 			),
 			None,
@@ -529,22 +520,36 @@ async fn execute_send_knock(
 )]
 async fn ingest_send_knock_state(
 	&self,
+	room_id: &RoomId,
 	send_knock_response: &federation::membership::create_knock_event::v1::Response,
 	room_version_id: &RoomVersionId,
 ) -> Result<HashMap<u64, OwnedEventId>> {
 	info!("Going through send_knock response knock state events");
+
+	let verdict = self
+		.validate_stripped_create(&send_knock_response.knock_room_state, room_id, room_version_id)
+		.await?;
+
+	let enforce = self
+		.services
+		.config
+		.enforce_stripped_state_pdu_validation;
+
+	let drop_create = enforce_stripped_create(verdict, v12_room_ids(room_version_id), enforce);
+
+	if verdict != StrippedCreateVerdict::Valid {
+		debug_warn!(?verdict, %room_id, drop_create, "MSC4311 knock create-event validation failed");
+	}
+
 	let state = send_knock_response
 		.knock_room_state
 		.iter()
-		.map(|event| {
-			serde_json::from_str::<CanonicalJsonObject>(
-				extract_variant!(event.clone(), RawStrippedState::Stripped)
-					.expect("Raw<AnyStrippedStateEvent>")
-					.json()
-					.get(),
-			)
-		})
-		.filter_map(Result::ok);
+		.filter_map(|event| match event {
+			| RawStrippedState::Pdu(raw) =>
+				serde_json::from_str::<CanonicalJsonObject>(raw.get()).ok(),
+			| RawStrippedState::Stripped(raw) =>
+				serde_json::from_str::<CanonicalJsonObject>(raw.json().get()).ok(),
+		});
 
 	let mut state_map: HashMap<u64, OwnedEventId> = HashMap::new();
 
@@ -567,6 +572,12 @@ async fn ingest_send_knock_state(
 			debug_warn!("send_knock stripped state event has invalid event type: {event:?}");
 			continue;
 		};
+
+		// MSC4311: drop a create event that failed validation when policy enforces.
+		if drop_create && event_type == StateEventType::RoomCreate && state_key.is_empty() {
+			debug_warn!(%room_id, "dropping unvalidated create event from knock state");
+			continue;
+		}
 
 		let event_id = gen_event_id(&event, room_version_id)?;
 		let shortstatekey = self

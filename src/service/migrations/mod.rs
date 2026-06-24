@@ -23,6 +23,7 @@ use tuwunel_database::{Deserialized, SEP};
 use crate::{Services, media, rooms::timeline::bias_count};
 
 mod conduit;
+mod moderation;
 
 /// The current schema version.
 /// - If database is opened at greater version we reject with error. The
@@ -33,6 +34,12 @@ mod conduit;
 pub(crate) const DATABASE_VERSION: u64 = 17;
 
 const SERVER_NAME_KEY: &[u8] = b"server_name";
+
+/// A marker written by a sibling conduwuit-lineage server but never by tuwunel.
+/// Its presence identifies a foreign database at a higher schema number even
+/// after tuwunel has stamped its own `server_name`, so a database opened by
+/// both servers in turn keeps booting rather than being refused as too new.
+const FOREIGN_LINEAGE_MARKER: &[u8] = b"populate_userroomid_leftstate_table";
 
 pub(crate) async fn migrations(services: &Services) -> Result {
 	if !services.config.database_migrations {
@@ -45,29 +52,39 @@ pub(crate) async fn migrations(services: &Services) -> Result {
 		return fresh(services).await;
 	}
 
-	check_database_version(services).await?;
+	// Computed before check_server_name backfills SERVER_NAME_KEY, which would
+	// otherwise mask a Conduit-lineage database (it carries no foreign marker).
+	let foreign_lineage = is_foreign_lineage(services).await;
+
+	check_database_version(services, foreign_lineage).await?;
 	check_server_name(services).await?;
-	migrate(services).await
+	migrate(services, foreign_lineage).await
+}
+
+/// Whether the database comes from a foreign (non-tuwunel) lineage: it predates
+/// our SERVER_NAME_KEY stamp, or carries a conduwuit-lineage migration marker
+/// that persists even after we stamp ours. Must be read before the server_name
+/// backfill, which removes the first signal.
+async fn is_foreign_lineage(services: &Services) -> bool {
+	let global = &services.db["global"];
+
+	global.get(SERVER_NAME_KEY).await.is_not_found()
+		|| global.get(FOREIGN_LINEAGE_MARKER).await.is_ok()
 }
 
 /// Gate the discovered schema version before migrations and the server_name
 /// backfill run. The integer is comparable only within tuwunel's own lineage; a
 /// foreign database (Conduit and forks) numbers schema on a colliding ladder
-/// and never writes SERVER_NAME_KEY, so its absence marks a foreign lineage
-/// whose number is not gated. Within our lineage a version below 13 is refused
-/// as unmigratable and one above this build as too new to open safely;
-/// force_migration overrides the latter for a deliberate downgrade.
-async fn check_database_version(services: &Services) -> Result {
+/// and is recognized as foreign by [`is_foreign_lineage`], so its number is not
+/// gated. Within our lineage a version below 13 is refused as unmigratable and
+/// one above this build as too new to open safely; force_migration overrides
+/// the latter for a deliberate downgrade.
+async fn check_database_version(services: &Services, foreign_lineage: bool) -> Result {
 	let discovered = services.globals.db.database_version().await;
 
 	if discovered < 13 {
 		return Err!(Database("Database schema version {discovered} is no longer supported"));
 	}
-
-	let foreign_lineage = services.db["global"]
-		.get(SERVER_NAME_KEY)
-		.await
-		.is_not_found();
 
 	if discovered > DATABASE_VERSION && !foreign_lineage && !services.config.force_migration {
 		return Err!(Database(
@@ -160,10 +177,24 @@ async fn fresh(services: &Services) -> Result {
 }
 
 /// Apply any migrations
-async fn migrate(services: &Services) -> Result {
+async fn migrate(services: &Services, foreign_lineage: bool) -> Result {
 	let db = &services.db;
 
 	let target_version = DATABASE_VERSION;
+	let discovered = services.globals.db.database_version().await;
+
+	// Claim our schema version up front when importing a foreign database
+	// numbered above ours (e.g. Conduit at 18). Stamping only at the end would
+	// leave an aborted import unbootable: the server_name backfill has already
+	// run, so a restart no longer sees the database as foreign and the version
+	// gate refuses it. The per-step markers below remain the real idempotency
+	// gates, so an aborted import still resumes where it left off.
+	if foreign_lineage && discovered > target_version {
+		services
+			.globals
+			.db
+			.bump_database_version(target_version);
+	}
 
 	migrate_media(services).await?;
 
@@ -175,6 +206,9 @@ async fn migrate(services: &Services) -> Result {
 		conduit::migrate_conduit_pdus(services).await?;
 		db["global"].insert(b"fix_pdu_missing_room_id", []);
 	}
+
+	import_conduit_knocks(services).await?;
+	split_conduit_highlight_counts(services).await?;
 
 	if db["global"]
 		.get(b"fix_bad_double_separator_in_state_cache")
@@ -240,9 +274,14 @@ async fn migrate(services: &Services) -> Result {
 		rebuild_roomid_tscount_pducount(services).await?;
 	}
 
-	// A newer same-lineage database was already refused; stamping ours is safe.
-	let discovered = services.globals.db.database_version().await;
+	// Non-destructive and idempotent, so it runs every boot rather than once: a
+	// suspension added by an origin server after a prior tuwunel boot still
+	// carries on the next one.
+	moderation::migrate_moderation(services).await?;
 
+	// A newer same-lineage database was already refused; stamping ours is safe. A
+	// foreign import above our version was already stamped down before the import
+	// ran, so this is a no-op for it.
 	services
 		.globals
 		.db
@@ -315,6 +354,47 @@ async fn migrate(services: &Services) -> Result {
 	}
 
 	info!("Loaded RocksDB database with schema version {DATABASE_VERSION}");
+
+	Ok(())
+}
+
+/// Imports a Conduit database's pending knocks once. Gated on its own marker
+/// and the source column's presence, so it runs only for a Conduit database and
+/// only the first time; a re-import would resurrect a knock the user later
+/// resolved.
+async fn import_conduit_knocks(services: &Services) -> Result {
+	let db = &services.db;
+
+	let pending = db["global"]
+		.get(b"imported_conduit_knocks")
+		.await
+		.is_not_found();
+
+	if pending && db.open_cf("roomuserid_knockcount")?.is_some() {
+		conduit::migrate_conduit_knocks(services).await?;
+		db["global"].insert(b"imported_conduit_knocks", []);
+	}
+
+	Ok(())
+}
+
+/// Splits a Conduit database's conflated highlight-count column once. Conduit
+/// aliased `roomuserid_lastnotificationread` onto the
+/// `userroomid_highlightcount` tree, so one column holds both stores; tuwunel
+/// keeps them apart. Gated on its own marker; the split itself returns early
+/// unless a room-keyed row is present, so it is a cheap no-op on a native
+/// database.
+async fn split_conduit_highlight_counts(services: &Services) -> Result {
+	let db = &services.db;
+
+	if db["global"]
+		.get(b"split_conduit_highlight")
+		.await
+		.is_not_found()
+	{
+		conduit::migrate_conduit_highlight_split(services).await?;
+		db["global"].insert(b"split_conduit_highlight", []);
+	}
 
 	Ok(())
 }

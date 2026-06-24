@@ -8,6 +8,7 @@ use tuwunel_core::{
 		pdu::{PduCount, PduEvent},
 	},
 	result::FlatOk,
+	utils::stream::TryWidebandExt,
 };
 
 use crate::Ruma;
@@ -43,6 +44,14 @@ pub(crate) async fn get_threads_route(
 				.then_some((count, pdu)))
 		})
 		.take(limit)
+		.wide_and_then(async |(count, pdu)| {
+			let pdu = services
+				.pdu_metadata
+				.bundle_aggregations(body.sender_user(), pdu)
+				.await;
+
+			Ok((count, pdu))
+		})
 		.try_collect()
 		.await?;
 

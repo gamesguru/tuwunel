@@ -87,13 +87,15 @@ granted server admin.
 | Can I migrate from | |
 |-----------------|-----------|
 | conduwuit? | ✅ Yes. This will be supported at a minimum for one year, but likely indefinitely. |
+| A fork of conduwuit? | ✅ Yes. The database migrates in place on first boot. |
+| Conduit? | ✅ Yes. The RocksDB database migrates in place on first boot. |
 | Synapse? | ❌ Not yet, but this is planned and an important issue. Subscribe to [#2](https://github.com/matrix-construct/tuwunel/issues/2). |
-| Conduit? | ❌ Not right now, but this is planned for the near future. Subscribe to [#41](https://github.com/matrix-construct/tuwunel/issues/41). |
-| Any other fork of Conduit? | ❌ No. The migration must be explicitly listed in this table. |
+| Any other Conduit fork? | ❌ No. The migration must be explicitly listed in this table. |
 > [!CAUTION]
-> **Never switch between different forks of Conduit or you will corrupt your database.**
-> All derivatives of Conduit share the same linear database version without any awareness of other
-> forks. The database will permanently corrupt and we will not be able to help you.
+> **Always back up your database before migrating.** Migrating into Tuwunel from a source listed
+> above is safe: Tuwunel recognizes a foreign database and reconciles its schema version on first
+> boot. Switching a database between two other forks of Conduit can still permanently corrupt it,
+> because all derivatives share one linear database version with no awareness of each other.
 
 #### Migrating from conduwuit
 
@@ -107,6 +109,14 @@ noticed that various configs, yamls, services, users, and other items were renam
 were a conduwuit user we recommend against changing anything at all. This will keep things simple.
 If you are not sure please ask. If you found out that something did in fact need to be changed
 please open an issue immediately.
+
+#### Migrating from Conduit or a fork of conduwuit
+
+A RocksDB database from Conduit or a fork of conduwuit migrates in place on first boot. Stop the
+source server, back up its data directory and media, then start Tuwunel against it. Tuwunel
+recognizes the foreign database, reconciles its schema version, and carries over room history,
+account data, and media automatically; no flags are required. See the
+[deploying guide](docs/deploying.md) for media-layout notes that apply to older Conduit databases.
 
 
 ### Upgrading & Downgrading Tuwunel

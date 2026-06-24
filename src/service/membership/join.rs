@@ -94,11 +94,17 @@ pub async fn join(
 		return Ok(());
 	}
 
+	// Resolved state can lag a federated re-invite; trust the invite index.
 	if let Ok(membership) = self
 		.services
 		.state_accessor
 		.get_member(room_id, sender_user)
 		.await && membership.membership == MembershipState::Ban
+		&& !self
+			.services
+			.state_cache
+			.is_invited(sender_user, room_id)
+			.await
 	{
 		debug_warn!("{sender_user} is banned from {room_id} but attempted to join");
 		return Err!(Request(Forbidden("You are banned from the room.")));

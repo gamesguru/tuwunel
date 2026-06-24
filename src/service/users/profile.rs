@@ -1,16 +1,22 @@
-use futures::{FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt, future::join3};
+use std::collections::BTreeMap;
+
+use futures::{
+	FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt,
+	future::{join3, join4},
+};
 use ruma::{
 	MxcUri, OwnedMxcUri, OwnedRoomId, RoomId, UserId,
 	events::room::member::{MembershipState, RoomMemberEventContent},
 	profile::ProfileFieldValue,
 	serde::Raw,
 };
+use serde_json::Value as JsonValue;
 use tuwunel_core::{
 	Result, implement,
 	matrix::PduBuilder,
 	utils::{
 		future::TryExtExt,
-		stream::{IterStream, TryIgnore},
+		stream::{IterStream, ReadyExt, TryIgnore},
 	},
 };
 use tuwunel_database::{Deserialized, Ignore, Interfix, Json};
@@ -278,6 +284,51 @@ pub fn all_profile_keys<'a>(
 		.stream_prefix(&prefix)
 		.ignore_err()
 		.map(|((_, key), val): KeyVal| (key, val))
+}
+
+/// MSC4133: the user's full local profile as `GET /profile/{user}` serves
+/// it, the canonical fields (avatar_url, blurhash, displayname, m.tz) merged
+/// over the custom profile keys. Backs the profile response and the 64 KiB
+/// `M_PROFILE_TOO_LARGE` size cap.
+#[implement(super::Service)]
+pub async fn full_profile(&self, user_id: &UserId) -> BTreeMap<String, JsonValue> {
+	let mut fields: BTreeMap<String, JsonValue> = self
+		.all_profile_keys(user_id)
+		.ready_filter_map(|(key, val)| {
+			serde_json::to_value(val.json())
+				.ok()
+				.map(|val| (key, val))
+		})
+		.collect()
+		.await;
+
+	// timezone() resolves m.tz (and the legacy MSC4175 key); drop the raw
+	// stored copies so the canonical m.tz below is served once.
+	fields.remove("us.cloke.msc4175.tz");
+	fields.remove("m.tz");
+
+	let (avatar_url, blurhash, displayname, tz) = join4(
+		self.avatar_url(user_id).ok(),
+		self.blurhash(user_id).ok(),
+		self.displayname(user_id).ok(),
+		self.timezone(user_id).ok(),
+	)
+	.await;
+
+	let canonical = [
+		("avatar_url", avatar_url.map(Into::into)),
+		("blurhash", blurhash),
+		("displayname", displayname),
+		("m.tz", tz),
+	];
+
+	fields.extend(
+		canonical
+			.into_iter()
+			.filter_map(|(key, val)| val.map(|val| (key.to_owned(), JsonValue::String(val)))),
+	);
+
+	fields
 }
 
 /// Sets a new profile key value, removes the key if value is None

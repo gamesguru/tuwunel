@@ -68,6 +68,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "email_userid",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "eventid_backoff",
 		..descriptor::RANDOM_SMALL_CACHE
 	},
@@ -433,6 +437,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::SEQUENTIAL_SMALL
 	},
 	Descriptor {
+		name: "threepidsid_pending",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "timeredacted_eventid",
 		key_size_hint: Some(57),
 		..descriptor::SEQUENTIAL_SMALL
@@ -523,6 +531,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 	},
 	Descriptor {
 		name: "userid_displayname",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "userid_email",
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {

@@ -190,6 +190,77 @@ media_storage_providers  = ["media_on_s3"]
 store_media_on_providers = []
 ```
 
+## Importing media from a Conduit S3 bucket
+
+When migrating from Conduit (see [Deployment](../deploying.md)), media that lived
+in an S3 bucket rather than on local disk is imported on first boot, the same way
+filesystem-backed Conduit media is. Point Tuwunel at the source bucket with a
+named storage provider, and scope your destination so the import does not write
+back into it.
+
+The example below imports a Conduit S3 bucket into Tuwunel's own S3 bucket. A
+local destination works the same way; only the destination provider differs.
+
+```toml
+[global]
+# Read and write normal media only on the destination, so the import does not
+# also copy media back into the read-only source bucket.
+media_storage_providers = ["media"]
+
+# Name the provider the importer reads Conduit's originals from.
+conduit_source_media_provider = "conduit_source"
+
+# Match Conduit's media.directory_structure. The default Deep { length = 2,
+# depth = 2 } is shown; for a flat layout (Conduit v0.10.0) set depth = 0.
+conduit_media_directory_depth  = 2
+conduit_media_directory_length = 2
+
+# Destination: Tuwunel's own media store.
+[global.storage_provider.media.s3]
+endpoint = "https://s3.example.com"
+bucket   = "tuwunel-media"
+region   = "us-east-1"
+key      = "AKIAIOSFODNN7EXAMPLE"
+secret   = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+# Source: Conduit's existing media bucket, read-only during the import.
+[global.storage_provider.conduit_source.s3]
+endpoint  = "https://s3.example.com"
+bucket    = "conduit-media"
+region    = "us-east-1"
+key       = "AKIAIOSFODNN7EXAMPLE"
+secret    = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+base_path = "media"   # Conduit's media.path prefix; omit if it had none
+```
+
+On first boot Tuwunel reads each original from the source bucket and re-uploads
+it to the destination through its normal media path. The source object key is
+reconstructed from the content hash using `conduit_media_directory_depth` and
+`conduit_media_directory_length`, so those must match the source Conduit's
+`media.directory_structure`. If Conduit used a path prefix (its `media.path`),
+set the source provider's `base_path` to it.
+
+A few things to know:
+
+- **Set `media_storage_providers` to the destination only.** Otherwise the
+  importer also writes a second copy of every file back into the read-only source
+  bucket. It is harmless (the key namespaces differ) but wasteful, and it
+  continues for normal uploads afterward.
+- **The import is a copy, not a move.** The source bucket is left untouched. Once
+  the migration completes and you have verified your media, remove the
+  `conduit_source` provider and the `conduit_source_media_*` settings, then delete
+  the old objects from the source bucket at your convenience.
+- **A transient bucket error stops the import safely.** If the source bucket is
+  unreachable, Tuwunel retries a few times and then aborts startup with a clear
+  message rather than dropping media. Nothing is left half-migrated: fix the
+  bucket and restart, and the import resumes from the beginning. A genuinely
+  missing object (a metadata entry whose file was already deleted) is skipped, not
+  treated as an error.
+- **Thumbnails are regenerated, not imported.** Only original files are copied;
+  Tuwunel regenerates thumbnails on demand.
+- **For path-style requests** (Conduit's `bucket_use_path = true`), set
+  `use_vhost_request = false` on the source provider.
+
 ## Storage admin commands
 
 These commands are available via `!admin query storage` and operate directly

@@ -1,7 +1,7 @@
 use axum::extract::State;
 use futures::{
 	FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt,
-	future::{join, join3, try_join3},
+	future::{OptionFuture, join, join3, try_join3},
 };
 use ruma::{
 	EventId, OwnedEventId, RoomId, UserId,
@@ -149,8 +149,16 @@ pub(crate) async fn get_context_route(
 	)
 	.await;
 
+	let event = OptionFuture::from(base_event.map(at!(1)).map(|pdu| {
+		services
+			.pdu_metadata
+			.bundle_aggregations(sender_user, pdu)
+	}))
+	.await
+	.map(Event::into_format);
+
 	Ok(get_context::v3::Response {
-		event: base_event.map(at!(1)).map(Event::into_format),
+		event,
 
 		start: events_before
 			.last()
@@ -269,6 +277,14 @@ where
 		.wide_filter_map(|item| visibility_filter(services, item, sender_user))
 		.take(take)
 		.wide_then(|item| add_membership_unsigned(services, item, sender_user, encrypted))
+		.wide_then(async |(count, pdu)| {
+			let pdu = services
+				.pdu_metadata
+				.bundle_aggregations(sender_user, pdu)
+				.await;
+
+			(count, pdu)
+		})
 		.collect()
 		.await
 }

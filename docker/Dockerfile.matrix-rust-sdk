@@ -19,6 +19,7 @@ ARG mrsdk_test_opts=""
 ARG mrsdk_skip_list=""
 ARG mrsdk_parallel=1
 ARG mrsdk_startup_delay="10s"
+ARG mrsdk_test_timeout="30m"
 ARG mrsdk_testee="/usr/bin/tuwunel"
 
 WORKDIR /usr/src
@@ -84,6 +85,7 @@ RUN \
     PID=$!; trap "sleep 10s; set +e; kill -QUIT ${PID}; wait ${PID}" EXIT
     sleep "${mrsdk_startup_delay}"
 
+    timeout --signal=TERM --kill-after=30s "${mrsdk_test_timeout}" \
     rustup run ${rust_toolchain} \
         cargo test \
             --locked \

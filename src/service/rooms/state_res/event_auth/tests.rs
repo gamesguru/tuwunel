@@ -580,7 +580,6 @@ async fn auth_event_in_different_room() {
 		prev_events: vec![event_id("IMA")].into(),
 		depth: uint!(0),
 		hashes: EventHash::default(),
-		signatures: None,
 		//rejected: false,
 	};
 	init_events
@@ -719,7 +718,6 @@ async fn rejected_auth_event() {
 		prev_events: vec![event_id("IMA")].into(),
 		depth: uint!(0),
 		hashes: EventHash::default(),
-		signatures: None,
 		//rejected: true,
 	};
 	init_events
@@ -812,7 +810,6 @@ async fn event_without_room_id() {
 		prev_events: [owned_event_id!("$IPOWER")].into(),
 		depth: uint!(0),
 		hashes: EventHash::default(),
-		signatures: None,
 		//rejected: false,
 	};
 

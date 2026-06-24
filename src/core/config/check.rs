@@ -52,12 +52,14 @@ pub fn check(config: &Config) -> Result {
 	check_network(config)?;
 	check_storage(config)?;
 	check_registration(config)?;
+	check_registration_terms(config)?;
 	check_turn_and_media_misc(config)?;
 	check_url_previews(config)?;
 	check_room_version(config)?;
 	check_identity_providers(config)?;
 	check_media_providers(config)?;
 	check_well_known_support_contact_validity(config)?;
+	check_email(config)?;
 
 	Ok(())
 }
@@ -284,6 +286,35 @@ fn check_registration(config: &Config) -> Result {
 			 expected to be aware of the risks now. If this is not the desired behaviour, \
 			 please set a registration token."
 		);
+	}
+
+	Ok(())
+}
+
+fn check_registration_terms(config: &Config) -> Result {
+	for (id, policy) in &config.registration_terms {
+		let opaque = !id.is_empty()
+			&& id.len() <= 255
+			&& id.bytes().all(
+				|b| matches!(b, b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'.' | b'_' | b'~' | b'-'),
+			);
+
+		if !opaque {
+			return Err!(Config(
+				"registration_terms",
+				"Policy id {id:?} must be a non-empty opaque identifier of at most 255 \
+				 characters from [0-9a-zA-Z._~-]."
+			));
+		}
+
+		for (lang, translation) in &policy.translations {
+			if !matches!(translation.url.scheme(), "http" | "https") {
+				return Err!(Config(
+					"registration_terms",
+					"Policy {id:?} translation {lang:?} url must use the http or https scheme."
+				));
+			}
+		}
 	}
 
 	Ok(())
@@ -525,6 +556,32 @@ fn check_well_known_support_contact_validity(config: &Config) -> Result {
 			validate_pgp_key(pgp_key)
 				.map_err(|e| err!("well_known.support_contact.{id}.pgp_key: {e}"))?;
 		}
+	}
+
+	Ok(())
+}
+
+fn check_email(config: &Config) -> Result {
+	let smtp = &config.smtp;
+
+	if smtp.connection_uri.is_some() && config.well_known.client.is_none() {
+		return Err!(Config(
+			"well_known.client",
+			"global.smtp is configured but well_known.client is unset. Email verification links \
+			 are built from the public client base URL, so set well_known.client to a valid \
+			 HTTPS URL alongside global.smtp."
+		));
+	}
+
+	if smtp.connection_uri.is_none()
+		&& (smtp.require_email_for_registration || smtp.require_email_for_token_registration)
+	{
+		return Err!(Config(
+			"smtp.connection_uri",
+			"global.smtp requires a verified email at registration but smtp.connection_uri is \
+			 unset. Set smtp.connection_uri so verification mail can be sent, or unset \
+			 require_email_for_registration and require_email_for_token_registration."
+		));
 	}
 
 	Ok(())

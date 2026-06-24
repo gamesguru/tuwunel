@@ -140,7 +140,10 @@ impl Service {
 	pub async fn get_room_topic(&self, room_id: &RoomId) -> Result<String> {
 		self.room_state_get_content(room_id, &StateEventType::RoomTopic, "")
 			.await
-			.map(|c: RoomTopicEventContent| c.topic)
+			.and_then(|content: RoomTopicEventContent| {
+				plain_text_topic(content)
+					.ok_or_else(|| err!(Request(NotFound("Empty topic found in event content."))))
+			})
 	}
 
 	/// Returns the join rules for a given room (`JoinRule` type). Will default
@@ -177,4 +180,18 @@ impl Service {
 			.await
 			.is_ok()
 	}
+}
+
+/// Resolves an `m.room.topic` to its plain-text rendering: the `m.topic`
+/// block's `text/plain` representation when present (MSC3765), else the legacy
+/// `topic` field; `None` when neither yields a non-empty string.
+pub(crate) fn plain_text_topic(content: RoomTopicEventContent) -> Option<String> {
+	let topic = content
+		.topic_block
+		.text
+		.find_plain()
+		.map(ToOwned::to_owned)
+		.unwrap_or(content.topic);
+
+	topic.is_empty().is_false().then_some(topic)
 }

@@ -89,8 +89,11 @@ mod tests {
 	use super::{DEFAULT_BUMP_TYPES, is_bumpable_pdu};
 
 	fn pdu(kind: TimelineEventType, state_key: Option<StateKey>, redacted: bool) -> PduEvent {
-		let unsigned = redacted
-			.then(|| to_raw_value(&json!({ "redacted_because": {} })).expect("valid unsigned"));
+		let unsigned = redacted.then(|| {
+			to_raw_value(&json!({ "redacted_because": {} }))
+				.expect("valid unsigned")
+				.into()
+		});
 
 		PduEvent {
 			kind,
@@ -109,7 +112,6 @@ mod tests {
 			hashes: Default::default(),
 			origin: None,
 			unsigned,
-			signatures: None,
 		}
 	}
 

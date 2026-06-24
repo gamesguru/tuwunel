@@ -48,7 +48,7 @@ on:
         description: Override nightly toolchain with more specific nightly.
       checkout:
         type: string
-        default: 'HEAD'
+        default: ${{github.sha}}
         description: Specific commit to checkout
       max-parallel:
         type: number
@@ -119,9 +119,9 @@ jobs:
         machine: ${{fromJSON(inputs.machines)}}
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
-        ref: ${{inputs.checkout}}
+        ref: ${{inputs.checkout || github.sha}}
         fetch-depth: 1
         fetch-tags: true
         persist-credentials: false

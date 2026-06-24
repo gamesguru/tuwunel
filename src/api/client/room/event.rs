@@ -100,5 +100,10 @@ pub(crate) async fn get_room_event_route(
 
 	annotate_membership(&services, &mut event, sender_user, encrypted).await;
 
+	let event = services
+		.pdu_metadata
+		.bundle_aggregations(sender_user, event)
+		.await;
+
 	Ok(get_room_event::v3::Response { event: event.into_format() })
 }

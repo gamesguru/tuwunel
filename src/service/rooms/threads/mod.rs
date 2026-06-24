@@ -167,6 +167,17 @@ impl Service {
 			.await
 			.map_err(|e| err!(Request(InvalidParam("Thread root pdu not found: {e:?}"))))?;
 
+		let mut users = self
+			.get_participants(&root_id)
+			.await
+			.unwrap_or_else(|_| vec![root_pdu.sender().to_owned()]);
+
+		users.push(event.sender().to_owned());
+
+		// Record participants before the bundle so a concurrent read never sees the
+		// bundle with a stale participant set (MSC3816 current_user_participated).
+		self.update_participants(&root_id, &users)?;
+
 		if let CanonicalJsonValue::Object(unsigned) = root_pdu_json
 			.entry("unsigned".into())
 			.or_insert_with(|| CanonicalJsonValue::Object(BTreeMap::default()))
@@ -214,14 +225,7 @@ impl Service {
 				.await?;
 		}
 
-		let mut users = Vec::new();
-		match self.get_participants(&root_id).await {
-			| Ok(userids) => users.extend_from_slice(&userids),
-			| _ => users.push(root_pdu.sender().to_owned()),
-		}
-
-		users.push(event.sender().to_owned());
-		self.update_participants(&root_id, &users)
+		Ok(())
 	}
 
 	pub fn threads_until<'a>(
@@ -291,6 +295,23 @@ impl Service {
 			.get(root_id)
 			.await
 			.deserialized()
+	}
+
+	/// MSC3816: whether `user_id` has participated in the thread rooted at
+	/// `root_event_id`, having sent the root event or a threaded reply to it.
+	pub async fn user_participated(&self, root_event_id: &EventId, user_id: &UserId) -> bool {
+		let Ok(root_id) = self
+			.services
+			.timeline
+			.get_pdu_id(root_event_id)
+			.await
+		else {
+			return false;
+		};
+
+		self.get_participants(&root_id)
+			.await
+			.is_ok_and(|users| users.iter().any(|user| user == user_id))
 	}
 
 	pub(super) async fn delete_all_rooms_threads(&self, room_id: &RoomId) -> Result {

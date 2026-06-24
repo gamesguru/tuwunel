@@ -1,6 +1,8 @@
+mod add_email;
 mod create_user;
 mod deactivate;
 mod deactivate_all;
+mod del_email;
 mod delete_device;
 mod delete_room_tag;
 mod force_demote;
@@ -48,6 +50,22 @@ pub(super) enum UserCommand {
 		username: String,
 		/// New password for the user, if unspecified one is generated
 		password: Option<String>,
+	},
+
+	/// - Bind an email address to a local user without verification
+	AddEmail {
+		/// Local user to bind the email address to
+		username: String,
+		/// Email address to bind
+		address: String,
+	},
+
+	/// - Remove an email address binding from a local user
+	DelEmail {
+		/// Local user to remove the email address from
+		username: String,
+		/// Email address to remove
+		address: String,
 	},
 
 	/// - Deactivate a user

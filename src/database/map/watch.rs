@@ -30,11 +30,11 @@ where
 }
 
 #[implement(super::Map)]
-pub fn watch_prefix_once<K>(&self, prefix: K) -> impl Future<Output = ()> + Send + '_
+pub fn watch_raw_prefix_once<K>(&self, prefix: K) -> impl Future<Output = ()> + Send + '_
 where
-	K: Serialize,
+	K: AsRef<[u8]>,
 {
-	let key = serialize_key(prefix).expect("failed to serialize watch prefix key");
+	let key: KeyBuf = prefix.as_ref().into();
 	let rx = self.subscribe(key.clone());
 
 	async move {

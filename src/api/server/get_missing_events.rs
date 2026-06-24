@@ -1,6 +1,6 @@
 use axum::extract::State;
-use ruma::api::federation::event::get_missing_events;
-use tuwunel_core::{Result, debug, debug_error, utils::to_canonical_object};
+use ruma::{CanonicalJsonValue, EventId, api::federation::event::get_missing_events};
+use tuwunel_core::{Result, debug};
 
 use super::AccessCheck;
 use crate::Ruma;
@@ -44,10 +44,15 @@ pub(crate) async fn get_missing_events_route(
 
 	let mut i: usize = 0;
 	while i < queued_events.len() && events.len() < limit {
-		let Ok(pdu) = services.timeline.get_pdu(&queued_events[i]).await else {
+		let Ok(event) = services
+			.timeline
+			.get_pdu_json(&queued_events[i])
+			.await
+		else {
 			debug!(
 				?body.origin,
-				"Event {} does not exist locally, skipping", &queued_events[i]
+				event_id = %queued_events[i],
+				"Event does not exist locally, skipping"
 			);
 			i = i.saturating_add(1);
 			continue;
@@ -65,29 +70,29 @@ pub(crate) async fn get_missing_events_route(
 		{
 			debug!(
 				?body.origin,
-				"Server cannot see {:?} in {:?}, skipping", pdu.event_id, pdu.room_id
+				event_id = %queued_events[i],
+				room_id = %body.room_id,
+				"Server cannot see event, skipping"
 			);
 			i = i.saturating_add(1);
 			continue;
 		}
 
-		let Ok(event) = to_canonical_object(&pdu) else {
-			debug_error!(
-				?body.origin,
-				"Failed to convert PDU in database to canonical JSON: {pdu:?}"
-			);
-			i = i.saturating_add(1);
-			continue;
-		};
+		let prev_events = event
+			.get("prev_events")
+			.and_then(CanonicalJsonValue::as_array)
+			.into_iter()
+			.flatten()
+			.filter_map(CanonicalJsonValue::as_str)
+			.filter_map(|id| EventId::parse(id).ok());
 
-		let prev_events = pdu.prev_events.iter().map(ToOwned::to_owned);
+		queued_events.extend(prev_events);
 
 		let event = services
 			.federation
 			.format_pdu_into(event, room_version.as_ref())
 			.await;
 
-		queued_events.extend(prev_events);
 		events.push(event);
 	}
 

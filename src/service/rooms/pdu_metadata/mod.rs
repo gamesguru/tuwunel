@@ -171,6 +171,35 @@ pub fn get_relations<'a>(
 	})
 }
 
+/// Fold read-time bundled aggregations into a served event's `unsigned`,
+/// per-requester. Currently the MSC3816 thread-participation correction: the
+/// stored `m.thread` bundle carries a shared `current_user_participated`, so
+/// the flag is recomputed for `sender_user` on the way out. The presence gate
+/// keeps the common no-bundle case to a substring scan; the authoritative check
+/// happens on mutate.
+#[implement(Service)]
+pub async fn bundle_aggregations(&self, sender_user: &UserId, mut pdu: Pdu) -> Pdu {
+	let has_thread = pdu
+		.unsigned()
+		.is_some_and(|unsigned| unsigned.get().contains("m.thread"));
+
+	if !has_thread {
+		return pdu;
+	}
+
+	let participated = self
+		.services
+		.threads
+		.user_participated(pdu.event_id(), sender_user)
+		.await;
+
+	pdu.set_thread_participated(participated)
+		.log_err()
+		.ok();
+
+	pdu
+}
+
 #[implement(Service)]
 #[tracing::instrument(skip_all, level = "debug")]
 pub fn mark_as_referenced<'a, I>(&self, room_id: &RoomId, event_ids: I)

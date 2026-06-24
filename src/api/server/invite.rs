@@ -7,7 +7,7 @@ use ruma::{
 	api::{
 		appservice::event::push_events,
 		error::{ErrorKind, IncompatibleRoomVersionErrorData},
-		federation::membership::{RawStrippedState, create_invite},
+		federation::membership::create_invite,
 	},
 	events::{
 		AnyStrippedStateEvent, GlobalAccountDataEventType, StateEventType,
@@ -18,12 +18,17 @@ use ruma::{
 	serde::{JsonObject, Raw},
 };
 use tuwunel_core::{
-	Err, Error, Result, debug_warn, err, extract_variant,
+	Err, Error, Result, debug_warn, err,
 	matrix::{Event, PduCount, PduEvent, event::gen_event_id},
 	utils,
 	utils::hash::sha256,
 };
-use tuwunel_service::Services;
+use tuwunel_service::{
+	Services,
+	membership::{
+		StrippedCreateVerdict, enforce_stripped_create, into_client_stripped, v12_room_ids,
+	},
+};
 
 use crate::{ClientIp, Ruma};
 
@@ -31,17 +36,14 @@ use crate::{ClientIp, Ruma};
 ///
 /// Invites a remote user to a room.
 #[tracing::instrument(skip_all, fields(%client), name = "invite")]
-#[expect(
-	deprecated,
-	reason = "Matrix 1.16 still permits receiving the legacy stripped variant for backwards \
-	          compatibility."
-)]
 pub(crate) async fn create_invite_route(
 	State(services): State<crate::State>,
 	ClientIp(client): ClientIp,
 	body: Ruma<create_invite::v2::Request>,
 ) -> Result<create_invite::v2::Response> {
 	validate_request(&services, &body).await?;
+
+	enforce_stripped_state(&services, &body).await?;
 
 	let (mut signed_event, invited_user) = parse_and_validate_event(&services, &body).await?;
 
@@ -57,7 +59,7 @@ pub(crate) async fn create_invite_route(
 		.invite_room_state
 		.clone()
 		.into_iter()
-		.filter_map(|s| extract_variant!(s, RawStrippedState::Stripped))
+		.filter_map(|state| into_client_stripped(&body.room_id, state))
 		.chain([pdu.to_format()])
 		.collect();
 
@@ -112,6 +114,40 @@ async fn validate_request(
 			.is_forbidden_remote_server_name(server)
 	{
 		return Err!(Request(Forbidden("Server is banned on this homeserver.")));
+	}
+
+	Ok(())
+}
+
+/// Validate the create event in the invite's stripped state (MSC4311) and
+/// reject the invite when the operator's policy requires it.
+async fn enforce_stripped_state(
+	services: &Services,
+	body: &Ruma<create_invite::v2::Request>,
+) -> Result<()> {
+	let verdict = services
+		.membership
+		.validate_stripped_create(&body.invite_room_state, &body.room_id, &body.room_version)
+		.await?;
+
+	if verdict != StrippedCreateVerdict::Valid {
+		debug_warn!(
+			?verdict,
+			room_id = %body.room_id,
+			"MSC4311 invite create-event validation failed",
+		);
+	}
+
+	if enforce_stripped_create(
+		verdict,
+		v12_room_ids(&body.room_version),
+		services
+			.config
+			.enforce_stripped_state_pdu_validation,
+	) {
+		return Err!(Request(MissingParam(
+			"The invite's m.room.create event is missing or does not validate for this room."
+		)));
 	}
 
 	Ok(())

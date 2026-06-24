@@ -29,6 +29,7 @@ use super::{ExtractBody, bias_count};
 use crate::{
 	federation::Candidates,
 	fetcher::{Op, Opts},
+	rooms::state_accessor::plain_text_topic,
 };
 
 /// Events requested per backfill batch.
@@ -389,14 +390,24 @@ pub async fn backfill_pdu(
 	);
 	drop(insert_lock);
 
-	if pdu.kind == TimelineEventType::RoomMessage {
-		let content: ExtractBody = pdu.get_content()?;
-		if let Some(body) = content.body {
-			self.services
-				.search
-				.index_pdu(shortroomid, &pdu_id, &body);
-		}
+	match pdu.kind {
+		| TimelineEventType::RoomMessage => {
+			let content: ExtractBody = pdu.get_content()?;
+			if let Some(body) = content.body {
+				self.services
+					.search
+					.index_pdu(shortroomid, &pdu_id, &body);
+			}
+		},
+		| TimelineEventType::RoomTopic =>
+			if let Some(topic) = pdu.get_content().ok().and_then(plain_text_topic) {
+				self.services
+					.search
+					.index_pdu(shortroomid, &pdu_id, &topic);
+			},
+		| _ => {},
 	}
+
 	drop(mutex_lock);
 
 	debug!("Prepended backfill pdu");

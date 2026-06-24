@@ -45,7 +45,7 @@ pub(super) async fn ldap_login(
 	// common feature that can be seen on many services using a LDAP provider for
 	// their users (synapse, Nextcloud, Jellyfin, ...).
 	//
-	// LDAP users are crated with a dummy password but non empty because an empty
+	// LDAP users are created with a dummy password but non-empty because an empty
 	// password is reserved for deactivated accounts. The tuwunel password field
 	// will never be read to login a LDAP user so it's not an issue.
 	if !services.users.exists(lowercased_user_id).await {

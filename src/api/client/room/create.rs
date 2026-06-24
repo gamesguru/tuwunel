@@ -33,13 +33,14 @@ use ruma::{
 	serde::{JsonObject, Raw},
 };
 use serde::Deserialize;
-use serde_json::{
-	json,
-	value::{RawValue, to_raw_value},
-};
+use serde_json::{json, value::to_raw_value};
 use tuwunel_core::{
 	Err, Result, debug_info, debug_warn, err, info,
-	matrix::{StateKey, pdu::PduBuilder, room_version},
+	matrix::{
+		StateKey,
+		pdu::{Content, PduBuilder},
+		room_version,
+	},
 	utils::{BoolExt, IterStream, ReadyExt, option::OptionExt},
 	warn,
 };
@@ -224,7 +225,7 @@ async fn apply_power_levels_pdu(
 		.build_and_append_pdu(
 			PduBuilder {
 				event_type: TimelineEventType::RoomPowerLevels,
-				content: to_raw_value(&power_levels_content)?,
+				content: to_raw_value(&power_levels_content)?.into(),
 				state_key: Some(StateKey::new()),
 				..Default::default()
 			},
@@ -311,7 +312,7 @@ async fn apply_preset_state_pdus(
 			// client/appservice workaround: if a user sends an initial_state event with a
 			// state event in there with the content of literally `{}` (not null or empty
 			// string), let's just skip it over and warn.
-			if event.content.get() == "{}" {
+			if event.content.json().get() == "{}" {
 				debug_warn!("skipping empty initial state event of type {}", event.event_type);
 				false
 			} else {
@@ -622,7 +623,7 @@ async fn create_create_event(
 		.build_and_append_pdu(
 			PduBuilder {
 				event_type: TimelineEventType::RoomCreate,
-				content: to_raw_value(&create_content)?,
+				content: to_raw_value(&create_content)?.into(),
 				state_key: Some(StateKey::new()),
 				..Default::default()
 			},
@@ -732,7 +733,7 @@ async fn create_create_event_legacy(
 		.build_and_append_pdu(
 			PduBuilder {
 				event_type: TimelineEventType::RoomCreate,
-				content: to_raw_value(&create_content)?,
+				content: to_raw_value(&create_content)?.into(),
 				state_key: Some(StateKey::new()),
 				..Default::default()
 			},
@@ -968,7 +969,7 @@ struct InitialEvent {
 	#[serde(default = "StateKey::new")]
 	state_key: StateKey,
 
-	content: Box<RawValue>,
+	content: Content,
 }
 
 impl From<InitialEvent> for PduBuilder {

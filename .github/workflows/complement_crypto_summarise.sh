@@ -1,10 +1,10 @@
 #!/bin/bash
 set -eo pipefail
 
-track_name="Complement-Crypto"
+track_name="Complement Cryptography"
 jsonl="tests/complement-crypto/results.jsonl"
 
-# shellcheck source=./complement_summarise_lib.sh
-. "$(dirname "$0")/complement_summarise_lib.sh"
+# shellcheck source=./complement_summarise.sh
+. "$(dirname "$0")/complement_summarise.sh"
 
 summarise_main "$@"

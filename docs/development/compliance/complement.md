@@ -4,15 +4,15 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 
 ## Counts
 
-- Test groups: 204. Passing: **71.1%**
-  - ✅ `pass`: 145
-  - 🟨 `some`: 25
-  - ❌ `fail`: 32
+- Test groups: 204. Passing: **74.5%**
+  - ✅ `pass`: 152
+  - 🟨 `some`: 20
+  - ❌ `fail`: 30
   - ⬛ `skip`: 2
 
-- Subtests: 594. Passing: **72.2%**
-  - ✅ `pass`: 429
-  - ❌ `fail`: 152
+- Subtests: 594. Passing: **73.2%**
+  - ✅ `pass`: 435
+  - ❌ `fail`: 146
   - ⬛ `skip`: 13
 
 ## All Top-Level Tests
@@ -61,7 +61,7 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 | `TestFederationKeyUploadQuery` | ❌ | 0/2/0 |
 | `TestFederationRedactSendsWithoutEvent` | ✅ | – |
 | `TestFederationRejectInvite` | ✅ | – |
-| `TestFederationRoomsInvite` | 🟨 | 8/2/0 |
+| `TestFederationRoomsInvite` | ✅ | 10/0/0 |
 | `TestFederationSlidingSyncReInviteAfterLeave` | ✅ | 2/0/0 |
 | `TestFederationThumbnail` | ✅ | – |
 | `TestFetchEvent` | ✅ | – |
@@ -76,7 +76,7 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 | `TestFilterMessagesByRelType` | ❌ | – |
 | `TestGappedSyncLeaveSection` | ✅ | – |
 | `TestGetFilteredRoomMembers` | ✅ | 3/0/0 |
-| `TestGetMissingEventsGapFilling` | ❌ | – |
+| `TestGetMissingEventsGapFilling` | ✅ | – |
 | `TestGetRoomMembers` | ✅ | – |
 | `TestGetRoomMembersAtPoint` | ❌ | – |
 | `TestInboundCanReturnMissingEvents` | ❌ | 0/4/0 |
@@ -121,7 +121,7 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 | `TestMSC4291RoomIDAsHashOfCreateEvent_AuthEventsOmitsCreateEvent` | ✅ | – |
 | `TestMSC4291RoomIDAsHashOfCreateEvent_CannotSendCreateEvent` | ✅ | – |
 | `TestMSC4291RoomIDAsHashOfCreateEvent_RoomIDIsOnCreateEvent` | ✅ | – |
-| `TestMSC4291RoomIDAsHashOfCreateEvent_UpgradedRooms` | ❌ | – |
+| `TestMSC4291RoomIDAsHashOfCreateEvent_UpgradedRooms` | ✅ | – |
 | `TestMSC4297StateResolutionV2_1_includes_conflicted_subgraph` | ✅ | – |
 | `TestMSC4297StateResolutionV2_1_starts_from_empty_set` | ✅ | – |
 | `TestMSC4308ThreadSubscriptionsSlidingSync` | ❌ | 0/2/0 |
@@ -162,12 +162,12 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 | `TestRemoteTyping` | ✅ | – |
 | `TestRemovingAccountData` | ✅ | 4/0/0 |
 | `TestRequestEncodingFails` | ❌ | 0/1/0 |
-| `TestRestrictedRoomsLocalJoin` | 🟨 | 4/1/0 |
-| `TestRestrictedRoomsLocalJoinInMSC3787Room` | 🟨 | 4/1/0 |
+| `TestRestrictedRoomsLocalJoin` | ✅ | 5/0/0 |
+| `TestRestrictedRoomsLocalJoinInMSC3787Room` | ✅ | 5/0/0 |
 | `TestRestrictedRoomsLocalJoinNoCreatorsUsesPowerLevelsV11` | ✅ | – |
 | `TestRestrictedRoomsLocalJoinNoCreatorsUsesPowerLevelsV12` | ✅ | – |
-| `TestRestrictedRoomsRemoteJoin` | 🟨 | 4/1/0 |
-| `TestRestrictedRoomsRemoteJoinInMSC3787Room` | 🟨 | 4/1/0 |
+| `TestRestrictedRoomsRemoteJoin` | ✅ | 5/0/0 |
+| `TestRestrictedRoomsRemoteJoinInMSC3787Room` | ✅ | 5/0/0 |
 | `TestRestrictedRoomsRemoteJoinLocalUser` | ✅ | – |
 | `TestRestrictedRoomsRemoteJoinLocalUserInMSC3787Room` | ✅ | – |
 | `TestRestrictedRoomsSpacesSummaryFederation` | ✅ | – |

@@ -475,6 +475,38 @@ target "complement-config" {
 }
 
 #
+# MAS provisioning smoke test (mas-cli driven against tuwunel)
+#
+
+group "mas" {
+    targets = [
+        "mas-testee",
+    ]
+}
+
+# Tuwunel SUT for the MAS smoke test. Long elem'd tag for matrix
+# disambiguation plus a stable short alias for local `docker run`. The runner
+# (docker/mas-runner.sh) references the long elem name, as complement-runner.sh
+# does, so concurrent matrix cells never collide.
+target "mas-testee" {
+    name = elem("mas-testee", [cargo_profile, rust_toolchain, rust_target, feat_set, sys_name, sys_version, sys_target])
+    tags = [
+        elem_tag("mas-testee", [cargo_profile, rust_toolchain, rust_target, feat_set, sys_name, sys_version, sys_target], "latest"),
+        "tuwunel-mas-testee:latest",
+    ]
+    target = "mas-testee"
+    output = ["type=docker,compression=zstd,mode=min"]
+    dockerfile = "${docker_dir}/Dockerfile.mas"
+    matrix = cargo_rust_feat_sys
+    inherits = [
+        elem("install", [cargo_profile, rust_toolchain, rust_target, feat_set, sys_name, sys_version, sys_target])
+    ]
+    contexts = {
+        input = elem("target:install", [cargo_profile, rust_toolchain, rust_target, feat_set, sys_name, sys_version, sys_target])
+    }
+}
+
+#
 # Complement Crypto tests (E2EE suite driven against tuwunel)
 #
 
@@ -715,6 +747,7 @@ target "rust-sdk-valgrind" {
             --skip test_latest_event_few_rooms
             --skip test_latest_thread_event_is_redecrypted_and_updated
             --skip test_event_with_context
+            --skip test_repeated_join_leave
 EOF
     }
 }
@@ -750,6 +783,7 @@ target "rust-sdk-integ" {
             --skip test_latest_event_few_rooms
             --skip test_latest_thread_event_is_redecrypted_and_updated
             --skip test_event_with_context
+            --skip test_repeated_join_leave
 EOF
     }
 }

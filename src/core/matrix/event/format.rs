@@ -24,7 +24,7 @@ impl<'a, E: Event> From<Ref<'a, E>> for Raw<AnySyncTimelineEvent> {
 		let event = event.0;
 		let (redacts, content) = redact::copy(event);
 		let members: [JsonMember<_>; _] = [
-			("content", Some(content.into())),
+			("content", Some(content.json().into())),
 			("event_id", Some(event.event_id().as_str().into())),
 			("origin_server_ts", Some(event.origin_server_ts().get().into())),
 			("redacts", redacts.map(|e| e.as_str().into())),
@@ -49,7 +49,7 @@ impl<'a, E: Event> From<Ref<'a, E>> for Raw<AnyTimelineEvent> {
 		let event = event.0;
 		let (redacts, content) = redact::copy(event);
 		let members: [JsonMember<_>; _] = [
-			("content", Some(content.into())),
+			("content", Some(content.json().into())),
 			("event_id", Some(event.event_id().as_str().into())),
 			("origin_server_ts", Some(event.origin_server_ts().get().into())),
 			("redacts", redacts.map(|e| e.as_str().into())),
@@ -75,7 +75,7 @@ impl<'a, E: Event> From<Ref<'a, E>> for Raw<AnyMessageLikeEvent> {
 		let event = event.0;
 		let (redacts, content) = redact::copy(event);
 		let members: [JsonMember<_>; _] = [
-			("content", Some(content.into())),
+			("content", Some(content.json().into())),
 			("event_id", Some(event.event_id().as_str().into())),
 			("origin_server_ts", Some(event.origin_server_ts().get().into())),
 			("redacts", redacts.map(|e| e.as_str().into())),
@@ -101,7 +101,7 @@ impl<'a, E: Event> From<Ref<'a, E>> for Raw<AnySyncMessageLikeEvent> {
 		let event = event.0;
 		let (redacts, content) = redact::copy(event);
 		let members: [JsonMember<_>; _] = [
-			("content", Some(content.into())),
+			("content", Some(content.json().into())),
 			("event_id", Some(event.event_id().as_str().into())),
 			("origin_server_ts", Some(event.origin_server_ts().get().into())),
 			("redacts", redacts.map(|e| e.as_str().into())),

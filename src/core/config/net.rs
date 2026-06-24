@@ -74,6 +74,10 @@ fn get_bind_ports(&self) -> Vec<u16> {
 #[implement(super::Config)]
 #[must_use]
 pub fn is_forbidden_remote_server_name(&self, server_name: &ServerName) -> bool {
+	if server_name == self.server_name {
+		return false;
+	}
+
 	let deny_list_active = self
 		.forbidden_remote_server_names
 		.is_empty()

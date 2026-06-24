@@ -3,11 +3,12 @@ use std::{collections::HashMap, fmt::Write, iter::once, sync::Arc};
 use async_trait::async_trait;
 use futures::{FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt, future::join_all};
 use ruma::{
-	EventId, OwnedEventId, OwnedRoomId, RoomId, RoomVersionId, UserId,
+	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, RoomId, RoomVersionId, UserId,
 	events::{AnyStrippedStateEvent, StateEventType, TimelineEventType},
 	room_version_rules::AuthorizationRules,
 	serde::Raw,
 };
+use serde_json::value::RawValue as RawJsonValue;
 use tuwunel_core::{
 	Event, PduEvent, Result, err,
 	error::inspect_debug_log,
@@ -450,6 +451,65 @@ pub async fn summary_stripped<Pdu: Event>(&self, event: &Pdu) -> Vec<Raw<AnyStri
 		.map(Event::into_format)
 		.chain(once(event.to_format()))
 		.collect()
+}
+
+/// Like `summary_stripped`, but formats each event as a full federation PDU
+/// per the room version's event format (MSC4311). The membership `event` is
+/// formatted from its `event_json`; the recommended state cells are fetched
+/// from stored room state.
+#[implement(Service)]
+#[tracing::instrument(skip_all, level = "debug")]
+pub async fn summary_pdus<Pdu: Event>(
+	&self,
+	event: &Pdu,
+	event_json: &CanonicalJsonObject,
+	room_version: &RoomVersionId,
+) -> Vec<Box<RawJsonValue>> {
+	let cells = [
+		(&StateEventType::RoomCreate, ""),
+		(&StateEventType::RoomJoinRules, ""),
+		(&StateEventType::RoomCanonicalAlias, ""),
+		(&StateEventType::RoomName, ""),
+		(&StateEventType::RoomAvatar, ""),
+		(&StateEventType::RoomMember, event.sender().as_str()),
+		(&StateEventType::RoomEncryption, ""),
+		(&StateEventType::RoomTopic, ""),
+	];
+
+	let membership = self
+		.services
+		.federation
+		.format_pdu_into(event_json.clone(), Some(room_version))
+		.await;
+
+	cells
+		.into_iter()
+		.stream()
+		.wide_filter_map(async |(event_type, state_key)| {
+			let pdu = self
+				.services
+				.state_accessor
+				.room_state_get(event.room_id(), event_type, state_key)
+				.await
+				.ok()?;
+
+			let pdu_json = self
+				.services
+				.timeline
+				.get_pdu_json(pdu.event_id())
+				.await
+				.ok()?;
+
+			Some(
+				self.services
+					.federation
+					.format_pdu_into(pdu_json, Some(room_version))
+					.await,
+			)
+		})
+		.chain(once(membership).stream())
+		.collect()
+		.await
 }
 
 /// Returns the room's version rules

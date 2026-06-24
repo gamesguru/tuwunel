@@ -17,6 +17,8 @@ set -eo pipefail
 #   envs                   pre-built `-e KEY=VAL ...` string for docker run
 #   (optional) addons_path crypto-only host/container mitmproxy_addons path
 #   (optional) mitmproxy_image image to pre-pull before the run
+#   (optional) interop_images   `hsname=image` lines for per-homeserver overrides
+#   (optional) baseline_gate     1 (default) gates on the committed baseline; 0 reports only
 
 CI="${CI:-false}"
 CI_VERBOSE="${CI_VERBOSE_ENV:-false}"
@@ -45,7 +47,20 @@ run_id=$(printf '%s' "${run_seed}-${name}" | sha1sum | cut -c1-12)
 name="${name}__${run_id}"
 envs="$envs -e COMPLEMENT_RUN_ID=${run_id}"
 
+# Interop homeserver image overrides, one `hsname=image` per line. Pre-pull
+# each image into the host daemon Complement deploys from (it will not pull a
+# missing image itself), and forward Complement's native per-homeserver
+# COMPLEMENT_BASE_IMAGE_<hsname> override into the tester container.
+if test -n "${interop_images:-}"; then
+	while IFS='=' read -r hs image; do
+		test -n "$hs" || continue
+		docker pull -q "$image" || true
+		envs="$envs -e COMPLEMENT_BASE_IMAGE_${hs}=${image}"
+	done <<< "$interop_images"
+fi
+
 sock="/var/run/docker.sock"
+mkdir -p "$results_dir"
 
 mounts="-v $sock:$sock"
 if test -n "${addons_path:-}"; then
@@ -111,5 +126,14 @@ extract_output
 extract_metrics
 git diff -U0 --color --shortstat "$result_dst" | (grep "$run" || true)
 
-git diff --quiet --exit-code "$result_dst"
-echo -e "\033[1;42;30mACCEPT\033[0m"
+if test "${baseline_gate:-1}" = "1"; then
+	git diff --quiet --exit-code "$result_dst"
+	echo -e "\033[1;42;30mACCEPT\033[0m"
+else
+	printf 'interop results: %s pass, %s fail, %s skip -> %s\n' \
+		"$(grep -c '"Action":"pass"' "$result_dst" 2>/dev/null || true)" \
+		"$(grep -c '"Action":"fail"' "$result_dst" 2>/dev/null || true)" \
+		"$(grep -c '"Action":"skip"' "$result_dst" 2>/dev/null || true)" \
+		"$result_dst"
+	echo -e "\033[1;43;30mINTEROP (report-only)\033[0m"
+fi

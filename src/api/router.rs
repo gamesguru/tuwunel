@@ -57,8 +57,12 @@ fn register_client_auth_routes(router: Router<State>) -> Router<State> {
 		.ruma_route(&client::change_password_route)
 		.ruma_route(&client::deactivate_route)
 		.ruma_route(&client::third_party_route)
+		.ruma_route(&client::add_3pid_route)
+		.ruma_route(&client::delete_3pid_route)
 		.ruma_route(&client::request_3pid_management_token_via_email_route)
 		.ruma_route(&client::request_3pid_management_token_via_msisdn_route)
+		.ruma_route(&client::request_registration_token_via_email_route)
+		.ruma_route(&client::request_password_change_token_via_email_route)
 		.ruma_route(&client::check_registration_token_validity)
 		.ruma_route(&client::create_openid_token_route)
 		.ruma_route(&client::is_user_suspended_route)
@@ -263,7 +267,12 @@ fn register_client_misc_routes(router: Router<State>) -> Router<State> {
 		.ruma_route(&client::get_transports_route)
 		.ruma_route(&client::well_known_support)
 		.ruma_route(&client::well_known_client)
+		.ruma_route(&client::tuwunel_remote_version)
 		.route("/_tuwunel/server_version", get(client::tuwunel_server_version))
+		.route(
+			"/_tuwunel/3pid/email/validate",
+			get(client::get_email_validate_route).post(client::post_email_validate_route),
+		)
 }
 
 fn register_oidc_routes(router: Router<State>) -> Router<State> {

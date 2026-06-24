@@ -66,7 +66,7 @@ use crate::{
 ### https://tuwunel.chat/configuration.html
 "#,
 	ignore = "catchall well_known tls allow_invalid_tls_certificates ldap jwt appservice \
-	          identity_provider storage_provider"
+	          identity_provider storage_provider registration_terms smtp"
 )]
 pub struct Config {
 	/// The server_name is the pretty name of this server. It is used as a
@@ -2286,6 +2286,9 @@ pub struct Config {
 	///
 	/// Basically "global" ACLs.
 	///
+	/// The server's own name is always permitted and is never subject to this
+	/// list.
+	///
 	/// reloadable: yes
 	/// example: ["badserver\.tld$", "badphrase", "19dollarfortnitecards"]
 	///
@@ -2303,6 +2306,9 @@ pub struct Config {
 	///
 	/// This feature becomes active when this list has one or more entries;
 	/// everything not matching is denied. By default it is empty and inactive.
+	///
+	/// The server's own name is always permitted and is never subject to this
+	/// list.
 	///
 	/// Entries in `forbidden_remote_server_names` are still applied after
 	/// this is applied. This allows you to match e.g. "*\.example\.com" here
@@ -2544,6 +2550,20 @@ pub struct Config {
 	#[serde(default)]
 	pub block_non_admin_invites: bool,
 
+	/// Enforce MSC4311 validation of the create event in federated invite and
+	/// knock stripped state. When enabled, an invite whose m.room.create event
+	/// is missing, not a full PDU, bound to a different room, or fails
+	/// signature checks is rejected, and such events are dropped from knock
+	/// stripped state. When disabled (the default), failures are logged but
+	/// tolerated to preserve interoperability during ecosystem migration; a
+	/// create event that is present as a full PDU but cryptographically bound
+	/// to a different room is always rejected for room version 12 and above
+	/// regardless of this setting.
+	///
+	/// reloadable: yes
+	#[serde(default)]
+	pub enforce_stripped_state_pdu_validation: bool,
+
 	/// Allow admins to enter commands in rooms other than "#admins" (admin
 	/// room) by prefixing your message with "\!admin" or "\\!admin" followed up
 	/// a normal tuwunel admin command. The reply will be publicly visible to
@@ -2613,6 +2633,17 @@ pub struct Config {
 	/// default: "m.server_notice"
 	#[serde(default = "default_admin_room_tag")]
 	pub admin_room_tag: String,
+
+	/// The room that user, room, and event reports are posted to, instead of
+	/// the admin room. Accepts a room ID or room alias; the server user must be
+	/// joined with permission to post there. Reports fall back to the admin
+	/// room when this is unset, cannot be resolved, or the server user is not a
+	/// member.
+	///
+	/// reloadable: yes
+	/// default: (none)
+	#[serde(default)]
+	pub report_room: Option<OwnedRoomOrAliasId>,
 
 	/// Whether to grant the first user to register admin privileges by joining
 	/// them to the admin room. Note that technically the next user to register
@@ -3013,21 +3044,22 @@ pub struct Config {
 	#[serde(default = "true_fn")]
 	pub database_migrations: bool,
 
-	/// Force the database to set its version to the current version known to
-	/// the executable.
+	/// Open a database whose schema version is newer than this build supports.
 	///
-	/// - When the discovered version is less than the current version any
-	///   migrations are applied normally.
-	/// - When the discovered version is equal to the current version,
-	///   unversioned migrations are applied normally.
-	/// - When the discovered database version is greater than the current
-	///   version, one-time migrations are applied normally and the discoverable
-	///   version is regressed back to the current version.
+	/// A database reporting a higher schema version than this build is normally
+	/// refused, since opening it stamps the schema down to this build's version
+	/// and may permanently lose data written by the newer build. Setting this
+	/// to true overrides that refusal: the database opens, one-time migrations
+	/// run, and the schema is stamped down to this build's version.
 	///
-	/// This option extremely dangerous and intended for developer debugging and
-	/// testing only. Never set this option unless you have been instructed to
-	/// do so. Setting this option may cause permanent damage and permanent loss
-	/// of data.
+	/// It has no effect when the discovered version is at or below this build's
+	/// version, where migrations apply normally either way. It is also not
+	/// needed to import a Conduit database or a fork of conduwuit; those are
+	/// recognized by lineage and open without it.
+	///
+	/// This option is extremely dangerous and intended for developer debugging
+	/// and testing only. Never set it unless you have been instructed to do so;
+	/// it may cause permanent damage and permanent loss of data.
 	#[serde(default)]
 	pub force_migration: bool,
 
@@ -3054,6 +3086,21 @@ pub struct Config {
 	#[serde(default = "default_conduit_media_directory_length")]
 	pub conduit_media_directory_length: u8,
 
+	/// When importing a Conduit database whose media lived in an S3 bucket
+	/// rather than on disk, the name of a `[global.storage_provider.<name>]`
+	/// entry to read the source originals from. Leave unset to read from the
+	/// filesystem at `conduit_source_media_path`. Define the named provider
+	/// with Conduit's own S3 credentials and set its `base_path` to Conduit's
+	/// `media.path` prefix; the importer reads each content-addressed object
+	/// using `conduit_media_directory_depth`/`length` for the key sharding.
+	///
+	/// Scope `media_storage_providers` to your destination provider only (e.g.
+	/// `["media"]`) so the import writes solely there; otherwise media is also
+	/// copied back into the read-only source bucket.
+	///
+	/// example: "conduit_source"
+	pub conduit_source_media_provider: Option<String>,
+
 	/// Set this to true for excluding unencrypted rooms from the common-rooms
 	/// calculation deciding the receivers of device list updates.
 	///
@@ -3069,11 +3116,19 @@ pub struct Config {
 
 	// external structure; separate section
 	#[serde(default)]
+	pub registration_terms: BTreeMap<String, TermsPolicy>,
+
+	// external structure; separate section
+	#[serde(default)]
 	pub ldap: LdapConfig,
 
 	// external structure; separate section
 	#[serde(default)]
 	pub jwt: JwtConfig,
+
+	// external structure; separate section
+	#[serde(default)]
+	pub smtp: SmtpConfig,
 
 	// external structure; separate section
 	#[serde(default)]
@@ -3255,6 +3310,45 @@ pub struct SupportPolicyTranslation {
 	/// Link to the test of the policy document. A valid URL must be specified.
 	///
 	/// example: "https://website.local/privacy-policy"
+	/// reloadable: yes
+	pub url: Url,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[config_example_generator(
+	filename = "tuwunel-example.toml",
+	section = "global.registration_terms.<ID>",
+	ignore = "translations"
+)]
+pub struct TermsPolicy {
+	/// Version of this policy document, presented to the client. Configuring
+	/// any `[global.registration_terms.<ID>]` block makes registration
+	/// require an `m.login.terms` stage listing every such document; the
+	/// `<ID>` is the policy id sent to clients.
+	///
+	/// example: "1.2"
+	/// reloadable: yes
+	pub version: String,
+
+	// external structure; separate section
+	pub translations: BTreeMap<String, TermsPolicyTranslation>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[config_example_generator(
+	filename = "tuwunel-example.toml",
+	section = "global.registration_terms.<ID>.translations.<LANG>"
+)]
+pub struct TermsPolicyTranslation {
+	/// User friendly name of the policy document in this language.
+	///
+	/// example: "Terms of Service"
+	/// reloadable: yes
+	pub name: String,
+
+	/// Link to the text of the policy document. Must be a valid http(s) URL.
+	///
+	/// example: "https://example.org/terms-1.2-en.html"
 	/// reloadable: yes
 	pub url: Url,
 }
@@ -3530,6 +3624,50 @@ pub struct JwtConfig {
 	pub validate_signature: bool,
 }
 
+#[derive(Clone, Debug, Default, Deserialize)]
+#[config_example_generator(filename = "tuwunel-example.toml", section = "global.smtp")]
+pub struct SmtpConfig {
+	/// Connection URL for the outbound SMTP relay used to send email
+	/// verification messages. Setting this enables the email subsystem;
+	/// without it no mail is sent.
+	///
+	/// Use a `smtp://` URL for an unencrypted or STARTTLS connection and a
+	/// `smtps://` URL for implicit TLS. Credentials and the host go inline:
+	/// `smtps://user:pass@host:port`. The port defaults per scheme when
+	/// omitted.
+	///
+	/// The userinfo component is URL-encoded, so an `@` inside the username
+	/// must be written as `%40` (for example a login of `bot@example.com`
+	/// becomes `smtps://bot%40example.com:pass@host:465`). Other reserved
+	/// characters in the username or password are percent-encoded the same
+	/// way.
+	///
+	/// example: "smtps://user:pass@mail.example.com:465"
+	pub connection_uri: Option<String>,
+
+	/// The mailbox that outbound verification messages are sent from. Accepts
+	/// either a bare address or a display-name form.
+	///
+	/// example: "Example <noreply@example.com>"
+	pub sender: Option<String>,
+
+	/// Require a verified email address to complete registration. When set,
+	/// the registration flow does not finish until the user proves control of
+	/// an email address.
+	///
+	/// default: false
+	#[serde(default)]
+	pub require_email_for_registration: bool,
+
+	/// Require a verified email address when registering with a registration
+	/// token. When set, token-based registration also demands a verified
+	/// email address.
+	///
+	/// default: false
+	#[serde(default)]
+	pub require_email_for_token_registration: bool,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[config_example_generator(
 	filename = "tuwunel-example.toml",
@@ -3781,6 +3919,25 @@ pub struct IdentityProvider {
 	/// default: {}
 	#[serde(default)]
 	pub extra_authorization_parameters: BTreeMap<String, String>,
+
+	/// Forward the MSC3824 `action` query parameter from the SSO redirect
+	/// endpoints to this provider as an OpenID Connect `prompt` value.
+	///
+	/// When a client appends `action=register` to a `/login/sso/redirect`
+	/// request the upstream authorization request carries `prompt=create`
+	/// (the OpenID Connect "Initiating User Registration" extension) so the
+	/// provider can present its registration screen. `action=login` is left
+	/// unforwarded to avoid forcing a re-authentication, and a `prompt` set in
+	/// `extra_authorization_parameters` still applies in that case. An
+	/// action-derived `prompt` takes precedence over one configured there.
+	///
+	/// Leave this disabled unless the provider supports the `prompt=create`
+	/// registration extension; a provider that does not may reject or ignore
+	/// the request.
+	///
+	/// default: false
+	#[serde(default)]
+	pub forward_action_prompt: bool,
 }
 
 impl IdentityProvider {

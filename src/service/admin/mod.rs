@@ -17,12 +17,12 @@ pub use context::Context;
 pub use create::create_admin_room;
 use futures::{FutureExt, TryFutureExt};
 use ruma::{
-	OwnedEventId, OwnedRoomAliasId, OwnedRoomId, RoomId, UserId,
+	OwnedEventId, OwnedRoomAliasId, OwnedRoomId, RoomId, RoomOrAliasId, UserId,
 	events::room::message::{Relation, RoomMessageEventContent},
 };
 use tokio::sync::mpsc;
 use tuwunel_core::{
-	Err, Error, Event, Result, debug, err, error, error::default_log, pdu::PduBuilder,
+	Err, Error, Event, Result, debug, err, error, error::default_log, pdu::PduBuilder, warn,
 };
 
 use crate::rooms::state::RoomMutexGuard;
@@ -150,9 +150,27 @@ impl Service {
 	/// Sends a message to the admin room as the admin user (see send_text() for
 	/// convenience).
 	pub async fn send_message(&self, message_content: RoomMessageEventContent) -> Result {
-		let user_id = &self.services.globals.server_user;
 		let room_id = self.get_admin_room().await?;
-		self.respond_to_room(message_content, &room_id, user_id)
+
+		self.send_to_room(message_content, &room_id).await
+	}
+
+	/// Sends a markdown report to the configured report room, falling back to
+	/// the admin room, as the server user.
+	pub async fn send_report(&self, body: &str) {
+		let Ok(room_id) = self.get_report_room().await else {
+			return;
+		};
+
+		self.send_to_room(RoomMessageEventContent::text_markdown(body), &room_id)
+			.await
+			.ok();
+	}
+
+	async fn send_to_room(&self, content: RoomMessageEventContent, room_id: &RoomId) -> Result {
+		let user_id = &self.services.globals.server_user;
+
+		self.respond_to_room(content, room_id, user_id)
 			.boxed()
 			.await
 	}
@@ -264,6 +282,37 @@ impl Service {
 			.await
 			.then_some(room_id)
 			.ok_or_else(|| err!(Request(NotFound("Admin user not joined to admin room"))))
+	}
+
+	/// Gets the room reports are posted to: the configured report room when set
+	/// and usable, otherwise the admin room.
+	pub async fn get_report_room(&self) -> Result<OwnedRoomId> {
+		let Some(report_room) = self.services.server.config.report_room.as_ref() else {
+			return self.get_admin_room().await;
+		};
+
+		match self.resolve_report_room(report_room).await {
+			| Ok(room_id) => Ok(room_id),
+			| Err(e) => {
+				warn!(%report_room, error = %e, "Falling back to the admin room for reports");
+				self.get_admin_room().await
+			},
+		}
+	}
+
+	async fn resolve_report_room(&self, report_room: &RoomOrAliasId) -> Result<OwnedRoomId> {
+		let room_id = self
+			.services
+			.alias
+			.maybe_resolve(report_room)
+			.await?;
+
+		self.services
+			.state_cache
+			.is_joined(&self.services.globals.server_user, &room_id)
+			.await
+			.then_some(room_id)
+			.ok_or_else(|| err!("server user is not joined to the configured report room"))
 	}
 
 	async fn handle_response(&self, content: RoomMessageEventContent) -> Result {

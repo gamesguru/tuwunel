@@ -68,11 +68,7 @@ pub struct Pdu {
 	pub origin: Option<OwnedServerName>,
 
 	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub unsigned: Option<Box<RawJsonValue>>,
-
-	// BTreeMap<Box<ServerName>, BTreeMap<ServerSigningKeyId, String>>
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub signatures: Option<Box<RawJsonValue>>,
+	pub unsigned: Option<Unsigned>,
 
 	//TODO: https://spec.matrix.org/v1.14/rooms/v11/#rejected-events
 	#[cfg(test)]
@@ -94,6 +90,12 @@ pub type AuthEvents = SmallVec<[OwnedEventId; 3]>;
 /// high-rate modality in the 96-112B size class reported by jemalloc. With two
 /// additional words (hopefully) for the SmallVec it puts us squarely at 128B.
 pub type Content = Raw<CanonicalJsonObject, 112>;
+
+/// Tuned unsigned buffer. The stored value is `None` or small (the local-send
+/// `transaction_id` echo, or a serve-time `age`/`membership` annotation), all
+/// of which stay inline at the `Content` size class. State-event `prev_content`
+/// and bundled `m.relations` exceed it and spill to the heap, which is correct.
+pub type Unsigned = Raw<CanonicalJsonObject, 112>;
 
 /// The [maximum size allowed] for a PDU.
 /// [maximum size allowed]: <https://spec.matrix.org/latest/client-server-api/#size-limits>
@@ -222,7 +224,7 @@ where
 	fn kind(&self) -> &TimelineEventType { &self.kind }
 
 	#[inline]
-	fn unsigned(&self) -> Option<&RawJsonValue> { self.unsigned.as_deref() }
+	fn unsigned(&self) -> Option<&RawJsonValue> { self.unsigned.as_ref().map(Unsigned::json) }
 
 	#[inline]
 	fn as_mut_pdu(&mut self) -> &mut Pdu { self }
@@ -293,7 +295,7 @@ where
 	fn kind(&self) -> &TimelineEventType { &self.kind }
 
 	#[inline]
-	fn unsigned(&self) -> Option<&RawJsonValue> { self.unsigned.as_deref() }
+	fn unsigned(&self) -> Option<&RawJsonValue> { self.unsigned.as_ref().map(Unsigned::json) }
 
 	#[inline]
 	fn as_pdu(&self) -> &Pdu { self }

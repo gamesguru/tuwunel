@@ -549,7 +549,9 @@ pub async fn pdu_exists<'a>(&'a self, event_id: &'a EventId) -> bool {
 /// before the future is awaited.
 #[implement(Service)]
 pub fn watch_event<'a>(&'a self, event_id: &EventId) -> impl Future<Output = ()> + Send + 'a {
-	self.db.eventid_pduid.watch_prefix_once(event_id)
+	self.db
+		.eventid_pduid
+		.watch_raw_prefix_once(event_id)
 }
 
 /// Like get_non_outlier_pdu(), but without the expense of fetching and

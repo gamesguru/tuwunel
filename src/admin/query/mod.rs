@@ -14,6 +14,7 @@ mod sending;
 mod short;
 mod storage;
 mod sync;
+mod threepid;
 mod users;
 
 use clap::Subcommand;
@@ -25,7 +26,7 @@ use self::{
 	pusher::PusherCommand, raw::RawCommand, resolver::ResolverCommand,
 	room_alias::RoomAliasCommand, room_state_cache::RoomStateCacheCommand,
 	room_timeline::RoomTimelineCommand, sending::SendingCommand, short::ShortCommand,
-	storage::StorageCommand, sync::SyncCommand, users::UsersCommand,
+	storage::StorageCommand, sync::SyncCommand, threepid::ThreepidCommand, users::UsersCommand,
 };
 use crate::admin_command_dispatch;
 
@@ -68,6 +69,10 @@ pub(super) enum QueryCommand {
 	/// - users.rs iterators and getters
 	#[command(subcommand)]
 	Users(UsersCommand),
+
+	/// - threepid service
+	#[command(subcommand)]
+	Threepid(ThreepidCommand),
 
 	/// - resolver service
 	#[command(subcommand)]

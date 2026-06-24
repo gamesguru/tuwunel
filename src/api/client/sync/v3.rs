@@ -791,7 +791,6 @@ async fn handle_left_room(
 			hashes: EventHash::default(),
 			auth_events: Default::default(),
 			prev_events: Default::default(),
-			signatures: None,
 		};
 
 		let state = state_after.wrap(StateEvents {
@@ -964,6 +963,11 @@ async fn load_left_room(
 		.ready_filter(|pdu| filter.room.timeline.matches(pdu))
 		.take(timeline_limit)
 		.wide_then(|pdu| with_membership(services, pdu, sender_user, encrypted))
+		.wide_then(|pdu| {
+			services
+				.pdu_metadata
+				.bundle_aggregations(sender_user, pdu)
+		})
 		.collect::<Vec<_>>();
 
 	let account_data_events = services
@@ -1625,6 +1629,11 @@ fn collect_room_events<'a>(
 		.chain(joined_sender_member.into_iter().stream())
 		.ready_filter(include_in_timeline)
 		.wide_then(move |pdu| with_membership(services, pdu, sender_user, encrypted))
+		.wide_then(move |pdu| {
+			services
+				.pdu_metadata
+				.bundle_aggregations(sender_user, pdu)
+		})
 		.collect::<Vec<_>>()
 }
 

@@ -49,8 +49,9 @@ pub(crate) async fn get_capabilities_route(
 	capabilities.set_displayname = SetDisplayNameCapability::new(true);
 	capabilities.set_avatar_url = SetAvatarUrlCapability::new(true);
 
-	// we do not implement 3PID stuff
-	capabilities.thirdparty_id_changes = ThirdPartyIdChangesCapability { enabled: false };
+	// 3PID add/remove is available only when the email subsystem can send.
+	capabilities.thirdparty_id_changes =
+		ThirdPartyIdChangesCapability { enabled: services.sendmail.is_enabled() };
 
 	capabilities.get_login_token = GetLoginTokenCapability {
 		enabled: services.server.config.login_via_existing_session,

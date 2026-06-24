@@ -41,7 +41,7 @@ pub(crate) async fn report_event_route(
 
 	services
 		.admin
-		.send_text(&format!(
+		.send_report(&format!(
 			"@room Event report received from {}\nReport Reason: {}\n\nEvent ID: {}\nRoom ID: \
 			 {}\nSent By: {}",
 			sender_user, reason, pdu.event_id, pdu.room_id, pdu.sender,

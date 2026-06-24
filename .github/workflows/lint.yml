@@ -37,7 +37,7 @@ on:
         description: Matrix inclusions
       checkout:
         type: string
-        default: 'HEAD'
+        default: ${{github.sha}}
       enable_audit:
         type: string
         default: 'true'

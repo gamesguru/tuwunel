@@ -7,7 +7,7 @@ use ruma::{
 use serde::Deserialize;
 use serde_json::value::{RawValue as RawJsonValue, to_raw_value};
 
-use super::StateKey;
+use super::{Content, StateKey};
 
 /// Build the start of a PDU in order to add it to the Database.
 #[derive(Deserialize)]
@@ -15,9 +15,9 @@ pub struct Builder {
 	#[serde(rename = "type")]
 	pub event_type: TimelineEventType,
 
-	pub content: Box<RawJsonValue>,
+	pub content: Content,
 
-	pub unsigned: Option<Unsigned>,
+	pub unsigned: Option<BTreeMap<String, serde_json::Value>>,
 
 	pub state_key: Option<StateKey>,
 
@@ -28,13 +28,11 @@ pub struct Builder {
 	pub timestamp: Option<MilliSecondsSinceUnixEpoch>,
 }
 
-type Unsigned = BTreeMap<String, serde_json::Value>;
-
 impl Default for Builder {
 	fn default() -> Self {
 		Self {
 			event_type: "m.room.message".into(),
-			content: Box::<RawJsonValue>::default(),
+			content: Box::<RawJsonValue>::default().into(),
 			unsigned: None,
 			state_key: None,
 			redacts: None,
@@ -52,6 +50,7 @@ impl Builder {
 		Self {
 			event_type: content.event_type().into(),
 			content: to_raw_value(content)
+				.map(Into::into)
 				.expect("Builder failed to serialize state event content to RawValue"),
 			state_key: Some(state_key.into()),
 			..Self::default()
@@ -65,6 +64,7 @@ impl Builder {
 		Self {
 			event_type: content.event_type().into(),
 			content: to_raw_value(content)
+				.map(Into::into)
 				.expect("Builder failed to serialize timeline event content to RawValue"),
 			..Self::default()
 		}

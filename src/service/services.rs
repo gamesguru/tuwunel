@@ -14,9 +14,9 @@ use crate::{
 	manager::Manager,
 	media, membership, oauth, presence, pusher, registration_tokens, resolver,
 	rooms::{self, retention},
-	sending, server_keys,
+	sending, sendmail, server_keys,
 	service::{Args, Service},
-	storage, sync, transaction_ids, uiaa, users,
+	storage, sync, threepid, transaction_ids, uiaa, users,
 };
 
 pub struct Services {
@@ -65,6 +65,8 @@ pub struct Services {
 	pub oauth: Arc<oauth::Service>,
 	pub retention: Arc<retention::Service>,
 	pub registration_tokens: Arc<registration_tokens::Service>,
+	pub sendmail: Arc<sendmail::Service>,
+	pub threepid: Arc<threepid::Service>,
 
 	manager: Mutex<Option<Arc<Manager>>>,
 	pub server: Arc<Server>,
@@ -127,6 +129,8 @@ pub async fn build(server: Arc<Server>) -> Result<Arc<Self>> {
 		oauth: oauth::Service::build(&args)?,
 		retention: retention::Service::build(&args)?,
 		registration_tokens: registration_tokens::Service::build(&args)?,
+		sendmail: sendmail::Service::build(&args)?,
+		threepid: threepid::Service::build(&args)?,
 
 		manager: Mutex::new(None),
 		server,

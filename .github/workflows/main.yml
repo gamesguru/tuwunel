@@ -102,13 +102,25 @@ on:
         type: boolean
         default: true
         description: Enable Complement Crypto tests
+      enable_test_complement_interop:
+        type: boolean
+        default: false
+        description: "Interop: run Complement against a foreign homeserver"
+      enable_test_complement_interop_inverse:
+        type: boolean
+        default: false
+        description: "Interop: run Complement with the foreign homeserver as hs1"
+      complement_interop_run:
+        type: string
+        default: '.*'
+        description: "Interop: test selector regex"
       playwright_shards:
         type: string
-        default: '8'
+        default: '1'
         description: "Playwright: number of test shards"
       playwright_workers:
         type: string
-        default: '2'
+        default: '1'
         description: "Playwright: workers per shard"
 
 concurrency:
@@ -130,6 +142,8 @@ jobs:
       default_machines: '["X64"]'
       default_package_containers: '["docker", "oci"]'
       default_package_distros: '["deb", "rpm", "nix"]'
+      default_playwright_shards: '8'
+      default_playwright_workers: '1'
       is_release: ${{contains(github.ref, 'tags/v')}}
       is_branch: ${{contains(github.ref, 'refs/heads')}}
       is_pull: ${{contains(github.ref, 'refs/pull')}}
@@ -160,18 +174,24 @@ jobs:
       enable_test_nix: ${{fromJSON(inputs.enable_test_nix || 'true')}}
       enable_test_rustsdk: ${{fromJSON(inputs.enable_test_rustsdk || 'true')}}
       enable_test_complement: ${{fromJSON(inputs.enable_test_complement || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      enable_test_complement_debug: ${{fromJSON(inputs.enable_test_complement_debug || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
       complement_verbose: ${{fromJSON(inputs.complement_verbose || 'false')}}
       complement_runner: ${{ (github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && 'ubuntu-latest' || 'het' }}
       enable_test_complement_crypto: ${{fromJSON(inputs.enable_test_complement_crypto || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
       complement_crypto_verbose: ${{fromJSON(inputs.complement_crypto_verbose || 'false')}}
-      enable_test_playwright: ${{fromJSON(inputs.enable_test_playwright || env.is_dev || 'false') && vars.TUWUNEL_GH_ACTIONS_DISABLE_HEAVY == '' && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      enable_test_complement_interop: ${{fromJSON(inputs.enable_test_complement_interop || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      enable_test_complement_interop_inverse: ${{fromJSON(inputs.enable_test_complement_interop_inverse || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      complement_interop_run: ${{inputs.complement_interop_run || '.*'}}
+      enable_test_mas: ${{fromJSON(inputs.enable_test_mas || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      mas_verbose: ${{fromJSON(inputs.mas_verbose || 'false')}}
+      enable_test_playwright: ${{fromJSON(inputs.enable_test_playwright || env.is_branch || 'false') && vars.TUWUNEL_GH_ACTIONS_DISABLE_HEAVY == '' && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
       playwright_runner: ${{ (github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && 'ubuntu-latest' || 'het' }}
-      playwright_shards: ${{inputs.playwright_shards || vars.PLAYWRIGHT_SHARDS || '8'}}
-      playwright_workers: ${{inputs.playwright_workers || vars.PLAYWRIGHT_WORKERS || '1'}}
+      playwright_shards: ${{inputs.playwright_shards || vars.PLAYWRIGHT_SHARDS || env.default_playwright_shards}}
+      playwright_workers: ${{inputs.playwright_workers || vars.PLAYWRIGHT_WORKERS || env.default_playwright_workers}}
       enable_package: ${{fromJSON(inputs.enable_package || 'true') && vars.TUWUNEL_GH_ACTIONS_DISABLE_HEAVY == '' && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
       enable_package_book: ${{fromJSON(inputs.enable_package_book || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
       enable_package_docs: ${{fromJSON(inputs.enable_package_docs || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
-      enable_package_binary: ${{fromJSON(inputs.enable_package_binary || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      enable_package_binary: ${{fromJSON(inputs.enable_package_binary || env.is_fat || env.is_pull || 'false') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
       enable_package_container: ${{fromJSON(inputs.enable_package_container || env.is_fat || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
       package_containers: ${{inputs.package_containers || env.default_package_containers}}
       enable_package_distro: ${{fromJSON(inputs.enable_package_distro || env.is_fat || 'false') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
@@ -197,7 +217,9 @@ jobs:
         exclude: ${{fromJSON(vars.RUNNERS_EXCLUDES || '[]')}}
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
+      with:
+        ref: ${{inputs.checkout || github.sha}}
 
     - name: Initialize Builder
       if: ${{ !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) }}
@@ -308,10 +330,16 @@ jobs:
       enable_nix: ${{needs.init.outputs.enable_test_nix}}
       enable_rustsdk: ${{needs.init.outputs.enable_test_rustsdk}}
       enable_complement: ${{needs.init.outputs.enable_test_complement}}
+      enable_complement_debug: ${{needs.init.outputs.enable_test_complement_debug}}
       complement_runner: ${{needs.init.outputs.complement_runner}}
       complement_verbose: ${{needs.init.outputs.complement_verbose}}
       enable_complement_crypto: ${{needs.init.outputs.enable_test_complement_crypto}}
       complement_crypto_verbose: ${{needs.init.outputs.complement_crypto_verbose}}
+      enable_complement_interop: ${{needs.init.outputs.enable_test_complement_interop}}
+      enable_complement_interop_inverse: ${{needs.init.outputs.enable_test_complement_interop_inverse}}
+      complement_interop_run: ${{needs.init.outputs.complement_interop_run}}
+      enable_mas: ${{needs.init.outputs.enable_test_mas}}
+      mas_verbose: ${{needs.init.outputs.mas_verbose}}
       enable_playwright: ${{needs.init.outputs.enable_test_playwright}}
       playwright_runner: ${{needs.init.outputs.playwright_runner}}
       playwright_shards: ${{needs.init.outputs.playwright_shards}}

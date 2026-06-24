@@ -40,7 +40,7 @@ on:
         description: Matrix inclusions
       checkout:
         type: string
-        default: 'HEAD'
+        default: ${{github.sha}}
       docker_repo:
         type: string
         description: DockerHub Repository
@@ -126,9 +126,9 @@ jobs:
         include: ${{fromJSON(inputs.includes)}}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
-          ref: ${{inputs.checkout}}
+          ref: ${{inputs.checkout || github.sha}}
           fetch-depth: 1
           fetch-tags: true
           persist-credentials: false

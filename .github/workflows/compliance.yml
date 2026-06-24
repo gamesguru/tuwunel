@@ -3,12 +3,12 @@ name: Compliance
 on:
   workflow_call:
     inputs:
-      flavor:
+      regime:
         type: string
-        description: Flavour label
-      job_name:
+        description: Test package name
+      counterparty:
         type: string
-        description: Display name
+        description: Client or Server tested with
       runner:
         type: string
         default: 'het'
@@ -69,13 +69,19 @@ on:
         default: '[]'
       checkout:
         type: string
-        default: 'HEAD'
+        default: ${{github.sha}}
 
 jobs:
   compliance:
-    name: ${{inputs.job_name}}
+    name: >
+      ${{inputs.counterparty}}-${{inputs.regime}}
+      ${{matrix.cargo_profile}}
+      ${{matrix.rust_toolchain}}
+      ${{matrix.feat_set}}
+      ${{matrix.sys_name}}
+      ${{matrix.sys_version}}
+      ${{matrix.sys_target}}
     runs-on: ${{ (github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && 'ubuntu-latest' || fromJSON(format('["{0}", "{1}"]', matrix.machine, inputs.runner)) }}
-
     strategy:
       fail-fast: false
       matrix:
@@ -91,9 +97,9 @@ jobs:
         include: ${{fromJSON(inputs.includes)}}
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
-        ref: ${{inputs.checkout}}
+        ref: ${{inputs.checkout || github.sha}}
 
     - name: Execute
       id: execute
@@ -116,7 +122,7 @@ jobs:
       name: Restore Runtime History
       uses: actions/cache/restore@v5
       with:
-        path: ${{runner.temp}}/digest/${{github.ref_name}}.json
+        path: _ci_digest/${{github.ref_name}}.json
         key: rt-digest-${{github.ref_name}}-${{inputs.metrics_artifact_prefix}}-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}-${{github.run_id}}-${{github.run_attempt}}
         restore-keys: |
           rt-digest-${{github.ref_name}}-${{inputs.metrics_artifact_prefix}}-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}-
@@ -125,7 +131,7 @@ jobs:
       name: Restore Main Baseline
       uses: actions/cache/restore@v5
       with:
-        path: ${{runner.temp}}/digest/${{github.event.repository.default_branch || 'main'}}.json
+        path: _ci_digest/${{github.event.repository.default_branch || 'main'}}.json
         key: rt-digest-${{github.event.repository.default_branch || 'main'}}-${{inputs.metrics_artifact_prefix}}-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}-readonly
         restore-keys: |
           rt-digest-${{github.event.repository.default_branch || 'main'}}-${{inputs.metrics_artifact_prefix}}-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}-
@@ -134,12 +140,14 @@ jobs:
       name: Summarise
       id: summarise
       env:
+        cargo_profile: ${{matrix.cargo_profile}}
         feat_set: ${{matrix.feat_set}}
         sys_name: ${{matrix.sys_name}}
         sys_target: ${{matrix.sys_target}}
         GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
-        RUNTIME_DIGEST_OWN: ${{inputs.runtime_history && format('{0}/digest/{1}.json', runner.temp, github.ref_name) || ''}}
-        RUNTIME_DIGEST_MAIN: ${{(inputs.runtime_history && github.ref_name != (github.event.repository.default_branch || 'main')) && format('{0}/digest/{1}.json', runner.temp, github.event.repository.default_branch || 'main') || ''}}
+        execute_outcome: ${{steps.execute.outcome}}
+        RUNTIME_DIGEST_OWN: ${{inputs.runtime_history && format('{0}/_ci_digest/{1}.json', github.workspace, github.ref_name) || ''}}
+        RUNTIME_DIGEST_MAIN: ${{(inputs.runtime_history && github.ref_name != (github.event.repository.default_branch || 'main')) && format('{0}/_ci_digest/{1}.json', github.workspace, github.event.repository.default_branch || 'main') || ''}}
         RUNTIME_DIGEST_KEEP: ${{github.ref_name == (github.event.repository.default_branch || 'main') && '1' || '3'}}
       run: |
         ${{inputs.summariser}}
@@ -175,7 +183,7 @@ jobs:
       continue-on-error: true
       uses: actions/cache/save@v5
       with:
-        path: ${{runner.temp}}/digest/${{github.ref_name}}.json
+        path: _ci_digest/${{github.ref_name}}.json
         key: rt-digest-${{github.ref_name}}-${{inputs.metrics_artifact_prefix}}-${{matrix.feat_set}}-${{matrix.sys_name}}-${{matrix.sys_target}}-${{github.run_id}}-${{github.run_attempt}}
 
     - name: Accept

@@ -80,7 +80,7 @@ pub async fn resolve<States, AuthSets, FetchExists, ExistsFut, FetchEvent, Event
 	auth_sets: AuthSets,
 	fetch: &FetchEvent,
 	exists: &FetchExists,
-	backport_css: bool,
+	hydra_backports: bool,
 ) -> Result<StateMap<OwnedEventId>>
 where
 	States: Stream<Item = StateMap<OwnedEventId>> + Send,
@@ -118,7 +118,7 @@ where
 	// 0. The full conflicted set is the union of the conflicted state set and the
 	//    auth difference. Don't honor events that don't exist.
 	let full_conflicted_set =
-		full_conflicted_set(rules, conflicted_states, auth_sets, fetch, exists, backport_css)
+		full_conflicted_set(rules, conflicted_states, auth_sets, fetch, exists, hydra_backports)
 			.await;
 
 	// 1. Select the set X of all power events that appear in the full conflicted
@@ -141,12 +141,14 @@ where
 		.stream()
 		.map(AsRef::as_ref);
 
-	let start_with_incoming_state = rules
+	let begin_with_empty_state_map = rules
 		.state_res
 		.v2_rules()
-		.is_none_or(|r| !r.begin_iterative_auth_checks_with_empty_state_map);
+		.is_some_and(|r| r.begin_iterative_auth_checks_with_empty_state_map)
+		|| hydra_backports;
 
-	let initial_state = start_with_incoming_state
+	let initial_state = begin_with_empty_state_map
+		.is_false()
 		.then(|| unconflicted_state.clone())
 		.unwrap_or_default();
 
@@ -231,7 +233,7 @@ async fn full_conflicted_set<AuthSets, FetchExists, ExistsFut, FetchEvent, Event
 	auth_sets: AuthSets,
 	fetch: &FetchEvent,
 	exists: &FetchExists,
-	backport_css: bool,
+	hydra_backports: bool,
 ) -> HashSet<OwnedEventId>
 where
 	AuthSets: Stream<Item = AuthSet<OwnedEventId>> + Send,
@@ -245,7 +247,7 @@ where
 		.state_res
 		.v2_rules()
 		.is_some_and(|rules| rules.consider_conflicted_state_subgraph)
-		|| backport_css;
+		|| hydra_backports;
 
 	let conflicted_state_set: Vec<_> = conflicted_states
 		.values()

@@ -16,7 +16,11 @@ use tuwunel_core::{
 	Err, Result, at, is_true,
 	matrix::Event,
 	result::FlatOk,
-	utils::{IterStream, option::OptionExt, stream::ReadyExt},
+	utils::{
+		IterStream,
+		option::OptionExt,
+		stream::{ReadyExt, WidebandExt},
+	},
 };
 use tuwunel_service::{Services, rooms::search::RoomQuery};
 
@@ -142,6 +146,12 @@ async fn category_room_events(
 		.map(at!(2))
 		.flatten()
 		.stream()
+		.map(Event::into_pdu)
+		.wide_then(|pdu| {
+			services
+				.pdu_metadata
+				.bundle_aggregations(sender_user, pdu)
+		})
 		.map(Event::into_format)
 		.map(|result| SearchResult {
 			rank: None,

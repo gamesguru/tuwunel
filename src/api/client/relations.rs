@@ -221,6 +221,14 @@ async fn paginate_relations_with_filter(
 			.then_some((depth, count, pdu))
 	})
 	.take(limit)
+	.wide_then(async |(depth, count, pdu)| {
+		let pdu = services
+			.pdu_metadata
+			.bundle_aggregations(sender_user, pdu)
+			.await;
+
+		(depth, count, pdu)
+	})
 	.collect::<Vec<_>>()
 	.await;
 

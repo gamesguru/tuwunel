@@ -1,12 +1,7 @@
-use std::collections::BTreeMap;
-
 use axum::extract::State;
-use futures::{
-	StreamExt,
-	future::{join, join4},
-};
+use futures::{StreamExt, future::join};
 use ruma::{
-	MxcUri, OwnedRoomId,
+	MxcUri, OwnedRoomId, UserId,
 	api::{
 		client::profile::{
 			PropagateTo, get_avatar_url, get_display_name, get_profile, set_avatar_url,
@@ -17,10 +12,17 @@ use ruma::{
 	presence::PresenceState,
 };
 use serde_json::Value as JsonValue;
-use tuwunel_core::{Err, Result, utils::future::TryExtExt};
-use tuwunel_service::users::{Propagation, propagation_default};
+use tuwunel_core::{Err, Error, Result, http::StatusCode, utils::future::TryExtExt};
+use tuwunel_service::{
+	Services,
+	users::{Propagation, propagation_default},
+};
 
 use crate::{ClientIp, Ruma};
+
+/// MSC4133 maximum total profile size (64 KiB), measured over the JSON of the
+/// full profile including displayname and avatar_url.
+pub(super) const MAX_PROFILE_SIZE: usize = 65_536;
 
 pub(super) type ProfileResponse = get_profile_information::v1::Response;
 
@@ -65,6 +67,16 @@ pub(crate) async fn set_displayname_route(
 
 	if *sender_user != body.user_id && body.appservice_info.is_none() {
 		return Err!(Request(Forbidden("You cannot update the profile of another user")));
+	}
+
+	if let Some(displayname) = body.displayname.as_deref() {
+		enforce_profile_size(
+			&services,
+			&body.user_id,
+			"displayname",
+			JsonValue::String(displayname.to_owned()),
+		)
+		.await?;
 	}
 
 	let all_joined_rooms: Vec<OwnedRoomId> = services
@@ -181,6 +193,16 @@ pub(crate) async fn set_avatar_url_route(
 
 	if *sender_user != body.user_id && body.appservice_info.is_none() {
 		return Err!(Request(Forbidden("You cannot update the profile of another user")));
+	}
+
+	if let Some(avatar_url) = body.avatar_url.as_deref() {
+		enforce_profile_size(
+			&services,
+			&body.user_id,
+			"avatar_url",
+			JsonValue::String(avatar_url.to_string()),
+		)
+		.await?;
 	}
 
 	let all_joined_rooms: Vec<OwnedRoomId> = services
@@ -364,49 +386,42 @@ pub(crate) async fn get_profile_route(
 		return Err!(Request(NotFound("Profile was not found.")));
 	}
 
-	let mut custom_profile_fields: BTreeMap<String, _> = services
+	Ok(services
 		.users
-		.all_profile_keys(&body.user_id)
-		.collect()
-		.await;
-
-	// services.users.timezone will collect the MSC4175 timezone key if it exists
-	custom_profile_fields.remove("us.cloke.msc4175.tz");
-	custom_profile_fields.remove("m.tz");
-
-	let (avatar_url, blurhash, displayname, tz) = join4(
-		services.users.avatar_url(&body.user_id).ok(),
-		services.users.blurhash(&body.user_id).ok(),
-		services.users.displayname(&body.user_id).ok(),
-		services.users.timezone(&body.user_id).ok(),
-	)
-	.await;
-
-	let canonical_fields = [
-		("avatar_url", avatar_url.map(Into::into)),
-		("blurhash", blurhash),
-		("displayname", displayname),
-		("m.tz", tz),
-	];
-
-	Ok(canonical_fields
+		.full_profile(&body.user_id)
+		.await
 		.into_iter()
-		.map(|(key, val)| (key.to_owned(), val))
-		.filter_map(|(key, val)| {
-			val.map(serde_json::to_value)
-				.transpose()
-				.ok()
-				.flatten()
-				.map(|val| (key, val))
-		})
-		.chain(
-			custom_profile_fields
-				.into_iter()
-				.filter_map(|(key, val)| {
-					serde_json::to_value(val.json())
-						.map(|val| (key, val))
-						.ok()
-				}),
-		)
 		.collect())
+}
+
+/// MSC4133: reject a prospective profile write that would push the full
+/// profile over the 64 KiB cap. `value` is what `key` will hold after the
+/// write; a removal cannot grow the profile, so callers skip it.
+pub(super) async fn enforce_profile_size(
+	services: &Services,
+	user_id: &UserId,
+	key: &str,
+	value: JsonValue,
+) -> Result<()> {
+	let mut profile = services.users.full_profile(user_id).await;
+	profile.insert(key.to_owned(), value);
+
+	(serde_json::to_vec(&profile).map_or(0, |buf| buf.len()) <= MAX_PROFILE_SIZE)
+		.then_some(())
+		.ok_or_else(|| {
+			profile_size_error(
+				"M_PROFILE_TOO_LARGE",
+				"Profile would exceed the maximum size of 64 KiB.",
+			)
+		})
+}
+
+/// Build the response for an MSC4133 error code ruma does not enumerate
+/// (`M_PROFILE_TOO_LARGE` / `M_KEY_TOO_LARGE`). Deserialization is the only
+/// public path to `ErrorKind::_Custom`; `bad_request_code` maps it to 400.
+pub(super) fn profile_size_error(code: &str, message: &'static str) -> Error {
+	let kind = serde_json::from_value(serde_json::json!({ "errcode": code }))
+		.expect("a static MSC4133 errcode deserializes into an ErrorKind");
+
+	Error::Request(kind, message.into(), StatusCode::BAD_REQUEST)
 }

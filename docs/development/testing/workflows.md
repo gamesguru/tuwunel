@@ -48,7 +48,8 @@ The `init` job runs before everything else. It has two responsibilities:
      `rust_targets`, `sys_targets`, etc.
    - Phase flags: `enable_lint`, `enable_test`, `enable_package`, `enable_publish`
    - Per-job flags: `enable_test_nix`, `enable_test_complement`,
-     `enable_package_distro`, `enable_package_checks`, etc.
+     `enable_test_complement_debug`, `enable_package_distro`,
+     `enable_package_checks`, etc.
    - Branch classifications: `is_release`, `is_main`, `is_test`, `is_pull`,
      `is_fat`, `is_dev`
    - URLs: `pages_url`, `release_url`

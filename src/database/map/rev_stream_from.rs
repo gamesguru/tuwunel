@@ -9,7 +9,6 @@ use tuwunel_core::{Result, implement};
 use crate::{
 	keyval::{KeyVal, result_deserialize, serialize_key},
 	stream,
-	util::is_incomplete,
 };
 
 /// Iterate key-value entries in the map starting from upper-bound.
@@ -120,10 +119,8 @@ pub(super) fn is_cached<P>(map: &Arc<super::Map>, from: &P) -> bool
 where
 	P: AsRef<[u8]> + ?Sized,
 {
-	let cache_opts = super::cache_iter_options_default(&map.engine);
-	let cache_status = stream::State::new(map, cache_opts)
-		.init_rev(from.as_ref().into())
-		.status();
+	let opts = super::cache_iter_options_default(&map.engine);
+	let state = stream::State::new(map, opts).init_rev(from.as_ref().into());
 
-	!matches!(cache_status, Some(e) if is_incomplete(&e))
+	!state.is_incomplete()
 }

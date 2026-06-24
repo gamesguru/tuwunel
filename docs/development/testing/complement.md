@@ -99,6 +99,104 @@ The baseline must be deliberately updated when the compliance profile
 intentionally changes.
 
 
+## Interoperability runs (heterogeneous homeservers)
+
+By default every homeserver Complement spawns (`hs1`, `hs2`, ...) uses the same
+`complement-testee` image, so a run tests Tuwunel against itself. Complement was
+designed to also test different implementations against each other: it reads a
+per-homeserver image override from `COMPLEMENT_BASE_IMAGE_<hsname>` and falls
+back to the shared `COMPLEMENT_BASE_IMAGE` for any homeserver without one. An
+*interop* run assigns a different image to one or more homeservers so federation
+is exercised between two distinct servers. These are still honest peers; the
+only difference is the implementation behind each one.
+
+The most fundamental case is two builds of the same server (for example a
+release image as `hs1` and a development image as `hs2`). The goal case is a
+foreign implementation, such as Synapse against Tuwunel.
+
+`docker/complement.sh` exposes this through a few selectors, in increasing
+precedence:
+
+| Selector | Effect |
+|---|---|
+| `interop=synapse` | `hs2` runs the published Synapse Complement image |
+| `interop_image=<ref>` | `hs2` runs `<ref>` |
+| `interop_hs="hs2 hs4"` | which homeservers the foreign image owns (default `hs2`) |
+| `COMPLEMENT_BASE_IMAGE_hs2=<ref>` | raw per-homeserver passthrough |
+
+The runner pre-pulls each foreign image into the host daemon (Complement will
+not pull a missing image itself) and forwards the override into the tester
+container. The suffix is normalized to lowercase because Complement looks the
+override up by the literal homeserver name (`hs1`, `hs2`).
+
+##### Synapse vs Tuwunel
+
+```bash
+docker/bake.sh complement-tester complement-testee && \
+  interop=synapse docker/complement.sh "TestFederation.*"
+```
+
+`hs1` is Tuwunel and `hs2` is Synapse. The Synapse image
+(`ghcr.io/element-hq/synapse/complement-synapse:latest`) is published by
+Synapse's own CI, so this needs no local Synapse checkout and is reproducible in
+CI. Override the ref with `synapse_image=...` for a pinned tag.
+
+##### Two Tuwunel versions
+
+```bash
+# build a second testee from another checkout, tag it, then:
+interop_image=complement-testee-prev:latest docker/complement.sh "TestFederation.*"
+```
+
+##### Federation TLS
+
+For cross-implementation federation to work, each homeserver must present a
+certificate that its peer trusts. Complement generates one Certificate Authority
+per run and copies it into every container at `/complement/ca/`. The Tuwunel
+testee's entrypoint signs a short-lived federation certificate for its
+`$SERVER_NAME` with that CA at startup (mirroring how Synapse, Dendrite, and
+others behave), so a peer that validates certificates (Synapse does) accepts the
+connection. Outside Complement, where no run CA is present, the image keeps its
+baked self-signed certificate.
+
+##### Results
+
+A heterogeneous run does not match the homogeneous baseline in
+`tests/complement/results.jsonl`, so any interop selector switches the run to
+report-only: results land under `tests/complement/interop/` and the baseline
+gate is skipped. The run prints a pass/fail/skip summary instead. A dedicated
+interop baseline (to gate the Synapse-vs-Tuwunel matrix on regressions) is a
+natural follow-up.
+
+##### In CI
+
+CI carries an `Interop (synapse)` job that reuses the homogeneous run's
+`complement-tester` and `complement-testee` images and runs them against the
+published Synapse image as `hs2`. Because the run is report-only it never gates
+the pipeline; its outcome is the per-run step summary plus the uploaded
+`complement_interop_*` artifacts. It is off by default and runs only when
+requested, either way:
+
+- put `[ci interop]` in the commit message of a pushed branch, or
+- dispatch the `Main` workflow with `enable_test_interop` set (and optionally
+  `interop_run` to narrow the selector).
+
+The job builds on the same `complement` images, so it does not run when the
+Complement stage is disabled.
+
+##### Known limitation: blueprint construction
+
+Tests built on `Deploy(t, n)` construct a shared multi-server blueprint the
+first time one runs in a package, then redeploy the committed images for each
+test. The first redeploy of an overridden homeserver, immediately after that
+construction, currently comes up without its `SERVER_NAME`. An image whose
+entrypoint hard-requires that variable (Synapse signs its certificate from it)
+fails to start for that one test, while later deploys of the same blueprint in
+the run succeed. Federation queries on a freshly deployed pair (for example the
+profile tests) are unaffected. This is a Complement-side interaction between
+blueprint construction and per-homeserver image overrides, not a Tuwunel or
+Synapse protocol difference.
+
 ## Image naming
 
 Images are tagged with the full matrix vector so they can be unambiguously

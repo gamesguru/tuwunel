@@ -63,6 +63,7 @@ please refer to the section on [environment variables](#configuring-via-environm
 | `name` | `brand` | Display name shown on the login page. Useful when multiple providers share the same brand. |
 | `icon` | brand default | MXC URI for the provider's icon. Known brands have built-in icons. |
 | `scope` | all | List of OAuth scopes to request. Empty array means all scopes configured in the provider application. Users can further restrict scopes during authorization. |
+| `forward_action_prompt` | `false` | Forward the `action` query parameter from the SSO redirect endpoints to this provider as an OpenID Connect `prompt`. When enabled, `action=register` makes the upstream authorization request carry `prompt=create` so the provider shows its registration screen; `action=login` is left unforwarded. Only enable it for providers that support the OIDC `prompt=create` ("Initiating User Registration") extension. See [Registration hints](#registration-hints-for-oauth-aware-clients). |
 
 ### User ID mapping
 
@@ -299,6 +300,35 @@ Listing `"sub"` anywhere in `userid_claims` elevates it to the highest
 priority, overriding all other entries. The special value `"unique"` used
 alone instructs Tuwunel to always generate a unique random localpart and
 never attempt to derive one from claims at all.
+
+### Registration hints for OAuth-aware clients
+
+Clients that implement MSC3824 OAuth-aware login can append an `action`
+parameter to the SSO redirect endpoint to signal whether the user means to log
+in or to register:
+
+```
+/_matrix/client/v3/login/sso/redirect?action=register
+```
+
+Advertise that Tuwunel understands this flow by setting
+`oidc_aware_preferred = true` under [Global SSO options](#global-sso-options).
+
+Tuwunel only delegates the account screen to the provider: the hint is
+honored by forwarding it upstream rather than by rendering a local page. Enable
+`forward_action_prompt` on a provider and an incoming `action=register` is
+translated to the OpenID Connect `prompt=create` parameter on that provider's
+authorization request: the provider opens its sign-up screen instead of its
+sign-in screen. `action=login` and a missing `action` are left untouched; a
+`prompt` you configure through `extra_authorization_parameters` still applies in
+those cases, while for `action=register` the derived `prompt=create` takes
+precedence over it.
+
+`prompt=create` comes from the OpenID Connect "Initiating User Registration"
+extension, which not every provider implements. A provider that does not
+support it may ignore the parameter or reject the request, so the option
+defaults to off. Enable it only after confirming your provider advertises
+`create` in the `prompt_values_supported` field of its OIDC discovery metadata.
 
 ## Multiple providers
 

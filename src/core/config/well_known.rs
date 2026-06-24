@@ -1,7 +1,11 @@
 use std::collections::BTreeMap;
 
 use ruma::api::{
-	client::{discovery::discover_support::Contact, rtc::RtcTransport},
+	client::{
+		discovery::discover_support::Contact,
+		rtc::RtcTransport,
+		uiaa::{LoginTermsParams, PolicyDefinition, PolicyTranslation},
+	},
 	identity_service::tos::get_terms_of_service::v2::{LocalizedPolicy, Policies},
 };
 use tuwunel_macros::implement;
@@ -46,6 +50,33 @@ pub fn get_policies(&self) -> BTreeMap<String, Policies> {
 			})
 		})
 		.collect()
+}
+
+#[implement(super::Config)]
+#[must_use]
+pub fn login_terms_params(&self) -> Option<LoginTermsParams> {
+	let policies: BTreeMap<_, _> = self
+		.registration_terms
+		.iter()
+		.map(|(id, policy)| {
+			let translations = policy
+				.translations
+				.iter()
+				.map(|(language, translation)| {
+					let translation = PolicyTranslation::new(
+						translation.name.clone(),
+						translation.url.to_string(),
+					);
+
+					(language.clone(), translation)
+				})
+				.collect();
+
+			(id.clone(), PolicyDefinition::new(policy.version.clone(), translations))
+		})
+		.collect();
+
+	(!policies.is_empty()).then(|| LoginTermsParams::new(policies))
 }
 
 /// Build the configured RTC transports as `RtcTransport` values, the typed

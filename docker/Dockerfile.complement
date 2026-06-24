@@ -109,10 +109,12 @@ EXPOSE 8008 8448
 RUN mkdir /database
 RUN mkdir -p /var/log/tuwunel/metrics
 COPY --from=complement-config * /complement/
+COPY docker/snippets/complement_provision_tls.sh /complement/provision_tls.sh
+RUN chmod a+x /complement/provision_tls.sh
 ENV TUWUNEL_CONFIG="/complement/complement.toml"
 ENV TUWUNEL_RUNTIME_METRICS_DIR="/var/log/tuwunel/metrics"
 ENV TUWUNEL_RUNTIME_USAGE_DIR="/var/log/tuwunel/metrics"
-ENTRYPOINT exec tuwunel -Oserver_name=\""$SERVER_NAME\""
+ENTRYPOINT exec /complement/provision_tls.sh tuwunel -Oserver_name=\""$SERVER_NAME\""
 
 
 FROM input AS complement-testee-valgrind
@@ -122,10 +124,12 @@ EXPOSE 8008 8448
 RUN mkdir /database
 RUN mkdir -p /var/log/tuwunel/metrics
 COPY --from=complement-config * /complement/
+COPY docker/snippets/complement_provision_tls.sh /complement/provision_tls.sh
+RUN chmod a+x /complement/provision_tls.sh
 ENV TUWUNEL_CONFIG="/complement/complement.toml"
 ENV TUWUNEL_RUNTIME_METRICS_DIR="/var/log/tuwunel/metrics"
 ENV TUWUNEL_RUNTIME_USAGE_DIR="/var/log/tuwunel/metrics"
-ENTRYPOINT exec valgrind \
+ENTRYPOINT exec /complement/provision_tls.sh valgrind \
     --leak-check=no \
     --undef-value-errors=no \
     --exit-on-first-error=yes \
@@ -138,7 +142,7 @@ ENTRYPOINT exec valgrind \
 FROM input AS complement-base
 ARG var_cache
 ARG var_lib_apt
-ARG complement_ref="127971d030d0213d0133cf6641aaae91e3d2fc25"
+ARG complement_ref="404f1938c3b89aaeabd28619a3588f2196756324"
 ARG complement_tags="conduwuit_blacklist"
 ARG complement_tests="./tests/..."
 ARG complement_run=".*"

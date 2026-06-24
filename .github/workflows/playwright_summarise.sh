@@ -63,8 +63,8 @@ grid_width() {
 	awk -v n="$1" 'BEGIN { w=int(sqrt(n)); if (w*w<n) w++; print (w?w:1) }';
 }
 
-# Cells: ❎/🟩 accept, 🟨 flaky, 🟥/🟧 error, ⬜ skip. Acceptlisted errors are
-# 🟧 (expected); off-list errors and acceptlisted regressions are 🟥.
+# Cells: ✅/🟩 accept, 🟨 flaky, 🟥/🟧 error, ⬛ skip, ⬜ grid filler. Acceptlisted
+# errors are 🟧 (expected); off-list errors and acceptlisted regressions are 🟥.
 render_grid() {
 	awk -F'\t' -v w="$1" -v R="$2" -v P="$3" -v A="$4" '
 		BEGIN {
@@ -74,15 +74,15 @@ render_grid() {
 		}
 		{
 			t = $2
-			if      ($1 == "skip")   c = "⬜"
+			if      ($1 == "skip")   c = "⬛"
 			else if ($1 == "flaky")  c = "🟨"
-			else if ($1 == "accept") c = pro[t]              ? "❎" : "🟩"
+			else if ($1 == "accept") c = pro[t]              ? "✅" : "🟩"
 			else if ($1 == "error")  c = (reg[t] || !acc[t]) ? "🟥" : "🟧"
 			printf "%s", c
 			if (++n % w == 0) printf "<br>"
 		}
 		END {
-			while (n < w*w) { printf "⬛"; if (++n % w == 0) printf "<br>" }
+			while (n < w*w) { printf "⬜"; if (++n % w == 0) printf "<br>" }
 		}
 	' "$curr"
 }
@@ -175,7 +175,7 @@ gate_main() {
 
 	if test "$ngate" -ne 0; then
 		{
-			echo "### Playwright shard gate"
+			echo "### Playwright Shard"
 			echo
 			echo '```diff'
 			printf '%s\n' "$gate" | sed -n 's/^./- &/p'

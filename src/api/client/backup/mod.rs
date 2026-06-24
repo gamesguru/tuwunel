@@ -7,12 +7,11 @@ mod version_id;
 use futures::{FutureExt, future::try_join};
 use http::StatusCode;
 use ruma::{
-	UInt, UserId,
+	CanonicalJsonValue, UInt, UserId,
 	api::error::{ErrorKind, WrongRoomKeysVersionErrorData},
 	serde::Raw,
 };
 use serde::Deserialize;
-use serde_json::value::RawValue as RawJsonValue;
 use tuwunel_core::{Error, Result};
 use tuwunel_service::Services;
 
@@ -38,8 +37,8 @@ pub(crate) use self::{
 #[derive(Deserialize)]
 #[expect(unused)]
 struct AlgorithmShape {
-	algorithm: Box<RawJsonValue>,
-	auth_data: Box<RawJsonValue>,
+	algorithm: Raw<CanonicalJsonValue>,
+	auth_data: Raw<CanonicalJsonValue>,
 }
 
 pub(super) fn validate_algorithm_shape<T>(raw: &Raw<T>) -> Result {

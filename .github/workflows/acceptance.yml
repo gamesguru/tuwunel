@@ -3,9 +3,13 @@ name: Acceptance
 on:
   workflow_call:
     inputs:
-      job_name:
+      regime:
         type: string
-        description: Display name
+        description: Test package name
+        default: 'acceptance'
+      counterparty:
+        type: string
+        description: Client software name
       runner:
         type: string
         default: 'het'
@@ -22,6 +26,10 @@ on:
         type: string
         default: '1'
         description: Number of test shards
+      shard_ids:
+        type: string
+        default: '[1]'
+        description: Enumeration of [1..shards] identifiers.
       cargo_profiles:
         type: string
       feat_sets:
@@ -46,7 +54,7 @@ on:
         default: '[]'
       checkout:
         type: string
-        default: 'HEAD'
+        default: ${{github.sha}}
 
 jobs:
   init:
@@ -69,22 +77,26 @@ jobs:
         echo "count=$shards" >> "$GITHUB_OUTPUT"
 
   acceptance:
-    name: ${{inputs.job_name}}
+    name: >
+      ${{inputs.counterparty}}-${{inputs.regime}}
+      ${{matrix.cargo_profile}}
+      ${{matrix.rust_toolchain}}
+      ${{matrix.feat_set}}
+      ${{matrix.sys_name}}
+      ${{matrix.sys_version}}
+      ${{matrix.sys_target}}
     needs: [init]
     runs-on: ${{ (github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && 'ubuntu-latest' || fromJSON(format('["{0}", "{1}"]', matrix.machine, inputs.runner)) }}
     concurrency:
       group: playwright-cant-walk-and-chew-bubblegum-${{matrix.shard}}
       cancel-in-progress: false
 
-    outputs:
-      shards: ${{needs.init.outputs.count}}
-
     strategy:
       fail-fast: false
       matrix:
-        # Shard ids come from the init job, which expands the `shards` count
-        # into [1..N]; that count is also the /N split and summary expectation.
-        shard: ${{fromJSON(needs.init.outputs.ids)}}
+        # Shard ids enumerate [1..N] and arrive from the caller; the `shards`
+        # count is the /N split denominator and the summary expectation.
+        shard: ${{fromJSON(inputs.shard_ids)}}
         cargo_profile: ${{fromJSON(inputs.cargo_profiles)}}
         feat_set: ${{fromJSON(inputs.feat_sets)}}
         rust_toolchain: ${{fromJSON(inputs.rust_toolchains)}}
@@ -97,16 +109,16 @@ jobs:
         include: ${{fromJSON(inputs.includes)}}
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
-        ref: ${{inputs.checkout}}
+        ref: ${{inputs.checkout || github.sha}}
 
     - name: Execute
       id: execute
       env:
         playwright_workers: ${{fromJSON(inputs.workers)}}
         playwright_retries: ${{fromJSON(inputs.retries)}}
-        playwright_shard: ${{matrix.shard}}/${{needs.init.outputs.count}}
+        playwright_shard: ${{matrix.shard}}/${{inputs.shards}}
         cargo_profile: ${{matrix.cargo_profile}}
         rust_toolchain: ${{matrix.rust_toolchain}}
         rust_target: ${{matrix.rust_target}}
@@ -149,24 +161,33 @@ jobs:
         if-no-files-found: ignore
         overwrite: true
 
-    - if: success() || (failure() && steps.execute.outcome == 'failure')
+    - if: >
+        (success() || (failure() && steps.execute.outcome == 'failure'))
+        && inputs.shards > 1
       name: Gate
       run: |
         .github/workflows/playwright_summarise.sh gate
 
+    - if: >
+        (success() || (failure() && steps.execute.outcome == 'failure'))
+        && inputs.shards <= 1
+      name: Summarise
+      run: |
+        .github/workflows/playwright_summarise.sh
+
   fini:
     if: >
       !cancelled()
+      && inputs.shards > 1
       && needs.acceptance.result != 'skipped'
 
-    name: Acceptance Aggregate
+    name: Acceptance Results
     needs: [acceptance]
     runs-on: ${{ (github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && 'ubuntu-latest' || fromJSON(format('["{0}", "{1}"]', fromJSON(inputs.machines)[0], inputs.runner)) }}
-
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
-        ref: ${{inputs.checkout}}
+        ref: ${{inputs.checkout || github.sha}}
 
     - name: Collect Shard Results
       uses: actions/download-artifact@v7
@@ -178,7 +199,7 @@ jobs:
     - name: Merge and Summarise
       shell: bash
       env:
-        shards: ${{needs.acceptance.outputs.shards}}
+        shards: ${{inputs.shards}}
       run: |
         mkdir -p tests/playwright
         mapfile -t files < <(find ./shard-results -name results.json | sort)

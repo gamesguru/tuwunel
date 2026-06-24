@@ -16,7 +16,7 @@ mod upgrade_outlier_pdu;
 use std::{fmt::Write, num::NonZeroUsize, sync::Arc};
 
 use async_trait::async_trait;
-use ruma::{EventId, OwnedRoomId};
+use ruma::{EventId, OwnedRoomId, RoomVersionId, events::AnyStrippedStateEvent, serde::Raw};
 use tuwunel_core::{Result, implement, matrix::PduEvent, utils::MutexMap};
 use tuwunel_database::Map;
 
@@ -87,4 +87,15 @@ async fn event_exists(&self, event_id: &EventId) -> bool {
 )]
 async fn event_fetch(&self, event_id: &EventId) -> Result<PduEvent> {
 	self.services.timeline.get_pdu(event_id).await
+}
+
+/// Extract a room's version from the create event in a stripped-state list (as
+/// stored for an out-of-band invite or knock).
+fn room_version_of(stripped: &[Raw<AnyStrippedStateEvent>]) -> Option<RoomVersionId> {
+	stripped
+		.iter()
+		.find_map(|event| match event.deserialize() {
+			| Ok(AnyStrippedStateEvent::RoomCreate(create)) => Some(create.content.room_version),
+			| _ => None,
+		})
 }

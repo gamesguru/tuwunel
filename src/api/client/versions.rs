@@ -71,7 +71,7 @@ static VERSIONS: [&str; 25] = [
 	"v1.17",  /* no action */
 ];
 
-static UNSTABLE_FEATURES: [&str; 35] = [
+static UNSTABLE_FEATURES: [&str; 36] = [
 	"org.matrix.e2e_cross_signing",
 	// private read receipts (https://github.com/matrix-org/matrix-spec-proposals/pull/2285)
 	"org.matrix.msc2285.stable",
@@ -79,6 +79,7 @@ static UNSTABLE_FEATURES: [&str; 35] = [
 	"fi.mau.msc2659.stable",
 	// query mutual rooms (https://github.com/matrix-org/matrix-spec-proposals/pull/2666)
 	"uk.half-shot.msc2666.query_mutual_rooms",
+	"uk.half-shot.msc2666.query_mutual_rooms.stable",
 	// threading/threads (https://github.com/matrix-org/matrix-spec-proposals/pull/2836)
 	"org.matrix.msc2836",
 	// jump to date (https://github.com/matrix-org/matrix-spec-proposals/pull/3030)

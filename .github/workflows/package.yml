@@ -40,7 +40,7 @@ on:
         description: For release assets
       checkout:
         type: string
-        default: 'HEAD'
+        default: ${{github.sha}}
       enable_book:
         type: string
         default: 'true'

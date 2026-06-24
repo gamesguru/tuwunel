@@ -130,6 +130,14 @@ pub(crate) async fn get_message_events_route(
 		.wide_filter_map(|item| event_filters(&services, sender_user, item))
 		.take(limit)
 		.wide_then(|item| add_membership_unsigned(&services, item, sender_user, encrypted))
+		.wide_then(async |(count, pdu)| {
+			let pdu = services
+				.pdu_metadata
+				.bundle_aggregations(sender_user, pdu)
+				.await;
+
+			(count, pdu)
+		})
 		.collect()
 		.await;
 

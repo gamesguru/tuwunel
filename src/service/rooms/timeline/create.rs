@@ -60,7 +60,7 @@ pub async fn create_hash_and_sign_event(
 		.await
 		.or_else(|_| {
 			if event_type == TimelineEventType::RoomCreate {
-				let content: RoomCreateEventContent = serde_json::from_str(content.get())?;
+				let content: RoomCreateEventContent = serde_json::from_str(content.json().get())?;
 				Ok(content.room_version)
 			} else {
 				Err(Error::InconsistentRoomState(
@@ -81,7 +81,7 @@ pub async fn create_hash_and_sign_event(
 			&event_type,
 			sender,
 			state_key.as_deref(),
-			&content,
+			content.json(),
 			&version_rules.authorization,
 			true,
 		)
@@ -115,7 +115,7 @@ pub async fn create_hash_and_sign_event(
 	let unsigned = unsigned
 		.is_empty()
 		.eq(&false)
-		.then_some(to_raw_value(&unsigned)?);
+		.then_some(to_raw_value(&unsigned)?.into());
 
 	let origin_server_ts = timestamp
 		.as_ref()
@@ -131,7 +131,7 @@ pub async fn create_hash_and_sign_event(
 		room_id: room_id.to_owned(),
 		sender: sender.to_owned(),
 		origin: Some(self.services.globals.server_name().to_owned()),
-		content: content.into(),
+		content,
 		origin_server_ts,
 		kind: event_type,
 		state_key,
@@ -139,7 +139,6 @@ pub async fn create_hash_and_sign_event(
 		redacts,
 		unsigned,
 		hashes: EventHash::default(),
-		signatures: None,
 		prev_events,
 		auth_events: auth_events
 			.values()

@@ -254,6 +254,20 @@ rev = "fdfbba2bf916b53e5f73cdb1a495ebb649978079"
 default-features = false
 features = ["sync", "tls-rustls"]
 
+[workspace.dependencies.lettre]
+version = "0.11"
+default-features = false
+features = [
+	"builder",
+	"hostname",
+	"pool",
+	"ring",
+	"rustls-platform-verifier",
+	"smtp-transport",
+	"tokio1",
+	"tokio1-rustls",
+]
+
 [workspace.dependencies.libc]
 version = "0.2"
 
@@ -351,7 +365,7 @@ default-features = false
 
 [workspace.dependencies.ruma]
 git = "https://github.com/matrix-construct/ruma"
-rev = "c8684a452f59bf391fb344781e4ede031f371cb8"
+rev = "2f21f035d21d5c0113d3f1309f0277ffe4e9ac83"
 features = [
     "__compat",
     "appservice-api-c",
@@ -400,7 +414,7 @@ features = [
 
 [workspace.dependencies.synapse-admin-api]
 git = "https://github.com/matrix-construct/synapse-admin-api"
-rev = "de385da46b0f5e4987e20a31da8849a113becd4b"
+rev = "184d7a5abc03004076b93eab69096a65a44c6a0b"
 features = ["server"]
 
 [workspace.dependencies.rustls]
@@ -507,6 +521,10 @@ features = [
 	"union",
 	"write",
 ]
+
+[workspace.dependencies.subtle]
+version = "2.6"
+default-features = false
 
 [workspace.dependencies.syn]
 version = "2.0"

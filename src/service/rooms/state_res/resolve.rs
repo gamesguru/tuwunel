@@ -31,8 +31,10 @@ use tuwunel_core::{
 };
 
 use self::{
-	auth_difference::auth_difference, conflicted_subgraph::conflicted_subgraph_dfs,
-	power_sort::power_level_for_sender, split_conflicted::split_conflicted_state,
+	auth_difference::auth_difference,
+	conflicted_subgraph::conflicted_subgraph_dfs,
+	power_sort::power_level_for_pdu_sender,
+	split_conflicted::split_conflicted_state,
 };
 #[cfg(test)]
 use self::{
@@ -131,12 +133,6 @@ where
 	let mut conflicted_events = HashMap::new();
 	let mut auth_context = HashMap::new();
 
-	let conflicted_ids: HashSet<OwnedEventId> = conflicted_states
-		.values()
-		.flatten()
-		.cloned()
-		.collect();
-
 	let mut all_ids_to_fetch = full_conflicted_set.clone();
 	for id in unconflicted_state.values() {
 		all_ids_to_fetch.insert(id.clone());
@@ -145,39 +141,50 @@ where
 	let mut fetch_futures = futures::stream::FuturesUnordered::new();
 	for id in all_ids_to_fetch {
 		let id_clone = id.clone();
+		let is_conflicted = full_conflicted_set.contains(&id_clone);
 		fetch_futures.push(async move {
 			let pdu_res = fetch(id_clone.clone()).await;
-			let pl_res = power_level_for_sender::<_, _, Pdu>(&id_clone, rules, fetch).await;
-			(id_clone, pdu_res, pl_res)
+			match pdu_res {
+				Ok(pdu) => {
+					if is_conflicted {
+						let pl_res = power_level_for_pdu_sender::<_, _, Pdu>(&pdu, rules, fetch).await;
+						(id_clone, Ok(pdu), Some(pl_res))
+					} else {
+						(id_clone, Ok(pdu), None)
+					}
+				}
+				Err(e) => (id_clone, Err(e), None),
+			}
 		});
 	}
 
 	while let Some((id, pdu_res, pl_res)) = fetch_futures.next().await {
-		if let Ok(pdu) = pdu_res {
-			let sender_power = match pl_res {
-				| Ok(UserPowerLevel::Infinite) => i64::MAX,
-				| Ok(UserPowerLevel::Int(x)) => i64::from(x),
-				| _ => 0,
-			};
+		let pdu = pdu_res?;
 
-			let lean = rezzy::LeanEvent {
-				event_id: pdu.event_id().to_owned(),
-				event_type: pdu.kind().to_string(),
-				state_key: pdu.state_key().map(|sk| sk.to_string()),
-				power_level: sender_power,
-				origin_server_ts: pdu.origin_server_ts().get().into(),
-				sender: pdu.sender().to_string(),
-				content: pdu.get_content_as_value(),
-				prev_events: pdu.prev_events().map(|e| e.to_owned()).collect(),
-				auth_events: pdu.auth_events().map(|e| e.to_owned()).collect(),
-				depth: pdu.as_pdu().depth.into(),
-			};
+		let sender_power = match pl_res {
+			Some(Ok(UserPowerLevel::Infinite)) => i64::MAX,
+			Some(Ok(UserPowerLevel::Int(x))) => i64::from(x),
+			Some(Err(e)) => return Err(e),
+			_ => 0,
+		};
 
-			if conflicted_ids.contains(&id) {
-				conflicted_events.insert(id, lean);
-			} else {
-				auth_context.insert(id, lean);
-			}
+		let lean = rezzy::LeanEvent {
+			event_id: pdu.event_id().to_owned(),
+			event_type: pdu.kind().to_string(),
+			state_key: pdu.state_key().map(|sk| sk.to_string()),
+			power_level: sender_power,
+			origin_server_ts: pdu.origin_server_ts().get().into(),
+			sender: pdu.sender().to_string(),
+			content: pdu.get_content_as_value(),
+			prev_events: pdu.prev_events().map(|e| e.to_owned()).collect(),
+			auth_events: pdu.auth_events().map(|e| e.to_owned()).collect(),
+			depth: pdu.as_pdu().depth.into(),
+		};
+
+		if full_conflicted_set.contains(&id) {
+			conflicted_events.insert(id, lean);
+		} else {
+			auth_context.insert(id, lean);
 		}
 	}
 
@@ -215,6 +222,8 @@ where
 	for (key, id) in resolved {
 		final_state.insert((key.0.into(), key.1.into()), id);
 	}
+
+	final_state.extend(unconflicted_state);
 
 	debug!(resolved_state = final_state.len(), "resolved state");
 	trace!(?final_state, "resolved state");

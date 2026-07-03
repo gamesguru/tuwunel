@@ -365,8 +365,6 @@ default-features = false
 
 [workspace.dependencies.rezzy]
 version = "0.4.0"
-#default-features = false
-#features = ["std"]
 
 [workspace.dependencies.imbl]
 version = "4"

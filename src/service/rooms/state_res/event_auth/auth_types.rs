@@ -49,7 +49,7 @@ pub fn auth_types_for_event(
 		auth_types.push((k.into(), v.into()));
 	}
 
-	if always_create {
+	if *event_type != TimelineEventType::RoomCreate && always_create {
 		let key = (StateEventType::RoomCreate, "".into());
 		if !auth_types.contains(&key) {
 			auth_types.push(key);

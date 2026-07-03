@@ -31,10 +31,8 @@ use tuwunel_core::{
 };
 
 use self::{
-	auth_difference::auth_difference,
-	conflicted_subgraph::conflicted_subgraph_dfs,
-	power_sort::power_level_for_pdu_sender,
-	split_conflicted::split_conflicted_state,
+	auth_difference::auth_difference, conflicted_subgraph::conflicted_subgraph_dfs,
+	power_sort::power_level_for_pdu_sender, split_conflicted::split_conflicted_state,
 };
 #[cfg(test)]
 use self::{
@@ -145,15 +143,15 @@ where
 		fetch_futures.push(async move {
 			let pdu_res = fetch(id_clone.clone()).await;
 			match pdu_res {
-				Ok(pdu) => {
+				| Ok(pdu) =>
 					if is_conflicted {
-						let pl_res = power_level_for_pdu_sender::<_, _, Pdu>(&pdu, rules, fetch).await;
+						let pl_res =
+							power_level_for_pdu_sender::<_, _, Pdu>(&pdu, rules, fetch).await;
 						(id_clone, Ok(pdu), Some(pl_res))
 					} else {
 						(id_clone, Ok(pdu), None)
-					}
-				}
-				Err(e) => (id_clone, Err(e), None),
+					},
+				| Err(e) => (id_clone, Err(e), None),
 			}
 		});
 	}
@@ -162,10 +160,10 @@ where
 		let pdu = pdu_res?;
 
 		let sender_power = match pl_res {
-			Some(Ok(UserPowerLevel::Infinite)) => i64::MAX,
-			Some(Ok(UserPowerLevel::Int(x))) => i64::from(x),
-			Some(Err(e)) => return Err(e),
-			_ => 0,
+			| Some(Ok(UserPowerLevel::Infinite)) => i64::MAX,
+			| Some(Ok(UserPowerLevel::Int(x))) => i64::from(x),
+			| Some(Err(e)) => return Err(e),
+			| _ => 0,
 		};
 
 		let lean = rezzy::LeanEvent {

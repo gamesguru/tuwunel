@@ -364,7 +364,9 @@ version = "0.17"
 default-features = false
 
 [workspace.dependencies.rezzy]
-version = "0.4.0"
+#version = "0.4.0"
+git = "https://github.com/gamesguru/rezzy"
+branch = "dev"
 
 [workspace.dependencies.imbl]
 version = "4"

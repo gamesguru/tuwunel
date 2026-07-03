@@ -246,7 +246,8 @@ where
 	}
 }
 
-/// Find the power level for the sender of a pre-fetched PDU, avoiding the initial database fetch.
+/// Find the power level for the sender of a pre-fetched PDU, avoiding the
+/// initial database fetch.
 ///
 /// We find the most recent `m.room.power_levels` by walking backwards in the
 /// auth chain of the event.

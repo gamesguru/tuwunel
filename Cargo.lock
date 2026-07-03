@@ -5716,6 +5716,7 @@ dependencies = [
  "reqwest 0.13.4",
  "rezzy",
  "ring",
+ "roaring",
  "ruma",
  "rustls",
  "rustyline-async",

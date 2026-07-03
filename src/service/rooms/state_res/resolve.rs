@@ -9,12 +9,15 @@ mod power_sort;
 mod split_conflicted;
 
 use std::{
-	collections::{BTreeMap, BTreeSet, HashSet},
+	collections::{BTreeMap, BTreeSet, HashMap, HashSet},
 	ops::Deref,
 };
 
-use futures::{FutureExt, Stream, StreamExt, TryFutureExt};
-use ruma::{OwnedEventId, events::StateEventType, room_version_rules::RoomVersionRules};
+use futures::{FutureExt, Stream, StreamExt};
+use ruma::{
+	OwnedEventId, events::room::power_levels::UserPowerLevel,
+	room_version_rules::RoomVersionRules,
+};
 use tuwunel_core::{
 	Result, debug,
 	itertools::Itertools,
@@ -29,8 +32,12 @@ use tuwunel_core::{
 
 use self::{
 	auth_difference::auth_difference, conflicted_subgraph::conflicted_subgraph_dfs,
+	power_sort::power_level_for_sender, split_conflicted::split_conflicted_state,
+};
+#[cfg(test)]
+use self::{
 	iterative_auth_check::iterative_auth_check, mainline_sort::mainline_sort,
-	power_sort::power_sort, split_conflicted::split_conflicted_state,
+	power_sort::power_sort,
 };
 #[cfg(test)]
 use super::test_utils;
@@ -103,119 +110,116 @@ where
 		"unresolved states"
 	);
 
-	trace!(
-		?unconflicted_state,
-		?conflicted_states,
-		unconflicted = unconflicted_state.len(),
-		conflicted_states = conflicted_states.len(),
-		"unresolved states"
-	);
-
 	if conflicted_states.is_empty() {
 		return Ok(unconflicted_state.into_iter().collect());
 	}
 
 	// 0. The full conflicted set is the union of the conflicted state set and the
 	//    auth difference. Don't honor events that don't exist.
-	let full_conflicted_set =
-		full_conflicted_set(rules, conflicted_states, auth_sets, fetch, exists, hydra_backports)
-			.await;
+	let full_conflicted_set = full_conflicted_set::<_, _, _, _, _, Pdu>(
+		rules,
+		conflicted_states.clone(),
+		auth_sets,
+		fetch,
+		exists,
+		hydra_backports,
+	)
+	.await;
 
-	// 1. Select the set X of all power events that appear in the full conflicted
-	//    set. For each such power event P, enlarge X by adding the events in the
-	//    auth chain of P which also belong to the full conflicted set. Sort X into
-	//    a list using the reverse topological power ordering.
-	let sorted_power_set: Vec<_> = power_sort(rules, &full_conflicted_set, fetch)
-		.inspect_ok(|list| debug!(count = list.len(), "sorted power events"))
-		.inspect_ok(|list| trace!(?list, "sorted power events"))
-		.boxed()
-		.await?;
+	// Use FuturesUnordered to fetch all required PDUs and their sender's power
+	// level in parallel.
+	let mut conflicted_events = HashMap::new();
+	let mut auth_context = HashMap::new();
 
-	let power_set_event_ids: Vec<_> = sorted_power_set
-		.iter()
-		.sorted_unstable()
+	let conflicted_ids: HashSet<OwnedEventId> = conflicted_states
+		.values()
+		.flatten()
+		.cloned()
 		.collect();
 
-	let sorted_power_set = sorted_power_set
-		.iter()
-		.stream()
-		.map(AsRef::as_ref);
+	let mut all_ids_to_fetch = full_conflicted_set.clone();
+	for id in unconflicted_state.values() {
+		all_ids_to_fetch.insert(id.clone());
+	}
 
-	let begin_with_empty_state_map = rules
+	let mut fetch_futures = futures::stream::FuturesUnordered::new();
+	for id in all_ids_to_fetch {
+		let id_clone = id.clone();
+		fetch_futures.push(async move {
+			let pdu_res = fetch(id_clone.clone()).await;
+			let pl_res = power_level_for_sender::<_, _, Pdu>(&id_clone, rules, fetch).await;
+			(id_clone, pdu_res, pl_res)
+		});
+	}
+
+	while let Some((id, pdu_res, pl_res)) = fetch_futures.next().await {
+		if let Ok(pdu) = pdu_res {
+			let sender_power = match pl_res {
+				| Ok(UserPowerLevel::Infinite) => i64::MAX,
+				| Ok(UserPowerLevel::Int(x)) => i64::from(x),
+				| _ => 0,
+			};
+
+			let lean = rezzy::LeanEvent {
+				event_id: pdu.event_id().to_owned(),
+				event_type: pdu.kind().to_string(),
+				state_key: pdu.state_key().map(|sk| sk.to_string()),
+				power_level: sender_power,
+				origin_server_ts: pdu.origin_server_ts().get().into(),
+				sender: pdu.sender().to_string(),
+				content: pdu.get_content_as_value(),
+				prev_events: pdu.prev_events().map(|e| e.to_owned()).collect(),
+				auth_events: pdu.auth_events().map(|e| e.to_owned()).collect(),
+				depth: pdu.as_pdu().depth.into(),
+			};
+
+			if conflicted_ids.contains(&id) {
+				conflicted_events.insert(id, lean);
+			} else {
+				auth_context.insert(id, lean);
+			}
+		}
+	}
+
+	// Map RoomVersionRules / hydra_backports to rezzy::StateResVersion
+	let version = if rules
 		.state_res
 		.v2_rules()
 		.is_some_and(|r| r.begin_iterative_auth_checks_with_empty_state_map)
-		|| hydra_backports;
+		|| hydra_backports
+	{
+		rezzy::StateResVersion::V2_1
+	} else if rules.state_res.v2_rules().is_none() {
+		rezzy::StateResVersion::V1
+	} else {
+		rezzy::StateResVersion::V2
+	};
 
-	let initial_state = begin_with_empty_state_map
-		.is_false()
-		.then(|| unconflicted_state.clone())
-		.unwrap_or_default();
+	// Convert unconflicted_state BTreeMap into the imbl::OrdMap format expected by
+	// rezzy
+	let mut unconflicted_shared = imbl::OrdMap::new();
+	for (key, id) in &unconflicted_state {
+		unconflicted_shared.insert((key.0.to_string(), key.1.to_string()), id.clone());
+	}
 
-	// 2. Apply the iterative auth checks algorithm, starting from the unconflicted
-	//    state map, to the list of events from the previous step to get a partially
-	//    resolved state.
-	let partially_resolved_state =
-		iterative_auth_check(rules, sorted_power_set, initial_state, fetch)
-			.inspect_ok(|map| debug!(count = map.len(), "partially resolved power state"))
-			.inspect_ok(|map| trace!(?map, "partially resolved power state"))
-			.boxed()
-			.await?;
+	// Perform state resolution using rezzy
+	let resolved = rezzy::resolve_iterative_sort(
+		unconflicted_shared,
+		conflicted_events,
+		&auth_context,
+		version,
+	);
 
-	// This "epochs" power level event
-	let power_ty_sk = (StateEventType::RoomPowerLevels, "".into());
-	let power_event = partially_resolved_state.get(&power_ty_sk);
-	debug!(event_id = ?power_event, "epoch power event");
+	// Convert back into tuwunel's StateMap format
+	let mut final_state = BTreeMap::new();
+	for (key, id) in resolved {
+		final_state.insert((key.0.into(), key.1.into()), id);
+	}
 
-	let remaining_events: Vec<_> = full_conflicted_set
-		.into_iter()
-		.filter(|id| power_set_event_ids.binary_search(&id).is_err())
-		.collect();
+	debug!(resolved_state = final_state.len(), "resolved state");
+	trace!(?final_state, "resolved state");
 
-	debug!(count = remaining_events.len(), "remaining events");
-	trace!(list = ?remaining_events, "remaining events");
-
-	let have_remaining_events = !remaining_events.is_empty();
-	let remaining_events = remaining_events
-		.iter()
-		.stream()
-		.map(AsRef::as_ref);
-
-	// 3. Take all remaining events that weren’t picked in step 1 and order them by
-	//    the mainline ordering based on the power level in the partially resolved
-	//    state obtained in step 2.
-	let sorted_remaining_events = have_remaining_events
-		.then_async(move || mainline_sort(power_event.cloned(), remaining_events, fetch))
-		.boxed();
-
-	let sorted_remaining_events = sorted_remaining_events
-		.await
-		.unwrap_or(Ok(Vec::new()))?;
-
-	debug!(count = sorted_remaining_events.len(), "sorted remaining events");
-	trace!(list = ?sorted_remaining_events, "sorted remaining events");
-
-	let sorted_remaining_events = sorted_remaining_events
-		.iter()
-		.stream()
-		.map(AsRef::as_ref);
-
-	// 4. Apply the iterative auth checks algorithm on the partial resolved state
-	//    and the list of events from the previous step.
-	let mut resolved_state =
-		iterative_auth_check(rules, sorted_remaining_events, partially_resolved_state, fetch)
-			.boxed()
-			.await?;
-
-	// 5. Update the result by replacing any event with the event with the same key
-	//    from the unconflicted state map, if such an event exists, to get the final
-	//    resolved state.
-	resolved_state.extend(unconflicted_state);
-
-	debug!(resolved_state = resolved_state.len(), "resolved state");
-	trace!(?resolved_state, "resolved state");
-
-	Ok(resolved_state)
+	Ok(final_state)
 }
 
 #[tracing::instrument(

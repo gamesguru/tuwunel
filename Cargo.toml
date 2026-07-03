@@ -363,6 +363,16 @@ features = [
 version = "0.17"
 default-features = false
 
+[workspace.dependencies.rezzy]
+version = "0.4.0"
+#default-features = false
+#features = ["std"]
+
+[workspace.dependencies.imbl]
+version = "4"
+default-features = false
+features = ["serde"]
+
 [workspace.dependencies.ruma]
 git = "https://github.com/matrix-construct/ruma"
 rev = "55d532152ec3b6ebab8ac141cc4bcc78452aa049"

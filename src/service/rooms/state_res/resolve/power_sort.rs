@@ -186,7 +186,7 @@ where
 		?event_id,
 	)
 )]
-async fn power_level_for_sender<Fetch, Fut, Pdu>(
+pub(super) async fn power_level_for_sender<Fetch, Fut, Pdu>(
 	event_id: &EventId,
 	rules: &RoomVersionRules,
 	fetch: &Fetch,

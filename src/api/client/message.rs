@@ -77,6 +77,14 @@ pub(crate) async fn get_message_events_route(
 		return Err!(Request(Forbidden("Room does not exist to this server")));
 	}
 
+	if !services
+		.state_accessor
+		.user_can_see_room(sender_user, room_id)
+		.await
+	{
+		return Err!(Request(Forbidden("You don't have permission to view this room.")));
+	}
+
 	let from: PduCount = body
 		.from
 		.as_deref()

@@ -1,4 +1,5 @@
 mod direct;
+mod push_rules;
 mod room_tags;
 
 use std::sync::Arc;

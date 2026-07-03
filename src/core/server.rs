@@ -115,8 +115,9 @@ impl Server {
 
 	#[inline]
 	pub async fn until_shutdown(self: &Arc<Self>) {
+		let mut signal = self.signal.subscribe();
 		while self.is_running() {
-			self.signal.subscribe().recv().await.ok();
+			signal.recv().await.ok();
 		}
 	}
 

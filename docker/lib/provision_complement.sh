@@ -9,7 +9,15 @@
 # then exec the server passed as our arguments.
 #
 # When the CA is absent (running outside Complement) the baked certificate is
-# left in place, so this wrapper is a no-op in that case.
+# left in place, so certificate provisioning is a no-op in that case.
+#
+# After provisioning, the server is handed to sched_wrap.sh, which applies an
+# optional scheduling prefix from the environment (sched_policy and sched_prio
+# for chrt, sched_nice for nice, sched_ionice for ionice) before exec'ing it.
+# Each knob is opt-in, so with none set that is a plain exec. The realtime
+# policies and negative niceness need CAP_SYS_NICE, which the Complement runner
+# adds to the testee container. Provisioning runs first, so only the server and
+# the tree it spawns are scheduled.
 set -eo pipefail
 
 ca_crt="/complement/ca/ca.crt"
@@ -33,10 +41,12 @@ provision() {
 		-out "$tls_crt" -extfile "$tls_conf" -extensions SAN
 }
 
-if provision 2>/tmp/provision_tls.log; then
+if provision 2>/tmp/provision_complement.log; then
 	echo "complement: federation certificate signed by run CA for ${SERVER_NAME}"
 else
 	echo "complement: no run CA, keeping baked certificate" >&2
 fi
 
-exec "$@"
+# Hand off to the scheduling wrapper, which applies any sched_policy, sched_nice
+# or sched_ionice prefix from the environment and execs the provisioned server.
+exec sched_wrap.sh "$@"

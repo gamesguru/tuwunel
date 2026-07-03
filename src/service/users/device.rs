@@ -114,6 +114,14 @@ pub async fn remove_device(&self, user_id: &UserId, device_id: &DeviceId) {
 		.ready_for_each(|key| self.db.userdeviceidalgorithm_fallback.remove(key))
 		.await;
 
+	// MSC3890: drop this device's local notification settings.
+	let event_type = format!("org.matrix.msc3890.local_notification_settings.{device_id}").into();
+	self.services
+		.account_data
+		.delete(None, user_id, event_type)
+		.await
+		.ok();
+
 	let userdeviceid = (user_id, device_id);
 	self.db.userdeviceid_metadata.del(userdeviceid);
 	self.db.oidcdevice_userdeviceid.del(userdeviceid);

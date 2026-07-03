@@ -121,9 +121,9 @@ ENV COMPLEMENT_HOSTNAME_RUNNING_COMPLEMENT="host.docker.internal"
 ENV COMPLEMENT_HOST_MOUNTS="/var/run/docker.sock:/var/run/docker.sock"
 ENV COMPLEMENT_POST_TEST_SCRIPT="/usr/src/complement-crypto/post_test.sh"
 
-COPY docker/snippets/post_test.sh post_test.sh
+COPY docker/lib/post_test.sh post_test.sh
 RUN chmod a+x post_test.sh
 
-COPY docker/snippets/uwu.sh uwu.sh.in
-RUN echo "$(tr '\n' ' ' < uwu.sh.in)" > uwu.sh && chmod a+x uwu.sh && rm uwu.sh.in
+COPY docker/lib/uwu.sh uwu.sh
+RUN chmod a+x uwu.sh
 ENTRYPOINT ["/bin/bash", "/usr/src/complement-crypto/uwu.sh"]

@@ -566,7 +566,7 @@ jobs:
       counterparty: mas
       runner: ${{inputs.complement_runner}}
       script: docker/mas.sh
-      summariser: .github/workflows/mas_summarise.sh
+      summariser: .github/workflows/summarise_mas.sh
       results_path: tests/mas/results.jsonl
       logs_path: tests/mas/tuwunel.log
       runtime_metrics_path: tests/mas/mas.log
@@ -606,7 +606,7 @@ jobs:
       counterparty: tuwunel
       runner: ${{inputs.complement_runner}}
       script: docker/complement.sh
-      summariser: .github/workflows/complement_complement_summarise.sh
+      summariser: .github/workflows/summarise_complement_complement.sh
       results_path: tests/complement/results.jsonl
       logs_path: tests/complement/logs.jsonl
       runtime_metrics_path: tests/complement/runtime_metrics.tar.zst
@@ -615,6 +615,7 @@ jobs:
       output_artifact_prefix: complement_output
       metrics_artifact_prefix: complement_runtime_metrics
       runtime_history: true
+      complement_perf: true
       cargo_profiles: '["bench"]'
       feat_sets: '["logging"]'
       rust_toolchains: '["nightly"]'
@@ -647,7 +648,7 @@ jobs:
       counterparty: tuwunel
       runner: ${{inputs.complement_runner}}
       script: docker/complement.sh
-      summariser: .github/workflows/complement_complement_summarise.sh
+      summariser: .github/workflows/summarise_complement_complement.sh
       results_path: tests/complement/results.jsonl
       logs_path: tests/complement/logs.jsonl
       runtime_metrics_path: tests/complement/runtime_metrics.tar.zst
@@ -687,7 +688,7 @@ jobs:
       counterparty: rust-sdk
       runner: ${{inputs.complement_runner}}
       script: docker/complement-crypto.sh
-      summariser: .github/workflows/complement_crypto_summarise.sh
+      summariser: .github/workflows/summarise_complement_crypto.sh
       results_path: tests/complement-crypto/results.jsonl
       logs_path: tests/complement-crypto/logs.jsonl
       runtime_metrics_path: tests/complement-crypto/runtime_metrics.tar.zst
@@ -728,7 +729,7 @@ jobs:
       counterparty: ${{inputs.complement_interop_peer}}
       runner: ${{inputs.complement_runner}}
       script: interop=${{inputs.complement_interop_peer}} docker/complement.sh "${{inputs.complement_interop_run}}"
-      summariser: .github/workflows/complement_interop_summarise.sh
+      summariser: .github/workflows/summarise_complement_interop.sh
       results_path: tests/complement/interop/results.jsonl
       logs_path: tests/complement/interop/logs.jsonl
       runtime_metrics_path: tests/complement/interop/runtime_metrics.tar.zst
@@ -770,7 +771,7 @@ jobs:
       counterparty: ${{inputs.complement_interop_peer}}
       runner: ${{inputs.complement_runner}}
       script: interop_hs=hs1 interop=${{inputs.complement_interop_peer}} docker/complement.sh "${{inputs.complement_interop_run}}"
-      summariser: .github/workflows/complement_interop_summarise.sh
+      summariser: .github/workflows/summarise_complement_interop.sh
       results_path: tests/complement/interop/results.jsonl
       logs_path: tests/complement/interop/logs.jsonl
       runtime_metrics_path: tests/complement/interop/runtime_metrics.tar.zst

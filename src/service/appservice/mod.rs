@@ -4,7 +4,13 @@ mod ping;
 mod registration_info;
 pub(crate) mod request;
 
-use std::{collections::BTreeMap, ffi::OsStr, fs, iter::IntoIterator, sync::Arc};
+use std::{
+	collections::BTreeMap,
+	ffi::OsStr,
+	fs::{self, read_dir},
+	iter::IntoIterator,
+	sync::Arc,
+};
 
 use async_trait::async_trait;
 use futures::{Future, FutureExt, Stream, TryStreamExt};
@@ -57,7 +63,11 @@ impl crate::Service for Service {
 		}
 
 		if let Some(appservice_dir) = &self.services.config.appservice_dir {
-			for dir_entry in fs::read_dir(appservice_dir)? {
+			let entries = read_dir(appservice_dir).map_err(|e| {
+				err!(Config("appservice_dir", "Failed to read {appservice_dir:?}: {e}"))
+			})?;
+
+			for dir_entry in entries {
 				let path = dir_entry?.path();
 
 				if !path.is_file()

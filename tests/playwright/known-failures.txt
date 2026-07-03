@@ -1,168 +1,45 @@
-accessibility/keyboard-navigation.spec.ts :: with an open room
 accessibility/keyboard-navigation.spec.ts :: without an open room
-accessibility/keyboard-navigation.spec.ts :: without any rooms
 audio-player/audio-player.spec.ts :: should be correctly rendered - dark theme
 audio-player/audio-player.spec.ts :: should be correctly rendered - high contrast theme
 audio-player/audio-player.spec.ts :: should be correctly rendered - light theme
 audio-player/audio-player.spec.ts :: should be correctly rendered - light theme with monospace font
 audio-player/audio-player.spec.ts :: should be rendered, play, and support replying on a thread
 audio-player/audio-player.spec.ts :: should play an audio file
-audio-player/audio-player.spec.ts :: should support creating a reply chain with multiple audio files
 audio-player/audio-player.spec.ts :: should support downloading an audio file
 audio-player/audio-player.spec.ts :: should support replying to audio file with another audio file
-composer/CIDER.spec.ts :: can paste a file
-composer/CIDER.spec.ts :: can send mention
-composer/CIDER.spec.ts :: can write formatted text
-composer/CIDER.spec.ts :: only sends when you press Control+Enter
 composer/CIDER.spec.ts :: render emoji picker
-composer/CIDER.spec.ts :: renders emoji autocomplete
-composer/CIDER.spec.ts :: renders in narrow viewports
-composer/CIDER.spec.ts :: sends a message when you click send or press Enter
 composer/CIDER.spec.ts :: should allow user to input emoji via graphical picker
 composer/CIDER.spec.ts :: should have focus lock in emoji picker
 composer/RTE.spec.ts :: autocomplete behaviour tests
 composer/RTE.spec.ts :: can paste a file
-composer/RTE.spec.ts :: can paste a file in a thread
-composer/RTE.spec.ts :: can write formatted text
 composer/RTE.spec.ts :: create link with a forward selection
 composer/RTE.spec.ts :: draft in threads
-composer/RTE.spec.ts :: draft with replies
-composer/RTE.spec.ts :: drafts with rich and plain text
-composer/RTE.spec.ts :: only sends when you press Control+Enter
-composer/RTE.spec.ts :: renders in narrow viewports
-composer/RTE.spec.ts :: sends a message when you click send or press Enter
 composer/RTE.spec.ts :: sends only one message when you press Enter multiple times
-crypto/complete-security.spec.ts :: Complete Security dialog appears correctly
-crypto/complete-security.spec.ts :: should go straight to the welcome screen if we have no signed device
 crypto/crypto.spec.ts :: Can reset cross-signing keys
 crypto/crypto.spec.ts :: Key backup status updates after resetting identity
 crypto/crypto.spec.ts :: Setting up key backup by recovery key
 crypto/crypto.spec.ts :: creating a DM should work, being e2e-encrypted / user verification
 crypto/crypto.spec.ts :: should allow verification when there is no existing DM
-crypto/decryption-failure-messages.spec.ts :: should be able to jump to a message sent before our last join event
 crypto/decryption-failure-messages.spec.ts :: should display undecryptable non-joined historical messages with a different message
 crypto/decryption-failure-messages.spec.ts :: should handle device-relative historical messages
-crypto/device-verification.spec.ts :: After cancelling verify with another device, I can try again #29882
-crypto/device-verification.spec.ts :: Handle incoming verification request with SAS
 crypto/device-verification.spec.ts :: No toast after verification, even if the secrets take a while to arrive
-crypto/device-verification.spec.ts :: Verify device with QR code during login
-crypto/device-verification.spec.ts :: Verify device with Recovery Key during login
-crypto/device-verification.spec.ts :: Verify device with Recovery Key from settings
-crypto/device-verification.spec.ts :: Verify device with SAS during login
-crypto/device-verification.spec.ts :: Verify device with Security Phrase during login
 crypto/event-shields.spec.ts :: Should show a grey padlock for a key restored from backup
-crypto/event-shields.spec.ts :: should show correct shields on events sent by devices which have since been deleted
 crypto/event-shields.spec.ts :: should show correct shields on events sent by users with changed identity
 crypto/event-shields.spec.ts :: should show the correct shield on e2e events
 crypto/event-shields.spec.ts :: should show the correct shield on edited e2e events
 crypto/history-sharing.spec.ts :: Messages sent when we believed the room history was unshared should not be visible
 crypto/history-sharing.spec.ts :: We should share history when sending invites
-crypto/invisible-crypto.spec.ts :: Messages fail to decrypt when sender is previously verified
 crypto/logout.spec.ts :: Ask to set up recovery on logout even if not in encrypted room
 crypto/logout.spec.ts :: Ask to set up recovery on logout if not setup
 crypto/logout.spec.ts :: If backup is set up show standard confirm
-crypto/logout.spec.ts :: Logout directly if the user has no room keys
-crypto/toasts.spec.ts :: The toast is displayed if we are not verified
-crypto/toasts.spec.ts :: should not show toast if key storage is off because we turned it off
-crypto/toasts.spec.ts :: should not show toast if key storage is on
-crypto/toasts.spec.ts :: should open settings to reset flow if 'forgot recovery key' pressed
-crypto/toasts.spec.ts :: should prompt for recovery key if 'enter recovery key' pressed
 crypto/toasts.spec.ts :: should show toast if key storage is off but account data is missing
 crypto/user-verification.spec.ts :: can abort emoji verification when emoji mismatch
 crypto/user-verification.spec.ts :: can receive a verification request when there is no existing DM
-devtools/upgraderoom.spec.ts :: should render the room upgrade dialog
-feedback/rageshakes.spec.ts :: should NOT be able to open bug report dialog via Settings
-feedback/rageshakes.spec.ts :: should NOT be able to open bug report dialog via feedback dialog
-feedback/rageshakes.spec.ts :: should NOT be able to open bug report dialog via slash command
-feedback/rageshakes.spec.ts :: should be able to open bug report dialog via Settings
-feedback/rageshakes.spec.ts :: should be able to open bug report dialog via feedback dialog
-feedback/rageshakes.spec.ts :: should be able to open bug report dialog via slash command
-feedback/rageshakes.spec.ts :: should be able to rageshake to a URL
-feedback/rageshakes.spec.ts :: should be able to rageshake to local download
 file-upload/image-upload.spec.ts :: should allow upload via drag and drop
 file-upload/image-upload.spec.ts :: should show image preview when uploading an image
 invite/invite-dialog.spec.ts :: should support inviting a user to Direct Messages
 invite/invite-dialog.spec.ts :: should support inviting a user to a room
-knock/knock-into-room.spec.ts :: should knock into the public knock room via spotlight
-knock/knock-into-room.spec.ts :: should knock into the room and knock is cancelled by user himself
-knock/knock-into-room.spec.ts :: should knock into the room then knock is approved and user joins the room then user is banned/unbanned and joins again
-knock/knock-into-room.spec.ts :: should knock into the room then knock is approved and user joins the room then user is kicked and joins again
-knock/knock-into-room.spec.ts :: should knock into the room then knock is cancelled by another user and room is forgotten
 lazy-loading/lazy-loading.spec.ts :: should handle lazy loading properly even when offline
-left-panel/room-list-panel/room-list-custom-sections.spec.ts :: should accept drag and drop into a section created after another section exists
-left-panel/room-list-panel/room-list-custom-sections.spec.ts :: should add a room to a custom section via the More Options menu
-left-panel/room-list-panel/room-list-custom-sections.spec.ts :: should cancel section creation when dialog is dismissed
-left-panel/room-list-panel/room-list-custom-sections.spec.ts :: should collapse all sections when 'Collapse all sections' button is clicked
-left-panel/room-list-panel/room-list-custom-sections.spec.ts :: should create a custom section via the header compose menu
-left-panel/room-list-panel/room-list-custom-sections.spec.ts :: should create a custom section via the room option menu
-left-panel/room-list-panel/room-list-custom-sections.spec.ts :: should create multiple custom sections
-left-panel/room-list-panel/room-list-custom-sections.spec.ts :: should display custom sections between Favourites and Chats
-left-panel/room-list-panel/room-list-custom-sections.spec.ts :: should edit a custom section name via the section header menu
-left-panel/room-list-panel/room-list-custom-sections.spec.ts :: should expand all sections when 'Expand all sections' button is clicked
-left-panel/room-list-panel/room-list-custom-sections.spec.ts :: should move rooms back to Chats when their section is removed
-left-panel/room-list-panel/room-list-custom-sections.spec.ts :: should remove a room from a custom section when toggling the same section
-left-panel/room-list-panel/room-list-custom-sections.spec.ts :: should show 'Chat moved' toast when adding a room to a custom section
-left-panel/room-list-panel/room-list-custom-sections.spec.ts :: should show 'Section created' toast after creating a section
-left-panel/room-list-panel/room-list-custom-sections.spec.ts :: should show empty custom sections
-left-panel/room-list-panel/room-list-filter-sort.spec.ts :: Tombstoned rooms are not shown even when they receive updates
-left-panel/room-list-panel/room-list-filter-sort.spec.ts :: should filter the list (with primary filters)
-left-panel/room-list-panel/room-list-filter-sort.spec.ts :: should move room to the top on message when sorting by activity
-left-panel/room-list-panel/room-list-filter-sort.spec.ts :: should render the default placeholder when there is no filter
-left-panel/room-list-panel/room-list-filter-sort.spec.ts :: should render the placeholder for Favourite filter
-left-panel/room-list-panel/room-list-filter-sort.spec.ts :: should render the placeholder for Invites filter
-left-panel/room-list-panel/room-list-filter-sort.spec.ts :: should render the placeholder for Mentions filter
-left-panel/room-list-panel/room-list-filter-sort.spec.ts :: should render the placeholder for People filter
-left-panel/room-list-panel/room-list-filter-sort.spec.ts :: should render the placeholder for Rooms filter
-left-panel/room-list-panel/room-list-filter-sort.spec.ts :: should render the placeholder for Unreads filter
-left-panel/room-list-panel/room-list-filter-sort.spec.ts :: should render the primary filters
-left-panel/room-list-panel/room-list-filter-sort.spec.ts :: should sort the room list alphabetically
-left-panel/room-list-panel/room-list-filter-sort.spec.ts :: unread filter should only match unread rooms that have a count
-left-panel/room-list-panel/room-list-header.spec.ts :: should render the header section
-left-panel/room-list-panel/room-list-header.spec.ts :: should render the header section for a space
-left-panel/room-list-panel/room-list-search.spec.ts :: should open the room directory when the search button is clicked
-left-panel/room-list-panel/room-list-search.spec.ts :: should open the spotlight when the search button is clicked
-left-panel/room-list-panel/room-list-search.spec.ts :: should render the search section
-left-panel/room-list-panel/room-list-sections.spec.ts :: should collapse and expand the Favourites section
-left-panel/room-list-panel/room-list-sections.spec.ts :: should collapse and expand the Low Priority section
-left-panel/room-list-panel/room-list-sections.spec.ts :: should maintain sections when a filter is applied
-left-panel/room-list-panel/room-list-sections.spec.ts :: should move a room between sections when tags change
-left-panel/room-list-panel/room-list-sections.spec.ts :: should move a room from Chats to Favourites when using dnd
-left-panel/room-list-panel/room-list-sections.spec.ts :: should move a room from Favourites to Chats when using dnd
-left-panel/room-list-panel/room-list-sections.spec.ts :: should not show Favourite and Low Priority filters when sections are enabled
-left-panel/room-list-panel/room-list-sections.spec.ts :: should only show non-empty sections
-left-panel/room-list-panel/room-list-sections.spec.ts :: should render a flat list when there is only rooms in Chats section
-left-panel/room-list-panel/room-list-sections.spec.ts :: should render collapsed section
-left-panel/room-list-panel/room-list-sections.spec.ts :: should render sections with correct rooms in each
-left-panel/room-list-panel/room-list-sections.spec.ts :: should show unread indicator on section header
-left-panel/room-list-panel/room-list.spec.ts :: should be a low priority room
-left-panel/room-list-panel/room-list.spec.ts :: should be a public room
-left-panel/room-list-panel/room-list.spec.ts :: should be a video room
-left-panel/room-list-panel/room-list.spec.ts :: should navigate to the notification menu
-left-panel/room-list-panel/room-list.spec.ts :: should navigate to the room list
-left-panel/room-list-panel/room-list.spec.ts :: should navigate to the top and then bottom of the room list
-left-panel/room-list-panel/room-list.spec.ts :: should open the context menu
-left-panel/room-list-panel/room-list.spec.ts :: should open the more options menu
-left-panel/room-list-panel/room-list.spec.ts :: should open the notification options menu
-left-panel/room-list-panel/room-list.spec.ts :: should open the room when it is clicked
-left-panel/room-list-panel/room-list.spec.ts :: should render a mark as unread decoration
-left-panel/room-list-panel/room-list.spec.ts :: should render a message preview when enable in settings
-left-panel/room-list-panel/room-list.spec.ts :: should render a message preview when enabled in header
-left-panel/room-list-panel/room-list.spec.ts :: should render an activity decoration
-left-panel/room-list-panel/room-list.spec.ts :: should render silent decoration
-left-panel/room-list-panel/room-list.spec.ts :: should render the invitation decoration
-left-panel/room-list-panel/room-list.spec.ts :: should render the mention decoration
-left-panel/room-list-panel/room-list.spec.ts :: should render the regular decoration
-left-panel/room-list-panel/room-list.spec.ts :: should render the room list
-left-panel/room-list-panel/room-list.spec.ts :: should scroll to the current room
-left-panel/room-list-panel/room-list.spec.ts :: should select the last room
-left-panel/room-list-panel/room-list.spec.ts :: should select the next room
-left-panel/room-list-panel/room-list.spec.ts :: should select the next unread room
-left-panel/room-list-panel/room-list.spec.ts :: should select the previous room
-links/messages.spec.ts :: should NOT linkify a bare domain
-links/messages.spec.ts :: should linkify a Room alias
-links/messages.spec.ts :: should linkify a User ID
-links/messages.spec.ts :: should linkify a regular link 'ftp://example.org'
-links/messages.spec.ts :: should linkify a regular link 'https://example.org'
 links/messages.spec.ts :: should linkify text inside a URL preview
 links/permalinks.spec.ts :: should render permalinks as expected
 links/permalinks.spec.ts :: should select entire message line when triple-clicking on message with pills
@@ -170,34 +47,11 @@ links/topic.spec.ts :: should linkify plaintext '#aroom:example.org'
 links/topic.spec.ts :: should linkify plaintext '_@alice:example.org'
 links/topic.spec.ts :: should linkify plaintext 'ftp://example.org'
 links/topic.spec.ts :: should linkify plaintext 'https://example.org'
-location/location.spec.ts :: is prompted for and can consent to live location sharing
 location/location.spec.ts :: sends and displays pin drop location message successfully
 login/login.spec.ts :: Can reload after login
-login/soft_logout.spec.ts :: still shows the soft-logout page when the page is reloaded after a soft-logout
-messages/messages.spec.ts :: should render a basic LTR text message
-messages/messages.spec.ts :: should render a basic RTL text message
 messages/messages.spec.ts :: should render a basic preview
 messages/messages.spec.ts :: should render a preview with a thumbnail
-messages/messages.spec.ts :: should render a reply of a LTR message
-messages/messages.spec.ts :: should render a reply of a RTL message
-messages/messages.spec.ts :: should render a richtext RTL emote
-messages/messages.spec.ts :: should render an LTR emote
-messages/messages.spec.ts :: should render an LTR rich text emote
-messages/messages.spec.ts :: should render an RTL emote
-messages/messages.spec.ts :: should render an edited LTR message
-messages/messages.spec.ts :: should render an edited RTL message
-modules/composer.spec.ts :: should be able to select custom uploader
-modules/custom-component.spec.ts :: should allow downloading media when the allowDownloading hint is set to true
-modules/custom-component.spec.ts :: should disallow downloading media when the allowDownloading hint is set to false
-modules/custom-component.spec.ts :: should disallow editing when the allowEditingEvent hint is set to false
-modules/custom-component.spec.ts :: should fall through if one module does not render a component
-modules/custom-component.spec.ts :: should render original component if the render function throws
-modules/custom-component.spec.ts :: should render the next registered component if the filter function throws
-modules/custom-component.spec.ts :: should render the original content of a textual event conditionally
-modules/custom-component.spec.ts :: should replace the render method of a textual event
-modules/loader.spec.ts :: should show alert
 pinned-messages/pinned-messages.spec.ts :: banner should listen to pinned message list
-pinned-messages/pinned-messages.spec.ts :: should be able to pin and unpin from the quick actions
 pinned-messages/pinned-messages.spec.ts :: should display 2 messages in the banner
 pinned-messages/pinned-messages.spec.ts :: should display 4 messages in the banner
 pinned-messages/pinned-messages.spec.ts :: should display one message in the banner
@@ -205,7 +59,6 @@ pinned-messages/pinned-messages.spec.ts :: should open the pinned messages list 
 pinned-messages/pinned-messages.spec.ts :: should pin messages and show them in the pinned message panel
 pinned-messages/pinned-messages.spec.ts :: should pin messages and show them in the room info panel
 pinned-messages/pinned-messages.spec.ts :: should pin one message and to have the pinned message badge in the timeline
-pinned-messages/pinned-messages.spec.ts :: should show the empty state when there are no pinned messages
 pinned-messages/pinned-messages.spec.ts :: should unpin all messages
 pinned-messages/pinned-messages.spec.ts :: should unpin one message
 polls/pollHistory.spec.ts :: Should display active and past polls
@@ -228,60 +81,25 @@ read-receipts/redactions-main-timeline.spec.ts :: Redacting all unread messages 
 read-receipts/redactions-main-timeline.spec.ts :: Redacting all unread messages makes the room read after restart
 read-receipts/redactions-main-timeline.spec.ts :: Sending and redacting a message after marking the room as read makes it read
 read-receipts/redactions-thread-roots.spec.ts :: Sending a threaded message onto a redacted thread root leaves the room unread
-regression-tests/pills-click-in-app.spec.ts :: should navigate clicks internally to the app
 right-panel/file-panel.spec.ts :: should download an image via the link on the panel
 right-panel/file-panel.spec.ts :: should list tiles on the panel
 right-panel/file-panel.spec.ts :: should render empty state
 right-panel/file-panel.spec.ts :: should render file size in kibibytes on a file tile
 right-panel/file-panel.spec.ts :: should render the audio player and play the audio file on the panel
-right-panel/notification-panel.spec.ts :: should render empty state
-right-panel/right-panel.spec.ts :: should handle clicking add widgets
-right-panel/right-panel.spec.ts :: should handle long room address and long room name
 right-panel/right-panel.spec.ts :: should handle reporting a room
-right-panel/right-panel.spec.ts :: should handle reporting a room and leaving the room
-right-panel/right-panel.spec.ts :: should handle viewing export chat
 right-panel/right-panel.spec.ts :: should handle viewing files
-right-panel/right-panel.spec.ts :: should handle viewing long room member name
 right-panel/right-panel.spec.ts :: should handle viewing room member
-right-panel/right-panel.spec.ts :: should handle viewing room settings
-right-panel/right-panel.spec.ts :: should handle viewing share room
 right-panel/right-panel.spec.ts :: should handle viewing space member
-right-panel/right-panel.spec.ts :: should have padding under leave room
-room-directory/room-directory.spec.ts :: should allow admin to add alias & publish room to directory
-room-directory/room-directory.spec.ts :: should allow finding published rooms in directory
 room/create-room.spec.ts :: creates a room with encrypted state if we check the box
-room/create-room.spec.ts :: creates a room without encrypted state
 room/create-room.spec.ts :: creates a room without encrypted state if we don't check the box
 room/create-room.spec.ts :: should allow us to start a chat and show encryption state
 room/create-room.spec.ts :: should create a public room with name, topic & address set
 room/create-room.spec.ts :: should create a video room
-room/create-room.spec.ts :: should disallow creating public rooms
-room/invites.spec.ts :: should be able to decline an invite
-room/invites.spec.ts :: should be able to decline an invite, report the room and ignore the user
-room/invites.spec.ts :: should render an invite view
-room/room-header.spec.ts :: should render a very long room name without collapsing the buttons
-room/room-header.spec.ts :: should render a working chat button which opens the timeline on a right panel
-room/room-header.spec.ts :: should render buttons for chat, room info, threads and facepile
-room/room-header.spec.ts :: should render default buttons properly
-room/room-header.spec.ts :: should render room header icon correctly
-room/room-status-bar.spec.ts :: should NOT an error when a resource limit is hit
-room/room-status-bar.spec.ts :: should be able to 'Delete all' messages
-room/room-status-bar.spec.ts :: should be able to 'Retry all' messages
-room/room-status-bar.spec.ts :: should show an error when a message fails to send
 room/room-status-bar.spec.ts :: should show an error when creating a local room fails
-room/room-status-bar.spec.ts :: should show an error when sync stops
-room/room-status-bar.spec.ts :: should show an error when the user needs to consent
-room/room.spec.ts :: should memorize the timeline position when switch Room A -> Room B -> Room A
-room/room.spec.ts :: should switch between existing dm rooms without a loader
 settings/account-user-settings-tab.spec.ts :: should be rendered properly
 settings/account-user-settings-tab.spec.ts :: should display an error if the code is incorrect when adding a phone number
 settings/account-user-settings-tab.spec.ts :: should render the manage account button properly
-settings/account-user-settings-tab.spec.ts :: should respond to small screen sizes
 settings/account-user-settings-tab.spec.ts :: should set a country calling code based on default_country_code
-settings/account-user-settings-tab.spec.ts :: should show tooltips on narrow screen
-settings/account-user-settings-tab.spec.ts :: should support adding and removing a profile picture
-settings/account-user-settings-tab.spec.ts :: should support changing a display name
-settings/appearance-user-settings-tab/appearance-user-settings-tab.spec.ts :: should be rendered properly
 settings/appearance-user-settings-tab/appearance-user-settings-tab.spec.ts :: should keep same font and emoji when switching theme
 settings/appearance-user-settings-tab/appearance-user-settings-tab.spec.ts :: should support changing font size by using the font size dropdown
 settings/appearance-user-settings-tab/appearance-user-settings-tab.spec.ts :: should support enabling system font
@@ -293,16 +111,12 @@ settings/appearance-user-settings-tab/theme-choice-panel.spec.ts :: should be re
 settings/appearance-user-settings-tab/theme-choice-panel.spec.ts :: should change the theme to dark
 settings/appearance-user-settings-tab/theme-choice-panel.spec.ts :: should disable the themes when the system theme is clicked
 settings/appearance-user-settings-tab/theme-choice-panel.spec.ts :: should keep custom theme when reloading the page
-settings/appearance-user-settings-tab/theme-choice-panel.spec.ts :: should render the custom theme section
 settings/encryption-user-tab/advanced.spec.ts :: should reset the cryptographic identity
 settings/encryption-user-tab/advanced.spec.ts :: should show the encryption details
 settings/encryption-user-tab/advanced.spec.ts :: should show the export room keys dialog
 settings/encryption-user-tab/advanced.spec.ts :: should show the import room keys dialog
-settings/encryption-user-tab/encryption-tab.spec.ts :: 'Verify this device' allows us to become verified
 settings/encryption-user-tab/encryption-tab.spec.ts :: should display the reset identity panel when the user clicks on 'Forgot recovery key?'
 settings/encryption-user-tab/encryption-tab.spec.ts :: should prompt to enter the recovery key when the secrets are not cached locally
-settings/encryption-user-tab/encryption-tab.spec.ts :: should show a 'Verify this device' button if the device is unverified
-settings/encryption-user-tab/encryption-tab.spec.ts :: should warn before turning off key storage
 settings/encryption-user-tab/other-devices.spec.ts :: setting per-room unverified blacklist toggle does not affect other rooms
 settings/encryption-user-tab/other-devices.spec.ts :: setting per-room unverified blacklist toggle overrides global toggle
 settings/encryption-user-tab/other-devices.spec.ts :: unverified devices should be able to decrypt while global blacklist is not toggled
@@ -311,117 +125,25 @@ settings/encryption-user-tab/other-devices.spec.ts :: verified devices should be
 settings/encryption-user-tab/recovery.spec.ts :: should change the recovery key
 settings/encryption-user-tab/recovery.spec.ts :: should setup the recovery key
 settings/general-room-settings-tab.spec.ts :: long address should not cause dialog to overflow
-settings/general-room-settings-tab.spec.ts :: should be rendered properly
-settings/preferences-user-settings-tab.spec.ts :: should be able to change the app language
-settings/preferences-user-settings-tab.spec.ts :: should be able to change the timezone
 settings/preferences-user-settings-tab.spec.ts :: should be rendered properly
 settings/quick-settings-menu.spec.ts :: should be rendered properly
-settings/room-settings/roles-permissions-room-settings-tab.spec.ts :: should be able to change the role of a user
-settings/room-settings/room-security-tab.spec.ts :: should automatically adjust history visibility when a room is changed from public to private
-settings/room-settings/room-security-tab.spec.ts :: should be able to toggle on encryption in a room
 settings/room-settings/room-security-tab.spec.ts :: should disallow changing from public to private if the user cannot alter history
-settings/room-settings/room-video-tab.spec.ts :: should be able to toggle on Element Call in the room
 settings/security-user-settings-tab.spec.ts :: should be able to set an ID server
-settings/security-user-settings-tab.spec.ts :: should be rendered properly
-settings/security-user-settings-tab.spec.ts :: should render the security tab
-settings/security-user-settings-tab.spec.ts :: should show integrations as enabled
-share-dialog/share-by-url.spec.ts :: should share message when users navigates to share URL
-sliding-sync/sliding-sync.spec.ts :: should clear the reply to field when swapping rooms
-sliding-sync/sliding-sync.spec.ts :: should move rooms around as new events arrive
-sliding-sync/sliding-sync.spec.ts :: should not cancel replies when permalinks are clicked
-sliding-sync/sliding-sync.spec.ts :: should not move the selected room: it should be sticky
-sliding-sync/sliding-sync.spec.ts :: should render the Rooms list in reverse chronological order by default and allowing sorting A-Z
-sliding-sync/sliding-sync.spec.ts :: should send subscribe_rooms on room switch if room not already subscribed
 sliding-sync/sliding-sync.spec.ts :: should show a favourite DM only in the favourite sublist
 sliding-sync/sliding-sync.spec.ts :: should show and be able to accept/reject/rescind invites
 sliding-sync/sliding-sync.spec.ts :: should show the right unread notifications
-sliding-sync/sliding-sync.spec.ts :: should show unread indicators
-sliding-sync/sliding-sync.spec.ts :: should update user settings promptly
-spaces/spaces.spec.ts :: should allow user to add an existing room to a space after creation
-spaces/spaces.spec.ts :: should allow user to create just-me space
-spaces/spaces.spec.ts :: should allow user to create private space
-spaces/spaces.spec.ts :: should allow user to create public space
-spaces/spaces.spec.ts :: should allow user to invite another to a space
-spaces/spaces.spec.ts :: should disallow creating public rooms
-spaces/spaces.spec.ts :: should include rooms in space home
-spaces/spaces.spec.ts :: should not soft crash when joining a room from space hierarchy which has a link in its topic
-spaces/spaces.spec.ts :: should render spaces view
-spaces/spaces.spec.ts :: should render spaces visibility settings
-spaces/spaces.spec.ts :: should render subspaces in the space panel only when expanded
-spaces/spaces.spec.ts :: should show space invites at the top of the space panel
-spaces/threads-activity-centre/threadsActivityCentre.spec.ts :: should block the Spotlight to open when the TAC is opened
-spaces/threads-activity-centre/threadsActivityCentre.spec.ts :: should focus the thread tab when clicking an item in the TAC
-spaces/threads-activity-centre/threadsActivityCentre.spec.ts :: should have the button correctly aligned and displayed in the space panel when expanded
-spaces/threads-activity-centre/threadsActivityCentre.spec.ts :: should have the correct hover state
-spaces/threads-activity-centre/threadsActivityCentre.spec.ts :: should mark all threads as read
-spaces/threads-activity-centre/threadsActivityCentre.spec.ts :: should not show indicator when there is no thread
 spaces/threads-activity-centre/threadsActivityCentre.spec.ts :: should order by recency after notification level
 spaces/threads-activity-centre/threadsActivityCentre.spec.ts :: should show a highlight indicator when there is a mention in a thread
 spaces/threads-activity-centre/threadsActivityCentre.spec.ts :: should show a notification indicator when there is a message in a thread
-spaces/threads-activity-centre/threadsActivityCentre.spec.ts :: should show the rooms with unread threads
 spaces/threads-activity-centre/threadsActivityCentre.spec.ts :: should update with a thread is read
-spotlight/spotlight.spec.ts :: should allow opening group chat dialog
-spotlight/spotlight.spec.ts :: should be able to add and remove filters via keyboard
 spotlight/spotlight.spec.ts :: should be able to navigate results via keyboard
-spotlight/spotlight.spec.ts :: should close spotlight after starting a DM
-spotlight/spotlight.spec.ts :: should find group DMs by usernames or user ids
-spotlight/spotlight.spec.ts :: should find joined rooms
-spotlight/spotlight.spec.ts :: should find known people
 spotlight/spotlight.spec.ts :: should find known public rooms
-spotlight/spotlight.spec.ts :: should find unknown people
 spotlight/spotlight.spec.ts :: should find unknown public rooms
 spotlight/spotlight.spec.ts :: should find unknown public rooms on other homeservers
 spotlight/spotlight.spec.ts :: should find unknown public world readable rooms
-spotlight/spotlight.spec.ts :: should show each person result only once
-spotlight/spotlight.spec.ts :: should show the same user only once
 threads/threads.spec.ts :: can send files
-threads/threads.spec.ts :: can send files via drag&drop
-threads/threads.spec.ts :: can send files via paste
-threads/threads.spec.ts :: can send voice messages
 threads/threads.spec.ts :: navigate through right panel
 threads/threads.spec.ts :: right panel behaves correctly
-threads/threads.spec.ts :: should be usable for a conversation
 threads/threads.spec.ts :: should send location and reply to the location on ThreadView
-timeline/timeline.spec.ts :: can reply with a text message
-timeline/timeline.spec.ts :: can reply with a voice message
-timeline/timeline.spec.ts :: can send a voice message
-timeline/timeline.spec.ts :: clicking a spoiler containing the pill de-spoilers on 1st click, then follows link on 2nd
-timeline/timeline.spec.ts :: should add inline start margin to an event line on IRC layout
-timeline/timeline.spec.ts :: should align generic event list summary with messages and emote on IRC layout
-timeline/timeline.spec.ts :: should be able to hide a video
-timeline/timeline.spec.ts :: should be able to hide an image
-timeline/timeline.spec.ts :: should click 'collapse' on the first hovered info event line inside GELS on bubble layout
-timeline/timeline.spec.ts :: should click view source event toggle
-timeline/timeline.spec.ts :: should create and configure a room on IRC layout
-timeline/timeline.spec.ts :: should display a reply chain
-timeline/timeline.spec.ts :: should have an expanded generic event list summary (GELS) on IRC layout
-timeline/timeline.spec.ts :: should have an expanded generic event list summary (GELS) on compact modern/group layout
-timeline/timeline.spec.ts :: should highlight search result words regardless of formatting
-timeline/timeline.spec.ts :: should insert a mention when clicking sender profile in timeline
-timeline/timeline.spec.ts :: should not be possible to send flag with regional emojis
-timeline/timeline.spec.ts :: should not show historical profiles if enabled
-timeline/timeline.spec.ts :: should render EventTiles on IRC, modern (group), and bubble layout
-timeline/timeline.spec.ts :: should render a code block
-timeline/timeline.spec.ts :: should render a fully opaque textual event
-timeline/timeline.spec.ts :: should render authenticated images in the timeline
 timeline/timeline.spec.ts :: should render file size in kibibytes on a file tile
-timeline/timeline.spec.ts :: should render images in the timeline
-timeline/timeline.spec.ts :: should send, reply, and display long strings without overflowing
-timeline/timeline.spec.ts :: should set inline start padding to a hidden event line
 timeline/timeline.spec.ts :: should show historical profiles if disabled
-toasts/analytics-toast.spec.ts :: should not show an analytics toast if config has nothing about posthog
-toasts/analytics-toast.spec.ts :: should show an analytics toast which can be accepted
-toasts/analytics-toast.spec.ts :: should show an analytics toast which can be rejected
-voip/pstn.spec.ts :: should render dialpad as expected
-widgets/events.spec.ts :: should be updated if user is re-invited into the room with updated state event
-widgets/jitsi.spec.ts :: should be able to pop out a jitsi widget
-widgets/layout.spec.ts :: manually resize the height of the top container layout
-widgets/layout.spec.ts :: programmatically resize the height of the top container layout
-widgets/layout.spec.ts :: should be set properly
-widgets/permissions-dialog.spec.ts :: should be updated if user is re-invited into the room with updated state event
-widgets/stickers.spec.ts :: should handle a sticker picker widget missing creatorUserId
-widgets/stickers.spec.ts :: should render invalid mimetype as a file
-widgets/stickers.spec.ts :: should send a sticker to multiple rooms
-widgets/widget-pip-close.spec.ts :: should be closed on ban
-widgets/widget-pip-close.spec.ts :: should be closed on kick
-widgets/widget-pip-close.spec.ts :: should be closed on leave

@@ -1015,15 +1015,11 @@ pub struct Config {
 	#[serde(default)]
 	pub show_all_local_users_in_user_directory: bool,
 
-	/// Allow guests/unauthenticated users to access TURN credentials.
+	/// Allow guest users to access TURN credentials.
 	///
 	/// This is the equivalent of Synapse's `turn_allow_guests` config option.
-	/// This allows any unauthenticated user to call the endpoint
+	/// Setting this to true allows guest users to call the endpoint
 	/// `/_matrix/client/v3/voip/turnServer`.
-	///
-	/// It is unlikely you need to enable this as all major clients support
-	/// authentication for this endpoint and prevents misuse of your TURN server
-	/// from potential bots.
 	/// reloadable: yes
 	#[serde(default)]
 	pub turn_allow_guests: bool,
@@ -1059,22 +1055,6 @@ pub struct Config {
 		alias = "allow_profile_lookup_federation_requests"
 	)]
 	pub allow_inbound_profile_lookup_federation_requests: bool,
-
-	/// Config option to allow or disallow this homeserver from fetching
-	/// remote users' profiles over federation
-	/// (`GET /_matrix/federation/v1/query/profile`) when answering the
-	/// client-server full-profile endpoint
-	/// `GET /_matrix/client/v3/profile/{userId}`.
-	///
-	/// When disabled, that endpoint does not query other servers: it serves a
-	/// locally cached copy if one exists, and otherwise returns
-	/// `403 M_FORBIDDEN` (MSC3550) rather than `404`, so clients can tell a
-	/// withheld profile apart from a missing user. The per-field profile
-	/// endpoints (displayname, avatar_url) are not affected.
-	///
-	/// reloadable: yes
-	#[serde(default = "true_fn")]
-	pub allow_outbound_profile_lookup_federation_requests: bool,
 
 	/// Allow standard users to create rooms. Appservices and admins are always
 	/// allowed to create rooms
@@ -1125,6 +1105,29 @@ pub struct Config {
 	/// default: 5
 	#[serde(default = "default_policy_server_request_timeout")]
 	pub policy_server_request_timeout: u64,
+
+	/// MSC3925: fold the most recent message edit (an `m.replace` relation)
+	/// into `unsigned.m.relations` on a served event as the full replacement
+	/// event, on the client read endpoints. Off by default: it adds a typed
+	/// index seek per served event and a server-authoritative edit summary that
+	/// most clients reconstruct locally anyway, so it is opt-in.
+	///
+	/// reloadable: yes
+	/// default: false
+	#[serde(default)]
+	pub bundle_edit_relations: bool,
+
+	/// MSC2675/MSC3267: fold reference relations (`m.reference`) into
+	/// `unsigned.m.relations` on a served event as `{ chunk: [{ event_id },
+	/// ...] }`, on the client read endpoints. Off by default: no surveyed
+	/// client renders reference bundles (references are plumbing for polls,
+	/// beacons, and verification, which clients resolve directly), so most
+	/// deployments gain nothing from the added read-time cost.
+	///
+	/// reloadable: yes
+	/// default: false
+	#[serde(default)]
+	pub bundle_reference_relations: bool,
 
 	/// Default room version tuwunel will create rooms with.
 	///
@@ -1476,6 +1479,24 @@ pub struct Config {
 	/// default: true
 	#[serde(default = "true_fn")]
 	pub refresh_token_reuse_revoke: bool,
+
+	/// Enable native registration and login on the built-in OIDC provider
+	/// (next-gen auth), authenticating Matrix clients against this server's own
+	/// accounts without a third-party `identity_provider`.
+	///
+	/// When false (default), the OIDC server runs only to broker for a
+	/// configured `identity_provider`, redirecting users to that upstream IdP.
+	/// When true, an authorization request that selects no provider is served a
+	/// native login or registration page checked against local accounts;
+	/// `well_known.client` must be set. Native and external providers coexist;
+	/// a configured `identity_provider` still brokers as before. Registration
+	/// here honors `allow_registration`, the registration token, and
+	/// `registration_terms` exactly as the client registration endpoint does.
+	///
+	/// reloadable: yes
+	/// default: false
+	#[serde(default)]
+	pub oidc_native_auth: bool,
 
 	/// Require OIDC clients (next-gen auth) to request an MSC2967 device scope.
 	///

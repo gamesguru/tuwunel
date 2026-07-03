@@ -21,14 +21,13 @@ pub async fn kick(
 	sender_user: &UserId,
 	state_lock: &RoomMutexGuard,
 ) -> Result {
-	// kicking doesn't make sense if there is no membership
 	let Ok(event) = self
 		.services
 		.state_accessor
 		.get_member(room_id, user_id)
 		.await
 	else {
-		return Ok(());
+		return Err!(Request(Forbidden("Cannot kick a user who is not in the room.")));
 	};
 
 	// this is required to prevent ban -> leave transitions

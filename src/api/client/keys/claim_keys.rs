@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use axum::extract::State;
-use futures::{FutureExt, StreamExt, future::join};
+use futures::{StreamExt, future::join};
 use ruma::{
 	OneTimeKeyAlgorithm, OwnedDeviceId, OwnedOneTimeKeyId, OwnedUserId, ServerName, UserId,
 	api::{client::keys::claim_keys, federation},
@@ -100,15 +100,17 @@ async fn collect_local_one_time_keys(services: &Services, users: &[LocalClaim<'_
 		.iter()
 		.copied()
 		.stream()
-		.broad_then(async |(user_id, requested)| {
-			requested
+		.broad_filter_map(async |(user_id, requested)| {
+			let device_keys: BTreeMap<_, _> = requested
 				.iter()
 				.stream()
 				.map(|(device_id, algorithm)| (user_id, device_id.as_ref(), algorithm))
 				.filter_map(take_one_time_key)
 				.collect()
-				.map(|device_keys| (user_id.to_owned(), device_keys))
-				.await
+				.await;
+
+			// Omit a depleted user entirely; Synapse returns no entry, not an empty map.
+			(!device_keys.is_empty()).then(|| (user_id.to_owned(), device_keys))
 		})
 		.collect()
 		.await;

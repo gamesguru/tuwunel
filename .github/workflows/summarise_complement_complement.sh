@@ -11,9 +11,9 @@ else
 	metrics_tar="tests/complement/runtime_metrics.tar.zst"
 fi
 
-jsonl="tests/complement/results.jsonl"
+results="tests/complement/results.jsonl"
 
-# shellcheck source=./complement_summarise.sh
-. "$(dirname "$0")/complement_summarise.sh"
+# shellcheck source=./summarise_complement.sh
+. "$(dirname "$0")/summarise_complement.sh"
 
 summarise_main "$@"

@@ -58,6 +58,7 @@ COPY <<EOF complement.toml
     allow_public_room_directory_over_federation = true
     allow_public_room_directory_without_auth = true
     allow_registration = true
+    appservice_dir = "/complement/appservice"
     create_admin_room = false
     database_path = "/database"
     db_pool_max_workers = 64
@@ -103,33 +104,43 @@ COPY <<EOF complement.toml
 EOF
 
 
-FROM input AS complement-testee
-
+FROM input AS complement-testee-base
 EXPOSE 8008 8448
-RUN mkdir /database
-RUN mkdir -p /var/log/tuwunel/metrics
+RUN mkdir -p /database /var/log/tuwunel/metrics /complement/appservice
 COPY --from=complement-config * /complement/
-COPY docker/snippets/complement_provision_tls.sh /complement/provision_tls.sh
-RUN chmod a+x /complement/provision_tls.sh
+COPY docker/lib/provision_complement.sh /complement/provision_complement.sh
+RUN chmod a+x /complement/provision_complement.sh
+COPY --chmod=0755 docker/lib/sched_wrap.sh /usr/local/bin/sched_wrap.sh
 ENV TUWUNEL_CONFIG="/complement/complement.toml"
 ENV TUWUNEL_RUNTIME_METRICS_DIR="/var/log/tuwunel/metrics"
 ENV TUWUNEL_RUNTIME_USAGE_DIR="/var/log/tuwunel/metrics"
-ENTRYPOINT exec /complement/provision_tls.sh tuwunel -Oserver_name=\""$SERVER_NAME\""
 
 
-FROM input AS complement-testee-valgrind
+FROM complement-testee-base AS complement-testee
+ARG sched_policy=""
+ARG sched_prio=1
+ENV sched_policy=${sched_policy}
+ENV sched_prio=${sched_prio}
+RUN <<EOF
+    set -eux
+    apt-get update
+    apt-get install -y --no-install-recommends linux-perf
+    rm -rf /var/lib/apt/lists/*
+EOF
+COPY docker/lib/perf_wrap.sh /complement/perf_wrap.sh
+RUN chmod a+x /complement/perf_wrap.sh
+ENTRYPOINT exec /complement/provision_complement.sh /complement/perf_wrap.sh \
+    tuwunel -Oserver_name=\""$SERVER_NAME\""
+
+
+FROM complement-testee-base AS complement-testee-valgrind
 ARG db_pool_max_workers=128
-
-EXPOSE 8008 8448
-RUN mkdir /database
-RUN mkdir -p /var/log/tuwunel/metrics
-COPY --from=complement-config * /complement/
-COPY docker/snippets/complement_provision_tls.sh /complement/provision_tls.sh
-RUN chmod a+x /complement/provision_tls.sh
-ENV TUWUNEL_CONFIG="/complement/complement.toml"
-ENV TUWUNEL_RUNTIME_METRICS_DIR="/var/log/tuwunel/metrics"
-ENV TUWUNEL_RUNTIME_USAGE_DIR="/var/log/tuwunel/metrics"
-ENTRYPOINT exec /complement/provision_tls.sh valgrind \
+ARG sched_policy=""
+ARG sched_prio=1
+ENV sched_policy=${sched_policy}
+ENV sched_prio=${sched_prio}
+ENV db_pool_max_workers=${db_pool_max_workers}
+ENTRYPOINT exec /complement/provision_complement.sh valgrind \
     --leak-check=no \
     --undef-value-errors=no \
     --exit-on-first-error=yes \
@@ -142,7 +153,7 @@ ENTRYPOINT exec /complement/provision_tls.sh valgrind \
 FROM input AS complement-base
 ARG var_cache
 ARG var_lib_apt
-ARG complement_ref="404f1938c3b89aaeabd28619a3588f2196756324"
+ARG complement_ref="90860603016cc1788afa8020cf1612e1b09974ac"
 ARG complement_tags="conduwuit_blacklist"
 ARG complement_tests="./tests/..."
 ARG complement_run=".*"
@@ -185,7 +196,6 @@ ENV complement_count="$complement_count"
 ENV complement_tests="$complement_tests"
 ENV complement_skip="$complement_skip"
 ENV complement_run="$complement_run"
-ENV complement_tests="$complement_tests"
 ENV COMPLEMENT_ENABLE_DIRTY_RUNS="$complement_dirty"
 ENV COMPLEMENT_ALWAYS_PRINT_SERVER_LOGS="$complement_verbose"
 ENV COMPLEMENT_HOSTNAME_RUNNING_COMPLEMENT="host.docker.internal"
@@ -193,8 +203,8 @@ ENV COMPLEMENT_HOST_MOUNTS="/var/run/docker.sock:/var/run/docker.sock"
 ENV COMPLEMENT_POST_TEST_SCRIPT="/usr/src/complement/post_test.sh"
 ENV complement_base_image="$complement_base_image"
 COPY --from=complement-config /complement/old_results.jsonl .
-COPY docker/snippets/post_test.sh post_test.sh
+COPY docker/lib/post_test.sh post_test.sh
 RUN chmod a+x post_test.sh
-COPY docker/snippets/uwu.sh uwu.sh.in
-RUN echo "$(tr '\n' ' ' < uwu.sh.in)" > uwu.sh && chmod a+x uwu.sh && rm uwu.sh.in
+COPY docker/lib/uwu.sh uwu.sh
+RUN chmod a+x uwu.sh
 ENTRYPOINT ["/bin/bash", "/usr/src/complement/uwu.sh"]

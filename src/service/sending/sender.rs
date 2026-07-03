@@ -19,7 +19,8 @@ use ruma::{
 	MilliSecondsSinceUnixEpoch, OwnedRoomId, OwnedServerName, OwnedUserId, RoomId, ServerName,
 	UserId,
 	api::{
-		appservice::event::push_events::v1::EphemeralData,
+		appservice::event::push_events::v1::{EphemeralData, Request as PushEventsRequest},
+		client::push::Pusher,
 		federation::transactions::{
 			edu::{
 				DeviceListUpdateContent, Edu, PresenceContent, PresenceUpdate, ReceiptContent,
@@ -81,6 +82,10 @@ type UserReceipts = SmallVec<[ReceiptData; 1]>;
 /// single rank.
 type RankedReceipts = SmallVec<[ReceiptMap; 1]>;
 
+/// Per-room ranked receipts gathered for one federation EDU window. The
+/// common case is a single room, so inline-1 avoids a heap touch.
+type RoomReceipts = SmallVec<[(OwnedRoomId, RankedReceipts); 1]>;
+
 const SELECT_PRESENCE_LIMIT: usize = 256;
 const SELECT_RECEIPT_LIMIT: usize = 256;
 const DEQUEUE_LIMIT: usize = 48;
@@ -110,7 +115,7 @@ impl Service {
 
 	#[tracing::instrument(
 		name = "work",
-		level = "trace"
+		level = "trace",
 		skip_all,
 		fields(
 			futures = %futures.len(),
@@ -158,7 +163,7 @@ impl Service {
 	}
 
 	fn handle_response_err(dest: Destination, statuses: &mut CurTransactionStatus, e: &Error) {
-		debug!(dest = ?dest, "{e:?}");
+		debug!(?dest, "{e:?}");
 		// Push backs off locally; federation defers to peer_status, appservice retries.
 		let push = matches!(dest, Destination::Push(..));
 
@@ -300,13 +305,13 @@ impl Service {
 	}
 
 	#[tracing::instrument(
-		name = "select",,
+		name = "select",
 		level = "debug",
 		skip_all,
 		fields(
 			?dest,
 			new_events = %new_events.len(),
-		)
+		),
 	)]
 	async fn select_events(
 		&self,
@@ -321,7 +326,6 @@ impl Service {
 			return Ok(None);
 		}
 
-		let _cork = self.db.db.cork();
 		let mut events = Vec::new();
 
 		// Must retry any previous transaction for this remote.
@@ -364,15 +368,16 @@ impl Service {
 		statuses: &mut CurTransactionStatus,
 	) -> Result<(bool, bool)> {
 		// peer_status gates federation only; appservice and push fall through.
-		if let Destination::Federation(server) = dest
-			&& matches!(
-				self.services
-					.federation
-					.should_attempt(server)
-					.await,
-				ShouldAttempt::No { .. },
-			) {
-			return Ok((false, false));
+		if let Destination::Federation(server) = dest {
+			let should_attempt = self
+				.services
+				.federation
+				.should_attempt(server)
+				.await;
+
+			if matches!(should_attempt, ShouldAttempt::No { .. }) {
+				return Ok((false, false));
+			}
 		}
 
 		let (mut allow, mut retry) = (true, false);
@@ -407,11 +412,7 @@ impl Service {
 		Ok((allow, retry))
 	}
 
-	#[tracing::instrument(
-		name = "edus",,
-		level = "debug",
-		skip_all,
-	)]
+	#[tracing::instrument(name = "edus", level = "debug", skip_all)]
 	async fn select_edus(&self, server_name: &ServerName) -> Result<(EduVec, u64)> {
 		// selection window
 		let since = self.db.get_latest_educount(server_name).await;
@@ -421,7 +422,6 @@ impl Service {
 
 		let events_len = AtomicUsize::default();
 		let max_edu_count = AtomicU64::new(since);
-
 		let device_changes =
 			self.select_edus_device_changes(server_name, batch, &max_edu_count, &events_len);
 
@@ -445,6 +445,7 @@ impl Service {
 			join3(device_changes, receipts, presence).await;
 
 		let mut events = device_changes;
+
 		events.extend(presence.into_iter().flatten());
 		events.extend(receipts.into_iter().flatten());
 
@@ -538,7 +539,7 @@ impl Service {
 		events_len: &AtomicUsize,
 	) -> EduVec {
 		let num = AtomicUsize::new(0);
-		let by_room: SmallVec<[(OwnedRoomId, RankedReceipts); 1]> = self
+		let by_room: RoomReceipts = self
 			.services
 			.state_cache
 			.server_rooms(server_name)
@@ -580,6 +581,7 @@ impl Service {
 			let mut buf = EduBuf::new();
 			serde_json::to_writer(&mut buf, &Edu::Receipt(ReceiptContent { receipts }))
 				.expect("Failed to serialize Receipt EDU to JSON vec");
+
 			buf
 		};
 
@@ -808,9 +810,10 @@ impl Service {
 			.get_registration(&id)
 			.await
 		else {
+			//TODO: appservice queue cleanup.
 			return Err((
 				Destination::Appservice(id.clone()),
-				err!(Database(warn!(?id, "Missing appservice registration"))),
+				err!(Database(debug_warn!(?id, "Missing appservice registration"))),
 			));
 		};
 
@@ -863,7 +866,7 @@ impl Service {
 		match self
 			.services
 			.appservice
-			.send_request(appservice, ruma::api::appservice::event::push_events::v1::Request {
+			.send_request(appservice, PushEventsRequest {
 				txn_id: txn_id.into(),
 				events: pdu_jsons,
 				ephemeral: edu_jsons,
@@ -922,6 +925,7 @@ impl Service {
 			let queued = self
 				.enqueue_suppressed_push_events(&user_id, &pushkey, &events)
 				.await;
+
 			debug!(
 				?user_id,
 				pushkey,
@@ -1032,7 +1036,7 @@ impl Service {
 		&self,
 		user_id: &UserId,
 		pushkey: &str,
-		pusher: &ruma::api::client::push::Pusher,
+		pusher: &Pusher,
 		rules_for_user: &push::Ruleset,
 		rooms: Vec<(OwnedRoomId, Vec<RawPduId>)>,
 		reason: &'static str,
@@ -1050,6 +1054,7 @@ impl Service {
 				.pusher
 				.notification_count(user_id, &room_id)
 				.await;
+
 			if unread == 0 {
 				trace!(?user_id, ?room_id, "Skipping suppressed push flush: no unread");
 				continue;
@@ -1081,6 +1086,7 @@ impl Service {
 						.services
 						.pusher
 						.queue_suppressed_push(user_id, pushkey, &room_id, pdu_id);
+
 					warn!(
 						?user_id,
 						?room_id,
@@ -1107,6 +1113,7 @@ impl Service {
 			.services
 			.pusher
 			.take_suppressed_for_pushkey(&user_id, &pushkey);
+
 		if suppressed.is_empty() {
 			return;
 		}
@@ -1150,6 +1157,7 @@ impl Service {
 			.services
 			.pusher
 			.take_suppressed_for_user(&user_id);
+
 		if suppressed.is_empty() {
 			return;
 		}
@@ -1257,10 +1265,7 @@ impl Service {
 	) -> SendingResult {
 		let pdus: Vec<_> = events
 			.iter()
-			.filter_map(|pdu| match pdu {
-				| SendingEvent::Pdu(pdu) => Some(pdu),
-				| _ => None,
-			})
+			.filter_map(|event| extract_variant!(event, SendingEvent::Pdu))
 			.stream()
 			.wide_filter_map(|pdu_id| {
 				self.services
@@ -1321,8 +1326,8 @@ impl Service {
 		}
 
 		match result {
-			| Err(error) => Err((Destination::Federation(server), error)),
 			| Ok(_) => Ok(Destination::Federation(server)),
+			| Err(error) => Err((Destination::Federation(server), error)),
 		}
 	}
 }

@@ -68,11 +68,11 @@ RUN node -e "const fs=require('fs'),p=require('./package.json');if(p.devEngines?
 RUN --mount=type=cache,target=/root/.local/share/pnpm,sharing=locked \
     pnpm install --frozen-lockfile
 
-# Tuwunel HomeserverContainer. Out-of-lined to docker/playwright.tuwunel.ts in
+# Tuwunel HomeserverContainer. Out-of-lined to docker/lib/playwright.tuwunel.ts in
 # the workspace so it gets TS tooling and proper diffs; pulled in from the
 # source stage. Mirrors the shape of element-web's
 # apps/web/playwright/testcontainers/synapse.ts.
-COPY --link --from=source /usr/src/tuwunel/docker/playwright.tuwunel.ts \
+COPY --link --from=source /usr/src/tuwunel/docker/lib/playwright.tuwunel.ts \
      /usr/src/element-web/apps/web/playwright/testcontainers/tuwunel.ts
 
 # Apply overlay patches to upstream element-web. Idempotent: grep-guards
@@ -199,7 +199,7 @@ cd /usr/src/element-web/apps/web
 # of 10. With the early-abort active, the suite stopped at the 10th unique
 # failure and marked the rest skipped, which made the failing-spec set
 # non-deterministic across runs. The regression gate in
-# docker/playwright_summarise.sh needs a stable input set.
+# .github/workflows/summarise_playwright.sh needs a stable input set.
 PLAYWRIGHT_JSON_OUTPUT_NAME=/playwright/out/results.json \\
 npx playwright test \\
     --project=Tuwunel \\

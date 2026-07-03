@@ -239,6 +239,12 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM
 	},
 	Descriptor {
+		name: "relatesto_typed",
+		key_size_hint: Some(33),
+		val_size_hint: Some(8),
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "registrationtoken_info",
 		..descriptor::RANDOM_SMALL
 	},

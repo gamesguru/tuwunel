@@ -130,4 +130,4 @@ fi
 export flavor tester_image_prefix container_name_prefix src_root results_dir
 export envs run interop_images baseline_gate
 
-exec "$BASEDIR/complement-runner.sh"
+exec "$BASEDIR/lib/complement-runner.sh"

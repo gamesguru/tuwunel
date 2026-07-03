@@ -1,9 +1,14 @@
 #!/usr/bin/env -S python3 -S
 """Aggregate Tuwunel runtime-metrics dumps from a Complement run."""
 
-import argparse, json, os, re, subprocess, sys, tarfile, time
+import argparse, json, re, subprocess, sys, tarfile
 from collections import defaultdict
 from pathlib import Path
+
+from summarise_engine import (
+	buffer_runs, load_buffer, render_table, rotate, short_label, this_entry,
+	usable, write_buffer, write_out,
+)
 
 ###############################################################################
 # Debug-string parsing
@@ -95,6 +100,71 @@ def parse_usage(payload):
 	out.update(extract_ints(split_kv(body), USAGE_INTS))
 	return out
 
+# `perf stat -ddd -x,` CSV, one event per line:
+#   value,unit,event,run_time_ns,run_pct,metric_value,metric_unit
+# Hybrid CPUs (e.g. i9-12900K) split each hardware event into cpu_core/<ev>/
+# and cpu_atom/<ev>/; we strip the PMU prefix and sum the two. Unmeasured
+# events read "<not counted>" / "<not supported>" / empty and are skipped.
+# Raw counts outside this allowlist are ignored; derived metrics are read below.
+PERF_EVENTS = {
+	"instructions":          "perf_instructions",
+	"cpu-cycles":            "perf_cycles",
+	"branches":              "perf_branches",
+	"branch-misses":         "perf_branch_misses",
+	"L1-dcache-load-misses": "perf_l1d_misses",
+}
+
+# Besides the raw counters, `perf stat` derives a rate for some events and prints
+# it in the trailing value/name pair (metric_value, metric_unit = "<unit>  <name>"):
+# the cache/TLB miss rates and the TopdownL1 frontend/backend split the hardware
+# reports directly. Each is a percentage, kept here as a ratio. The testee runs on
+# the P-cores, so we read the cpu_core value (or a non-hybrid line) and drop the
+# cpu_atom duplicate, whose tiny counts are background noise.
+PERF_METRICS = {
+	"llc_miss_rate":      "perf_llc_miss",
+	"l1i_miss_rate":      "perf_l1i_miss",
+	"dtlb_miss_rate":     "perf_dtlb_miss",
+	"tma_frontend_bound": "perf_frontend_bound",
+	"tma_backend_bound":  "perf_backend_bound",
+}
+
+def perf_event_name(field):
+	return re.sub(r"^cpu_(core|atom)/(.*)/$", r"\2", field.strip())
+
+def parse_perf_val(s):
+	s = s.strip()
+	if not s or s.startswith("<"): return None
+	try: return float(s)
+	except ValueError: return None
+
+# The PMU behind a metric: a cpu_core/cpu_atom event prefix names it directly; a
+# bare topdown node inherits the most recent "TopdownL1 (cpu_<x>)" group instead.
+def perf_metric_pmu(event_field, td_pmu):
+	m = re.match(r"cpu_(core|atom)/", event_field.strip())
+	return m.group(1) if m else td_pmu
+
+def parse_perf_stat(text):
+	out, td_pmu = {}, None
+	for line in text.splitlines():
+		if line.startswith("#") or not line.strip(): continue
+		parts = line.split(",")
+		if len(parts) < 3: continue
+		dst = PERF_EVENTS.get(perf_event_name(parts[2]))
+		v = parse_perf_val(parts[0])
+		if dst is not None and v is not None:
+			out[dst] = out.get(dst, 0.0) + v
+		# Trailing derived metric (cpu_core only; cpu_atom is background noise).
+		if len(parts) < 7: continue
+		tail = parts[6].strip()
+		if tail.startswith("TopdownL1"):
+			g = re.search(r"cpu_(core|atom)", tail)
+			td_pmu = g.group(1) if g else None
+		mkey = PERF_METRICS.get(tail.split()[-1]) if tail else None
+		mv = parse_perf_val(parts[5])
+		if mkey is not None and mv is not None and perf_metric_pmu(parts[2], td_pmu) != "atom":
+			out[mkey] = mv / 100.0
+	return out
+
 ###############################################################################
 # Tarball ingestion
 #
@@ -111,7 +181,7 @@ def open_tar(path):
 	return tarfile.open(fileobj=proc.stdout, mode="r|"), proc
 
 def is_dump(member):
-	return member.isfile() and member.name.endswith(".json")
+	return member.isfile() and (member.name.endswith(".json") or "perf_stat" in member.name)
 
 def parse_member_path(name):
 	# Returns (test, cid, fname) or None for paths outside by_test/.
@@ -125,6 +195,12 @@ def read_dump(tar, member):
 	if fp is None: return None
 	try: return json.loads(fp.read().decode("utf-8"))
 	except (UnicodeDecodeError, json.JSONDecodeError): return None
+
+def read_text(tar, member):
+	fp = tar.extractfile(member)
+	if fp is None: return None
+	try: return fp.read().decode("utf-8")
+	except UnicodeDecodeError: return None
 
 def merge_dump(row, fname, dump):
 	payload = dump.get("payload", "")
@@ -140,11 +216,15 @@ def load_tar(path):
 			parsed = parse_member_path(m.name)
 			if parsed is None: continue
 			test, cid, fname = parsed
+			row = rows[(test, cid)]
+			row["test"], row["cid"] = test, cid
+			if "perf_stat" in fname:
+				raw = read_text(tar, m)
+				if raw: row.update(parse_perf_stat(raw))
+				continue
 			dump = read_dump(tar, m)
 			if dump is None: continue
 			version = version or dump.get("meta", {}).get("tuwunel_version")
-			row = rows[(test, cid)]
-			row["test"], row["cid"] = test, cid
 			merge_dump(row, fname, dump)
 	proc.wait()
 	return list(rows.values()), version
@@ -162,6 +242,13 @@ def busy_ratio(r):
 def cpu_total_us(r):
 	u, s = r.get("utime_us"), r.get("stime_us")
 	return u + s if u is not None and s is not None else None
+
+def ratio(r, num, den):
+	n, d = r.get(num), r.get(den)
+	return n / d if n is not None and d else None
+
+def perf_ipc(r):          return ratio(r, "perf_instructions", "perf_cycles")
+def perf_branch_miss(r):  return ratio(r, "perf_branch_misses", "perf_branches")
 
 def derive_col(rows, fn):
 	return [v for v in (fn(r) for r in rows) if v is not None]
@@ -212,7 +299,30 @@ def aggregate(rows):
 		"majflt_total": safe_sum(majflt),
 		"minflt_median": pct(minflt, 50),
 		"overflow_total": safe_sum(overflow),
+		**aggregate_perf(rows),
 	}
+
+# Hardware-counter aggregates from `perf stat` (perf testee variant only).
+# Absent on ordinary runs, so the perf rows are suppressed there (see render).
+def aggregate_perf(rows):
+	instr = col(rows, "perf_instructions")
+	cyc = col(rows, "perf_cycles")
+	l1d = col(rows, "perf_l1d_misses")
+	if not (instr or cyc or l1d): return {}
+	out = {
+		"perf_present": True,
+		"perf_instructions_sum": safe_sum(instr),
+		"perf_cycles_sum": safe_sum(cyc),
+		"perf_ipc_median": pct(derive_col(rows, perf_ipc), 50),
+		"perf_branch_miss_median": pct(derive_col(rows, perf_branch_miss), 50),
+		"perf_l1d_misses_sum": safe_sum(l1d),
+	}
+	# Per-testee perf-derived rates reduced to a median; a metric the hardware
+	# never reported is left out so its row drops from the table (see render).
+	for src in PERF_METRICS.values():
+		v = pct(col(rows, src), 50)
+		if v is not None: out[f"{src}_median"] = v
+	return out
 
 ###############################################################################
 # Formatters
@@ -237,6 +347,14 @@ def fmt_ns(ns):
 
 def fmt_ratio(r): return "n/a" if r is None else f"{r:.3f}"
 def fmt_int(n): return "n/a" if n is None else (f"{n:,.0f}" if isinstance(n, float) else f"{n:,}")
+
+def fmt_pct(r): return "n/a" if r is None else f"{r * 100:.2f}%"
+
+def fmt_count(n):
+	if n is None: return "n/a"
+	for div, suf in ((1e9, "G"), (1e6, "M"), (1e3, "k")):
+		if abs(n) >= div: return f"{n / div:.2f}{suf}"
+	return f"{n:.0f}"
 
 ###############################################################################
 # Rendering
@@ -266,21 +384,19 @@ ROWS = (
 	("overflow_total",      "Worker overflow (total)",      fmt_int,   True,  1),
 )
 
-def is_regression(direction, delta):
-	if direction is None: return None
-	return delta > 0 if direction else delta < 0
-
-def fmt_delta(curr, prev, direction, floor):
-	if curr is None or prev is None: return ""
-	d = curr - prev
-	if abs(d) < floor: return "·"
-	pct_d = (d / prev * 100.0) if prev else float("inf")
-	regress = is_regression(direction, d)
-	marker = ""
-	if regress is True and abs(pct_d) >= 5: marker = " ⚠️"
-	if regress is False and abs(pct_d) >= 5: marker = " ✅"
-	sign = "+" if d >= 0 else ""
-	return f"{sign}{pct_d:.1f}%{marker}" if prev else f"{sign}{d:.0f}{marker}"
+# Hardware-counter rows, appended only when a run carries perf-stat data.
+PERF_ROWS = (
+	("perf_instructions_sum",      "Instructions (total)",         fmt_count, True,  1e9),
+	("perf_cycles_sum",            "CPU cycles (total)",           fmt_count, True,  1e9),
+	("perf_ipc_median",            "IPC (median)",                 fmt_ratio, False, 0.01),
+	("perf_branch_miss_median",    "Branch miss rate (median)",    fmt_pct,   True,  0.001),
+	("perf_l1d_misses_sum",        "L1-dcache misses (total)",     fmt_count, True,  1e6),
+	("perf_llc_miss_median",       "LLC miss rate (median)",       fmt_pct,   True,  0.001),
+	("perf_l1i_miss_median",       "L1-icache miss rate (median)", fmt_pct,   True,  0.001),
+	("perf_dtlb_miss_median",      "dTLB miss rate (median)",      fmt_pct,   True,  0.001),
+	("perf_frontend_bound_median", "Frontend bound (median)",      fmt_pct,   True,  0.001),
+	("perf_backend_bound_median",  "Backend bound (median)",       fmt_pct,   True,  0.001),
+)
 
 def header_line(curr, version):
 	bits = []
@@ -293,10 +409,6 @@ def header_line(curr, version):
 #   "this"  this run's value;  "delta"  signed % vs the column's agg (markers);
 #   "value" a prior run's raw value (no delta).
 
-def short_label(entry):
-	sha = (entry.get("sha") or "")[:7]
-	return sha or f"run {entry.get('run_id', '?')}"
-
 def build_columns(curr, main_entry, history):
 	cols = [("This run", "this", curr)]
 	if main_entry is not None:
@@ -306,22 +418,6 @@ def build_columns(curr, main_entry, history):
 		branch = e.get("branch") or "prev"
 		cols.append((f"{branch} −{i}<br>`{short_label(e)}`", "value", e["agg"]))
 	return cols
-
-def cell(curr, col, key, fmt, direction, floor):
-	_, kind, agg = col
-	if kind == "this":
-		v = curr.get(key); return fmt(v) if v is not None else "n/a"
-	if kind == "delta":
-		return fmt_delta(curr.get(key), agg.get(key), direction, floor)
-	v = agg.get(key); return fmt(v) if v is not None else "n/a"
-
-def render_table(curr, cols):
-	heads = " | ".join(c[0] for c in cols)
-	lines = ["| Metric | " + heads + " |", "|" + "---|" * (len(cols) + 1)]
-	for key, lbl, fmt, direction, floor in ROWS:
-		cells = " | ".join(cell(curr, c, key, fmt, direction, floor) for c in cols)
-		lines.append(f"| {lbl} | " + cells + " |")
-	return lines
 
 def hot_rss(rows, n=5):
 	xs = [r for r in rows if r.get("maxrss_kb") is not None]
@@ -339,9 +435,17 @@ def render_hot(title, items):
 	for name, value in items: out.append(f"- `{name}`: {value}")
 	return out
 
+# A perf row appears only if some column carries its value; a metric the hardware
+# did not report leaves the key absent everywhere and the row is dropped. The full
+# set is then sorted lexically by label so every metric reads in one alphabet.
+def live_rows(perf_rows, cols):
+	return tuple(r for r in perf_rows if any(c[2].get(r[0]) is not None for c in cols))
+
 def render(curr, cols, rows, version):
 	out = ["", "#### Runtime metrics", "", header_line(curr, version), ""]
-	out += render_table(curr, cols)
+	perf_rows = live_rows(PERF_ROWS, cols) if curr.get("perf_present") else ()
+	rowcat = tuple(sorted(ROWS + perf_rows, key=lambda r: r[1].lower()))
+	out += render_table("Metric", (), curr, cols, rowcat)
 	out += render_hot("Top 5 testees by peak RSS:", hot_rss(rows))
 	out += render_hot("Top 5 testees by CPU:", hot_cpu(rows))
 	if len(cols) == 1:
@@ -350,48 +454,7 @@ def render(curr, cols, rows, version):
 	return "\n".join(out)
 
 ###############################################################################
-# History ring buffer
-#
-# A small JSON document persisted per (branch, matrix slot) in the GitHub
-# Actions cache. Each green run prepends its aggregate and truncates to --keep;
-# reads tolerate a cold (absent) or corrupt cache.
-
-BUFFER_VERSION = 1
-
-def load_buffer(path):
-	if not path or not Path(path).is_file(): return None
-	try: buf = json.loads(Path(path).read_text(encoding="utf-8"))
-	except (OSError, json.JSONDecodeError): return None
-	return buf if isinstance(buf, dict) else None
-
-def buffer_runs(buf):
-	runs = buf.get("runs") if buf else None
-	return runs if isinstance(runs, list) else []
-
-def this_entry(agg):
-	env = os.environ
-	return {
-		"run_id":      env.get("GITHUB_RUN_ID", ""),
-		"run_attempt": env.get("GITHUB_RUN_ATTEMPT", ""),
-		"sha":         env.get("GITHUB_SHA", ""),
-		"branch":      env.get("GITHUB_REF_NAME", ""),
-		"ts":          int(time.time()),
-		"agg":         agg,
-	}
-
-def rotate(prev, entry, keep):
-	return {"v": BUFFER_VERSION, "runs": ([entry] + buffer_runs(prev))[:max(1, keep)]}
-
-def write_buffer(path, buf):
-	p = Path(path)
-	p.parent.mkdir(parents=True, exist_ok=True)
-	p.write_text(json.dumps(buf), encoding="utf-8")
-
-###############################################################################
 # Entry point
-
-def usable(path):
-	return path and Path(path).is_file() and Path(path).stat().st_size > 0
 
 def parse_args():
 	ap = argparse.ArgumentParser()
@@ -402,11 +465,8 @@ def parse_args():
 	ap.add_argument("--keep", type=int, default=3)
 	ap.add_argument("--out", default="-")
 	ap.add_argument("--emit-json")
+	ap.add_argument("--no-render", action="store_true")
 	return ap.parse_args()
-
-def write_out(path, body):
-	if path == "-": sys.stdout.write(body)
-	else: open(path, "a", encoding="utf-8").write(body)
 
 def main():
 	args = parse_args()
@@ -421,8 +481,10 @@ def main():
 	cols = build_columns(curr, main_entry, history)
 
 	if args.emit_json: Path(args.emit_json).write_text(json.dumps(curr, indent=2))
-	if args.history_out: write_buffer(args.history_out, rotate(prev_own, this_entry(curr), args.keep))
-	write_out(args.out, render(curr, cols, rows, version))
+	if args.history_out: write_buffer(args.history_out, rotate(prev_own, this_entry(agg=curr), args.keep))
+	# Main is the baseline ring: record the digest for branches to diff against,
+	# but render no table (it carries no diff signal, like the suppressed grid).
+	if not args.no_render: write_out(args.out, render(curr, cols, rows, version))
 	return 0
 
 if __name__ == "__main__":

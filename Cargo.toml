@@ -29,8 +29,8 @@ keywords = [
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/matrix-construct/tuwunel"
-rust-version = "1.94.0"
-version = "1.7.1"
+rust-version = "1.95.0"
+version = "1.8.0"
 
 [workspace.metadata.crane]
 name = "tuwunel"
@@ -365,7 +365,7 @@ default-features = false
 
 [workspace.dependencies.ruma]
 git = "https://github.com/matrix-construct/ruma"
-rev = "2f21f035d21d5c0113d3f1309f0277ffe4e9ac83"
+rev = "41bade372610c56605de0e25cfa8a03a68c25368"
 features = [
     "__compat",
     "appservice-api-c",
@@ -414,7 +414,7 @@ features = [
 
 [workspace.dependencies.synapse-admin-api]
 git = "https://github.com/matrix-construct/synapse-admin-api"
-rev = "184d7a5abc03004076b93eab69096a65a44c6a0b"
+rev = "358d95c71d8475439a7d6529fe6a9236a69028c6"
 features = ["server"]
 
 [workspace.dependencies.rustls]
@@ -428,7 +428,7 @@ default-features = false
 
 [workspace.dependencies.rust-rocksdb]
 git = "https://github.com/matrix-construct/rust-rocksdb"
-rev = "8d92399498d85b486707c6febb278ad902d3aba3"
+rev = "c6a4f26f0274435d6284987dda6bdea4dc3ff8d3"
 default-features = false
 features = [
 	"bzip2",

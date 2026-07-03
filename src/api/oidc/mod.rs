@@ -5,6 +5,7 @@ pub(super) mod authorize;
 pub(super) mod complete;
 pub(super) mod device;
 pub(super) mod jwks;
+pub(super) mod native;
 pub(super) mod registration;
 pub(super) mod revoke;
 pub(super) mod token;
@@ -18,7 +19,7 @@ use serde_json::json;
 
 pub(super) use self::{
 	account::*, auth_issuer::*, auth_metadata::*, authorize::*, complete::*, device::*, jwks::*,
-	registration::*, revoke::*, token::*, userinfo::*,
+	native::*, registration::*, revoke::*, token::*, userinfo::*,
 };
 
 const OIDC_REQ_ID_LENGTH: usize = 32;

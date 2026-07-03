@@ -4,15 +4,15 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 
 ## Counts
 
-- Test groups: 204. Passing: **74.5%**
-  - ✅ `pass`: 152
-  - 🟨 `some`: 20
-  - ❌ `fail`: 30
+- Test groups: 204. Passing: **80.4%**
+  - ✅ `pass`: 164
+  - 🟨 `some`: 18
+  - ❌ `fail`: 20
   - ⬛ `skip`: 2
 
-- Subtests: 594. Passing: **73.2%**
-  - ✅ `pass`: 435
-  - ❌ `fail`: 146
+- Subtests: 594. Passing: **77.9%**
+  - ✅ `pass`: 463
+  - ❌ `fail`: 118
   - ⬛ `skip`: 13
 
 ## All Top-Level Tests
@@ -28,7 +28,7 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 | `TestBannedUserCannotSendJoin` | ✅ | – |
 | `TestCanRegisterAdmin` | ⬛ | – |
 | `TestCannotKickLeftUser` | ✅ | – |
-| `TestCannotKickNonPresentUser` | ❌ | – |
+| `TestCannotKickNonPresentUser` | ✅ | – |
 | `TestCannotSendKnockViaSendKnockInMSC3787Room` | ✅ | 6/0/0 |
 | `TestCannotSendNonJoinViaSendJoinV2` | ✅ | 6/0/0 |
 | `TestCannotSendNonKnockViaSendKnock` | ✅ | 6/0/0 |
@@ -45,12 +45,12 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 | `TestCumulativeJoinLeaveJoinSync` | ✅ | – |
 | `TestDeactivateAccount` | ✅ | 4/0/0 |
 | `TestDelayedEvents` | 🟨 | 6/7/1 |
-| `TestDeletingDeviceRemovesDeviceLocalNotificationSettings` | ❌ | 0/1/0 |
+| `TestDeletingDeviceRemovesDeviceLocalNotificationSettings` | ✅ | 1/0/0 |
 | `TestDemotingUsersViaUsersDefault` | ✅ | – |
-| `TestDeviceListUpdates` | 🟨 | 4/6/0 |
-| `TestDeviceListsUpdateOverFederation` | ❌ | 0/3/0 |
+| `TestDeviceListUpdates` | 🟨 | 8/2/0 |
+| `TestDeviceListsUpdateOverFederation` | 🟨 | 2/1/0 |
 | `TestDeviceListsUpdateOverFederationOnRoomJoin` | ❌ | – |
-| `TestDeviceManagement` | 🟨 | 6/1/0 |
+| `TestDeviceManagement` | ✅ | 7/0/0 |
 | `TestDisplayNameUpdate` | ✅ | – |
 | `TestE2EKeyBackupReplaceRoomKeyRules` | ✅ | 3/0/0 |
 | `TestEvent` | ✅ | 3/0/0 |
@@ -58,18 +58,18 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 | `TestEventRelationships` | ❌ | – |
 | `TestFederatedClientSpaces` | ✅ | – |
 | `TestFederatedEventRelationships` | ❌ | – |
-| `TestFederationKeyUploadQuery` | ❌ | 0/2/0 |
+| `TestFederationKeyUploadQuery` | 🟨 | 1/1/0 |
 | `TestFederationRedactSendsWithoutEvent` | ✅ | – |
 | `TestFederationRejectInvite` | ✅ | – |
 | `TestFederationRoomsInvite` | ✅ | 10/0/0 |
 | `TestFederationSlidingSyncReInviteAfterLeave` | ✅ | 2/0/0 |
 | `TestFederationThumbnail` | ✅ | – |
 | `TestFetchEvent` | ✅ | – |
-| `TestFetchEventNonWorldReadable` | ❌ | – |
+| `TestFetchEventNonWorldReadable` | ✅ | – |
 | `TestFetchEventWorldReadable` | ✅ | – |
-| `TestFetchHistoricalInvitedEventFromBeforeInvite` | ❌ | – |
+| `TestFetchHistoricalInvitedEventFromBeforeInvite` | ✅ | – |
 | `TestFetchHistoricalInvitedEventFromBetweenInvite` | ✅ | – |
-| `TestFetchHistoricalJoinedEventDenied` | ❌ | – |
+| `TestFetchHistoricalJoinedEventDenied` | ✅ | – |
 | `TestFetchHistoricalSharedEvent` | ✅ | – |
 | `TestFetchMessagesFromNonExistentRoom` | ✅ | – |
 | `TestFilter` | ✅ | – |
@@ -88,11 +88,11 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 | `TestIsDirectFlagFederation` | ✅ | – |
 | `TestIsDirectFlagLocal` | ✅ | – |
 | `TestJoinFederatedRoomFailOver` | ✅ | – |
-| `TestJoinFederatedRoomFromApplicationServiceBridgeUser` | ❌ | 0/1/0 |
+| `TestJoinFederatedRoomFromApplicationServiceBridgeUser` | ✅ | 1/0/0 |
 | `TestJoinFederatedRoomWithUnverifiableEvents` | ✅ | 4/0/0 |
 | `TestJoinViaRoomIDAndServerName` | ✅ | – |
 | `TestJson` | ✅ | 3/0/0 |
-| `TestJumpToDateEndpoint` | 🟨 | 10/5/0 |
+| `TestJumpToDateEndpoint` | ✅ | 15/0/0 |
 | `TestKeyChangesLocal` | ✅ | 1/0/0 |
 | `TestKeyClaimOrdering` | ✅ | – |
 | `TestKeysQueryWithDeviceIDAsObjectFails` | ✅ | – |
@@ -149,7 +149,7 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 | `TestProfileDisplayName` | ✅ | 2/0/0 |
 | `TestPublicRooms` | ✅ | 9/0/0 |
 | `TestPushRuleCacheHealth` | ✅ | – |
-| `TestPushRuleRoomUpgrade` | ❌ | 0/5/0 |
+| `TestPushRuleRoomUpgrade` | 🟨 | 3/2/0 |
 | `TestPushSync` | ✅ | 5/0/0 |
 | `TestRedact` | ✅ | 1/0/0 |
 | `TestRegistration` | ✅ | 19/0/4 |
@@ -161,7 +161,7 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 | `TestRemotePresence` | ❌ | 0/2/0 |
 | `TestRemoteTyping` | ✅ | – |
 | `TestRemovingAccountData` | ✅ | 4/0/0 |
-| `TestRequestEncodingFails` | ❌ | 0/1/0 |
+| `TestRequestEncodingFails` | ✅ | 1/0/0 |
 | `TestRestrictedRoomsLocalJoin` | ✅ | 5/0/0 |
 | `TestRestrictedRoomsLocalJoinInMSC3787Room` | ✅ | 5/0/0 |
 | `TestRestrictedRoomsLocalJoinNoCreatorsUsesPowerLevelsV11` | ✅ | – |
@@ -177,9 +177,9 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 | `TestRoomCreate` | ✅ | 15/0/0 |
 | `TestRoomCreationReportsEventsToMyself` | 🟨 | 4/2/0 |
 | `TestRoomDeleteAlias` | 🟨 | 7/2/0 |
-| `TestRoomForget` | 🟨 | 5/3/0 |
+| `TestRoomForget` | 🟨 | 6/2/0 |
 | `TestRoomImageRoundtrip` | ✅ | – |
-| `TestRoomMembers` | 🟨 | 7/3/0 |
+| `TestRoomMembers` | ✅ | 10/0/0 |
 | `TestRoomMessagesLazyLoading` | ✅ | – |
 | `TestRoomMessagesLazyLoadingLocalUser` | ✅ | – |
 | `TestRoomReadMarkers` | ✅ | – |
@@ -189,7 +189,7 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 | `TestRoomState` | ✅ | 15/0/0 |
 | `TestRoomSummary` | ✅ | – |
 | `TestRoomsInvite` | ✅ | 9/0/0 |
-| `TestSearch` | 🟨 | 4/3/0 |
+| `TestSearch` | ✅ | 7/0/0 |
 | `TestSendAndFetchMessage` | ✅ | – |
 | `TestSendJoinPartialStateResponse` | ✅ | – |
 | `TestSendMessageWithTxn` | ✅ | – |
@@ -215,7 +215,7 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 | `TestUnbanViaInvite` | ✅ | – |
 | `TestUnknownEndpoints` | 🟨 | 4/1/0 |
 | `TestUnrejectRejectedEvents` | ✅ | – |
-| `TestUploadKey` | 🟨 | 6/2/0 |
+| `TestUploadKey` | ✅ | 8/0/0 |
 | `TestUploadKeyIdempotency` | ✅ | – |
 | `TestUploadKeyIdempotencyOverlap` | ✅ | – |
 | `TestUrlPreview` | ✅ | – |

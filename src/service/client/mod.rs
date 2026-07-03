@@ -152,7 +152,10 @@ fn make_clients(services: &Services) -> Result<Clients> {
 			.redirect(redirect::Policy::limited(2))),
 
 		pusher: with!(cb => cb
-			.dns_resolver(Arc::clone(&services.resolver.resolver))
+			.dns_resolver(Validating::new(
+				Arc::clone(&services.resolver.resolver),
+				Arc::clone(&services.client.cidr_range_denylist),
+			))
 			.pool_max_idle_per_host(1)
 			.pool_idle_timeout(Duration::from_secs(
 				services.config.pusher_idle_timeout,

@@ -58,6 +58,7 @@ pub(super) async fn force_join_all_local_users(
 				Some(String::from(BULK_JOIN_REASON)),
 				&servers,
 				false,
+				None,
 			)
 			.await
 		{

@@ -19,7 +19,11 @@ pub(super) use self::{
 	args::Args as Ruma, auth::auth_uiaa, client_ip::ClientIp, response::RumaResponse,
 	state::State,
 };
-use crate::{client, oidc, server};
+use crate::{
+	client,
+	oidc::{self, native_get_route, native_submit_route},
+	server,
+};
 
 pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 	let config = &server.config;
@@ -94,10 +98,6 @@ fn register_client_profile_and_data_routes(router: Router<State>) -> Router<Stat
 		.ruma_route(&client::get_profile_field_route)
 		.ruma_route(&client::set_profile_field_route)
 		.ruma_route(&client::delete_profile_field_route)
-		.ruma_route(&client::set_displayname_route)
-		.ruma_route(&client::get_displayname_route)
-		.ruma_route(&client::set_avatar_url_route)
-		.ruma_route(&client::get_avatar_url_route)
 		.ruma_route(&client::get_profile_route)
 		.ruma_route(&client::set_presence_route)
 		.ruma_route(&client::get_presence_route)
@@ -281,6 +281,7 @@ fn register_oidc_routes(router: Router<State>) -> Router<State> {
 		.route("/_tuwunel/oidc/registration", post(oidc::registration_route))
 		.route("/_tuwunel/oidc/authorize", get(oidc::authorize_route))
 		.route("/_tuwunel/oidc/_complete", get(oidc::complete_route))
+		.route("/_tuwunel/oidc/native", get(native_get_route).post(native_submit_route))
 		.route("/_tuwunel/oidc/token", post(oidc::token_route))
 		.route("/_tuwunel/oidc/device_authorization", post(oidc::device_authorization_route))
 		.route("/_tuwunel/oidc/device", get(oidc::get_device_route))

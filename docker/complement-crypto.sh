@@ -72,4 +72,4 @@ addons_path="/usr/src/complement-crypto/tests/mitmproxy_addons"
 export flavor tester_image_prefix container_name_prefix src_root results_dir
 export envs run mitmproxy_image addons_path
 
-exec "$BASEDIR/complement-runner.sh"
+exec "$BASEDIR/lib/complement-runner.sh"

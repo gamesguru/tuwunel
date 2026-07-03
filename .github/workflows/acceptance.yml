@@ -166,14 +166,14 @@ jobs:
         && inputs.shards > 1
       name: Gate
       run: |
-        .github/workflows/playwright_summarise.sh gate
+        .github/workflows/summarise_playwright.sh gate
 
     - if: >
         (success() || (failure() && steps.execute.outcome == 'failure'))
         && inputs.shards <= 1
       name: Summarise
       run: |
-        .github/workflows/playwright_summarise.sh
+        .github/workflows/summarise_playwright.sh
 
   fini:
     if: >
@@ -209,4 +209,4 @@ jobs:
           exit 1
         fi
         jq -s '.' "${files[@]}" > tests/playwright/results.json
-        .github/workflows/playwright_summarise.sh
+        .github/workflows/summarise_playwright.sh

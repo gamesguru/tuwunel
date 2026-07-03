@@ -45,6 +45,10 @@ on:
         type: boolean
         default: false
         description: Maintain a runtime-metrics history digest in the Actions cache
+      complement_perf:
+        type: boolean
+        default: false
+        description: Run the testee under perf stat and emit hardware-counter metrics
       cargo_profiles:
         type: string
       feat_sets:
@@ -114,6 +118,7 @@ jobs:
         machine: ${{matrix.machine}}
         complement_verbose: ${{inputs.verbose && 1 || 0}}
         complement_crypto_verbose: ${{inputs.verbose && 1 || 0}}
+        complement_perf: ${{inputs.complement_perf && '1' || '0'}}
 
       run: |
         ${{inputs.script}}

@@ -5,6 +5,7 @@ use ruma::{
 	events::{
 		TimelineEventType,
 		receipt::ReceiptThread,
+		relation::RelationType,
 		room::{
 			encrypted::Relation,
 			member::{MembershipState, RoomMemberEventContent},
@@ -336,6 +337,30 @@ async fn append_pdu_effects(
 					.threads
 					.add_to_thread(&thread.event_id, pdu)
 					.await?;
+			},
+			| Relation::Replacement(replacement) => {
+				self.services
+					.pdu_metadata
+					.add_typed_relation(
+						shortroomid,
+						count,
+						&replacement.event_id,
+						pdu,
+						RelationType::Replacement,
+					)
+					.await;
+			},
+			| Relation::Reference(reference) => {
+				self.services
+					.pdu_metadata
+					.add_typed_relation(
+						shortroomid,
+						count,
+						&reference.event_id,
+						pdu,
+						RelationType::Reference,
+					)
+					.await;
 			},
 			| _ => {}, // TODO: Aggregate other types
 		}

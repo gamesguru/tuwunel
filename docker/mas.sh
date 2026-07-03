@@ -23,4 +23,4 @@ if test "${CI_VERBOSE_ENV:-false}" = "true"; then
 	env
 fi
 
-exec "$BASEDIR/mas-runner.sh"
+exec "$BASEDIR/lib/mas-runner.sh"

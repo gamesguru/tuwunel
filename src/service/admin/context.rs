@@ -35,6 +35,21 @@ impl Context<'_> {
 		.await
 	}
 
+	pub async fn write_timed_query_try<F, T>(&self, query: F) -> Result
+	where
+		F: Future<Output = Result<T>>,
+		T: Debug,
+	{
+		let timer = Instant::now();
+		let result = query.await?;
+		let query_time = timer.elapsed();
+
+		self.write_string(format!(
+			"Query completed in {query_time:?}:\n\n```rs\n{result:#?}\n```"
+		))
+		.await
+	}
+
 	pub fn write_fmt(
 		&self,
 		arguments: fmt::Arguments<'_>,

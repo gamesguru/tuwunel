@@ -3,16 +3,22 @@ use std::{collections::BTreeMap, mem};
 use futures::{Stream, StreamExt, TryFutureExt, pin_mut};
 use ruma::{
 	DeviceId, KeyId, OneTimeKeyAlgorithm, OneTimeKeyId, OneTimeKeyName, OwnedKeyId,
-	OwnedOneTimeKeyId, RoomId, UInt, UserId,
+	OwnedOneTimeKeyId, OwnedRoomId, OwnedServerName, RoomId, UInt, UserId,
 	encryption::{CrossSigningKey, DeviceKeys, OneTimeKey},
 	serde::Raw,
 };
 use serde::{Deserialize, Serialize};
 use tuwunel_core::{
 	Err, Result, debug_error, err, implement,
-	utils::{BoolExt, ReadyExt, stream::TryIgnore},
+	smallvec::SmallVec,
+	utils::{
+		BoolExt, IterStream, ReadyExt,
+		stream::{BroadbandExt, TryIgnore},
+	},
 };
 use tuwunel_database::{Deserialized, Ignore, Interfix, Json};
+
+type Servers = SmallVec<[OwnedServerName; 1]>;
 
 /// MSC2732: row stored under `(user, device, algorithm)` in
 /// `userdeviceidalgorithm_fallback`. Fallback keys are not deleted on
@@ -528,6 +534,39 @@ pub async fn mark_device_key_update(&self, user_id: &UserId) {
 				.put_raw(room_key, user_id);
 		})
 		.await;
+
+	if !self.services.globals.user_is_local(user_id) {
+		return;
+	}
+
+	// device_list_update EDUs reach remote servers only on a sender flush.
+	let mut servers: Servers = self
+		.services
+		.state_cache
+		.rooms_joined(user_id)
+		.filter(|room_id| all_or_is_encrypted(*room_id))
+		.map(ToOwned::to_owned)
+		.broad_then(async |room_id: OwnedRoomId| {
+			self.services
+				.state_cache
+				.room_servers(&room_id)
+				.ready_filter(|server| !self.services.globals.server_is_ours(server))
+				.map(ToOwned::to_owned)
+				.collect()
+				.await
+		})
+		.flat_map(|servers: Vec<OwnedServerName>| servers.into_iter().stream())
+		.collect()
+		.await;
+
+	servers.sort_unstable();
+	servers.dedup();
+
+	self.services
+		.sending
+		.flush_servers(servers.iter().map(|server| &**server).stream())
+		.await
+		.expect("device key update flush failed");
 }
 
 #[implement(super::Service)]

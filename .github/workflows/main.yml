@@ -252,15 +252,10 @@ jobs:
         runner: ${{matrix.runner}}
         pipeline: ${{inputs.pipeline || github.event.head_commit.message || github.event.workflow_run.head_commit.message}}
         seed_builder: ${{vars.SEED_BUILDER || 'jevolk'}}
-        reserved_space:      '{"het": "192GB", "aws": "48GB"}'
-        max_used_space:      '{"het": "384GB", "aws": "64GB"}'
-        min_free_space:      '{"het": "32GB",  "aws": "16GB"}'
-        safety_free_space:   '{"het": "8GB",   "aws": "4GB"}'
-        trunk_max_used:      '{"het": "48GB",  "aws": "12GB"}'
-        branch_max_used:     '{"het": "144GB", "aws": "16GB"}'
-        unlabeled_max_used:  '{"het": "16GB",  "aws": "4GB"}'
-        leaf_max_used:       '{"het": "128GB", "aws": "20GB"}'
-        cachemount_max_used: '{"het": "32GB",  "aws": "8GB"}'
+        reserved_space:    '{"het": "200GB", "aws": "24GB"}'
+        max_used_space:    '{"het": "350GB", "aws": "48GB"}'
+        min_free_space:    '{"het": "32GB",  "aws": "16GB"}'
+        safety_free_space: '{"het": "16GB",  "aws": "8GB"}'
       run: |
         .github/workflows/init.sh
 
@@ -530,3 +525,14 @@ jobs:
     secrets:
       ghcr_token: ${{ secrets.GHCR_TOKEN }}
       dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
+
+#  stats:
+#    if: >
+#      !cancelled()
+#
+#    name: Stats
+#    needs: [init, lint, test, package, publish]
+#    uses: ./.github/workflows/stats.yml
+#    with:
+#      machines: ${{needs.init.outputs.machines}}
+#      checkout: ${{needs.init.outputs.checkout}}

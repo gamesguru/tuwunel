@@ -338,6 +338,8 @@ async fn transfer_room(&self) -> Result {
 
 	self.move_sender_user().await?;
 
+	self.move_push_rules().await?;
+
 	self.move_local_aliases().await?;
 
 	self.tombstone_old_room().await?;
@@ -381,6 +383,15 @@ async fn move_sender_user(&self) -> Result {
 	}
 
 	Ok(())
+}
+
+#[implement(RoomUpgradeContext, params = "<'_>")]
+#[tracing::instrument(level = "debug")]
+async fn move_push_rules(&self) -> Result {
+	self.services
+		.account_data
+		.copy_room_push_rule(self.sender_user, self.old_room_id, self.new_room_id)
+		.await
 }
 
 #[implement(RoomUpgradeContext, params = "<'_>")]

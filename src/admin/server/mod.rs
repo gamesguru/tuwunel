@@ -4,6 +4,7 @@ mod clear_caches;
 mod list_backups;
 mod list_features;
 mod memory_usage;
+mod rebuild_relation_index;
 mod reload_config;
 mod reload_mods;
 #[cfg(unix)]
@@ -50,6 +51,9 @@ pub(super) enum ServerCommand {
 
 	/// - Clears all of Tuwunel's caches
 	ClearCaches,
+
+	/// - Rebuild the typed relation index (relatesto_typed) from all PDUs
+	RebuildRelationIndex,
 
 	/// - Performs an online backup of the database (only available for RocksDB
 	///   at the moment)

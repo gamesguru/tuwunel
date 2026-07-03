@@ -1,6 +1,10 @@
 use std::collections::BTreeMap;
 
-use ruma::{MilliSecondsSinceUnixEpoch, events::room::member::MembershipState, serde::Raw};
+use ruma::{
+	MilliSecondsSinceUnixEpoch, OwnedEventId,
+	events::{AnySyncMessageLikeEvent, room::member::MembershipState},
+	serde::Raw,
+};
 use serde::Serialize;
 use serde_json::value::{RawValue as RawJsonValue, Value as JsonValue, to_raw_value};
 
@@ -124,6 +128,82 @@ pub fn set_thread_participated(&mut self, participated: bool) -> Result {
 	if updated {
 		self.unsigned = Some(to_raw_value(&unsigned)?.into());
 	}
+
+	Ok(())
+}
+
+/// MSC3925: fold the newest `m.replace` edit into
+/// `unsigned.m.relations.m.replace` as the full replacement event, preserving
+/// an existing bundle such as `m.thread` and creating `unsigned` when absent.
+#[implement(Pdu)]
+pub fn set_replacement_bundle(&mut self, replacement: &Raw<AnySyncMessageLikeEvent>) -> Result {
+	use BTreeMap as Map;
+
+	type Object = Map<String, Raw<JsonValue>>;
+
+	let parse = |raw: &RawJsonValue| -> Result<Object> {
+		serde_json::from_str(raw.get())
+			.map_err(|e| err!(Database("Invalid object in pdu unsigned: {e}")))
+	};
+
+	let mut unsigned: Object = self
+		.unsigned
+		.as_ref()
+		.map(|unsigned| parse(unsigned.json()))
+		.transpose()?
+		.unwrap_or_default();
+
+	let mut relations: Object = unsigned
+		.get("m.relations")
+		.map(|relations| parse(relations.json()))
+		.transpose()?
+		.unwrap_or_default();
+
+	relations.insert("m.replace".to_owned(), replacement.cast_ref().clone());
+	unsigned.insert("m.relations".to_owned(), to_raw_value(&relations)?.into());
+	self.unsigned = Some(to_raw_value(&unsigned)?.into());
+
+	Ok(())
+}
+
+/// MSC2675/MSC3267: fold reference relations into
+/// `unsigned.m.relations.m.reference` as `{ chunk: [{ event_id }, ...] }`,
+/// preserving an existing bundle such as `m.thread` or `m.replace` and creating
+/// `unsigned` when absent.
+#[implement(Pdu)]
+pub fn set_reference_bundle(&mut self, event_ids: &[OwnedEventId]) -> Result {
+	use BTreeMap as Map;
+
+	type Object = Map<String, Raw<JsonValue>>;
+
+	let parse = |raw: &RawJsonValue| -> Result<Object> {
+		serde_json::from_str(raw.get())
+			.map_err(|e| err!(Database("Invalid object in pdu unsigned: {e}")))
+	};
+
+	let mut unsigned: Object = self
+		.unsigned
+		.as_ref()
+		.map(|unsigned| parse(unsigned.json()))
+		.transpose()?
+		.unwrap_or_default();
+
+	let mut relations: Object = unsigned
+		.get("m.relations")
+		.map(|relations| parse(relations.json()))
+		.transpose()?
+		.unwrap_or_default();
+
+	let chunk: Vec<JsonValue> = event_ids
+		.iter()
+		.map(|event_id| serde_json::json!({ "event_id": event_id }))
+		.collect();
+
+	let reference = serde_json::json!({ "chunk": chunk });
+
+	relations.insert("m.reference".to_owned(), to_raw_value(&reference)?.into());
+	unsigned.insert("m.relations".to_owned(), to_raw_value(&relations)?.into());
+	self.unsigned = Some(to_raw_value(&unsigned)?.into());
 
 	Ok(())
 }

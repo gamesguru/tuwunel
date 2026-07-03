@@ -142,6 +142,14 @@ impl Service {
 			.log_err()
 			.ok();
 
+		debug!("Deleting all the room's typed relation index entries");
+		self.services
+			.pdu_metadata
+			.delete_all_relatesto_typed_for_room(room_id)
+			.await
+			.log_err()
+			.ok();
+
 		debug!("Deleting all the room's member counts");
 		self.services
 			.state_cache

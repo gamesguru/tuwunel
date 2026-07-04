@@ -3900,7 +3900,7 @@ source = "git+https://github.com/matrix-construct/resolv-conf?rev=ab5c3e44016bc7
 [[package]]
 name = "rezzy"
 version = "0.4.0"
-source = "git+https://github.com/gamesguru/rezzy?branch=dev#2bab6ae900a04d2100e759a7c72763b56cadf0ad"
+source = "git+https://github.com/gamesguru/rezzy?branch=dev#32c1eecc37857d9fe669f42f261255e111f70857"
 dependencies = [
  "hashbrown 0.15.5",
  "imbl",

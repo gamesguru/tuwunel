@@ -163,7 +163,15 @@ where
 /// We find the most recent `m.room.power_levels` by walking backwards in the
 /// auth chain of the event.
 ///
-/// Do NOT use this anywhere but topological sort.
+/// This function is designed for use during state resolution (such as
+/// topological sorting or initial state-resolution preprocessing of conflicted
+/// events), where a fully resolved room state is not yet available.
+///
+/// Do NOT use this outside of the state resolution context. In other contexts
+/// (such as standard event processing, permission checks, or client API
+/// handlers), you should look up the sender's power level using the room's
+/// current resolved state, as naively walking the auth chain is highly
+/// inefficient and may not align with the resolved state of the room.
 ///
 /// ## Arguments
 ///
@@ -251,6 +259,16 @@ where
 ///
 /// We find the most recent `m.room.power_levels` by walking backwards in the
 /// auth chain of the event.
+///
+/// This function is designed for use during state resolution (such as
+/// topological sorting or initial state-resolution preprocessing of conflicted
+/// events), where a fully resolved room state is not yet available.
+///
+/// Do NOT use this outside of the state resolution context. In other contexts
+/// (such as standard event processing, permission checks, or client API
+/// handlers), you should look up the sender's power level using the room's
+/// current resolved state, as naively walking the auth chain is highly
+/// inefficient and may not align with the resolved state of the room.
 ///
 /// ## Arguments
 ///

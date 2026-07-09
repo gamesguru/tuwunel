@@ -13,6 +13,7 @@ mod get_pdu;
 mod get_remote_pdu;
 mod get_remote_pdu_list;
 mod get_retained_pdu;
+mod get_room_dag;
 mod get_room_state;
 mod get_short_pdu;
 mod get_signing_keys;
@@ -115,6 +116,28 @@ pub(super) enum DebugCommand {
 
 		/// State Key
 		state_key: Option<String>,
+	},
+
+	/// - Get the room DAG as a list of PDUs in a range.
+	GetRoomDag {
+		/// Room ID or alias
+		room_id: OwnedRoomOrAliasId,
+
+		/// Start index (0-based, or negative for offset from the end)
+		#[arg(allow_hyphen_values = true)]
+		start: i64,
+
+		/// End index (0-based, inclusive, or -1 for all)
+		#[arg(allow_hyphen_values = true)]
+		end: i64,
+
+		/// Print PDUs to the admin room (in addition to writing to file)
+		#[arg(long)]
+		print: bool,
+
+		/// Include outliers in the export
+		#[arg(long)]
+		outliers: bool,
 	},
 
 	/// - Get and display signing keys from local cache or remote server.

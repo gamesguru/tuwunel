@@ -168,7 +168,13 @@ where
 	// also cleared; the sender's own send subsumes any thread receipt.
 	self.services
 		.read_receipt
-		.private_read_set(pdu.room_id(), pdu.sender(), *next_count2, &ReceiptThread::Unthreaded)
+		.private_read_set(
+			pdu.room_id(),
+			pdu.sender(),
+			*next_count2,
+			pdu.origin_server_ts(),
+			&ReceiptThread::Unthreaded,
+		)
 		.await;
 
 	self.services
@@ -243,10 +249,6 @@ async fn append_pdu_effects(
 					.await?;
 			}
 		},
-		| TimelineEventType::SpaceChild =>
-			if let Some(_state_key) = pdu.state_key() {
-				self.services.spaces.cache_evict(pdu.room_id());
-			},
 		| TimelineEventType::RoomMember => {
 			if let Some(state_key) = pdu.state_key() {
 				// if the state_key fails
@@ -311,6 +313,11 @@ async fn append_pdu_effects(
 		| _ => {},
 	}
 
+	// The cached hierarchy summary projects room state; evict on any state change.
+	if pdu.state_key().is_some() {
+		self.services.spaces.cache_evict(pdu.room_id());
+	}
+
 	if let Ok(content) = pdu.get_content::<ExtractRelatesToEventId>()
 		&& let Ok(related_pducount) = self
 			.get_pdu_count(&content.relates_to.event_id)
@@ -335,7 +342,7 @@ async fn append_pdu_effects(
 			| Relation::Thread(thread) => {
 				self.services
 					.threads
-					.add_to_thread(&thread.event_id, pdu)
+					.add_to_thread(&thread.event_id, pdu_id, pdu)
 					.await?;
 			},
 			| Relation::Replacement(replacement) => {

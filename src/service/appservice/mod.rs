@@ -193,6 +193,16 @@ impl Service {
 			.map(|info| info.registration)
 	}
 
+	/// Retrieve a registration with its compiled namespaces (`sender`,
+	/// `is_user_match`), which a bare `Registration` lacks.
+	pub async fn get_registration_info(&self, id: &str) -> Option<RegistrationInfo> {
+		self.registration_info
+			.read()
+			.await
+			.get(id)
+			.cloned()
+	}
+
 	pub async fn find_from_access_token(&self, token: &str) -> Result<RegistrationInfo> {
 		self.read()
 			.await
@@ -208,6 +218,14 @@ impl Service {
 			.await
 			.values()
 			.any(|info| info.is_exclusive_user_match(user_id))
+	}
+
+	/// Checks if a given user id matches any appservice's user namespace.
+	pub async fn is_interested_in_user(&self, user_id: &UserId) -> bool {
+		self.read()
+			.await
+			.values()
+			.any(|info| info.is_user_match(user_id))
 	}
 
 	/// Checks if a given room alias matches any exclusive appservice regex

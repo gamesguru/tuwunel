@@ -43,7 +43,7 @@ pub(crate) async fn get_supported_versions_route(
 	})
 }
 
-static VERSIONS: [&str; 25] = [
+static VERSIONS: [&str; 27] = [
 	"r0.0.1", /* Historical */
 	"r0.1.0", /* Historical */
 	"r0.2.0", /* Historical */
@@ -69,9 +69,11 @@ static VERSIONS: [&str; 25] = [
 	"v1.15",  /* OIDC auth metadata */
 	"v1.16",  /* extended profiles (MSC4133) */
 	"v1.17",  /* no action */
+	"v1.18",  /* policy servers (MSC4284) */
+	"v1.19",  /* mutual rooms (MSC2666) */
 ];
 
-static UNSTABLE_FEATURES: [&str; 36] = [
+static UNSTABLE_FEATURES: [&str; 38] = [
 	"org.matrix.e2e_cross_signing",
 	// private read receipts (https://github.com/matrix-org/matrix-spec-proposals/pull/2285)
 	"org.matrix.msc2285.stable",
@@ -99,6 +101,8 @@ static UNSTABLE_FEATURES: [&str; 36] = [
 	"org.matrix.msc3916.stable",
 	// intentional mentions (https://github.com/matrix-org/matrix-spec-proposals/pull/3952)
 	"org.matrix.msc3952_intentional_mentions",
+	// MatrixRTC transport discovery (https://github.com/matrix-org/matrix-spec-proposals/pull/4143)
+	"org.matrix.msc4143",
 	// MSC4133 (custom profile fields) and MSC4175 (m.tz) stabilized in
 	// Matrix 1.16; advertise the historical unstable prefixes alongside
 	// the post-merge `.stable` flags for clients that haven't migrated.
@@ -137,6 +141,8 @@ static UNSTABLE_FEATURES: [&str; 36] = [
 	"org.matrix.msc3771",
 	// Notifications for threads (https://github.com/matrix-org/matrix-spec-proposals/pull/3773)
 	"org.matrix.msc3773",
+	// Threading via m.thread relations, stable since Matrix 1.4 (https://github.com/matrix-org/matrix-spec-proposals/pull/3440)
+	"org.matrix.msc3440.stable",
 	// state_after on /sync (https://github.com/matrix-org/matrix-spec-proposals/pull/4222)
 	"org.matrix.msc4222",
 ];

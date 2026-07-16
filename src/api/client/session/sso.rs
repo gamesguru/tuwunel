@@ -75,6 +75,14 @@ struct GrantCookie<'a> {
 
 static GRANT_SESSION_COOKIE: &str = "tuwunel_grant_session";
 
+/// Path attribute for the grant-session cookie. The set and removal cookies
+/// must use the same value: a cookie is only replaced (and thus removed) when
+/// its name, domain and path all match (RFC 6265 5.3), and a Set-Cookie
+/// without an explicit path defaults to the request-URI's directory.
+fn grant_session_cookie_path(callback_url: Option<&Url>) -> &str {
+	callback_url.map(Url::path).unwrap_or("/")
+}
+
 fn decode_apple_userinfo_from_id_token(session: &Session) -> Result<UserInfo> {
 	let id_token = session.id_token.as_deref().ok_or_else(|| {
 		err!(Request(Unauthorized("Missing Apple id_token in token response.")))
@@ -278,11 +286,7 @@ async fn handle_sso_login(
 		redirect_uri: redirect_url.as_str().into(),
 	};
 
-	let cookie_path = provider
-		.callback_url
-		.as_ref()
-		.map(Url::path)
-		.unwrap_or("/");
+	let cookie_path = grant_session_cookie_path(provider.callback_url.as_ref());
 
 	let cookie_max_age = provider
 		.grant_session_duration
@@ -445,11 +449,15 @@ pub(crate) async fn sso_callback_route(
 	};
 
 	if !services.users.exists(&user_id).await {
-		if !provider.registration {
-			return Err!(Request(Forbidden("Registration from this provider is disabled")));
-		}
+		let origin = match provider.registration {
+			| true => "sso",
+			// Present in LDAP is an existing user to provision, not a new registration.
+			| false if ldap_user_exists(&services, &user_id).await => "ldap",
+			| false =>
+				return Err!(Request(Forbidden("Registration from this provider is disabled"))),
+		};
 
-		register_user(&services, &provider, &session, &userinfo, &user_id).await?;
+		register_user(&services, &provider, &session, &userinfo, &user_id, origin).await?;
 	}
 
 	services.oauth.sessions.put(&session).await;
@@ -466,6 +474,7 @@ pub(crate) async fn sso_callback_route(
 	}
 
 	let cookie = Cookie::build((GRANT_SESSION_COOKIE, EMPTY))
+		.path(grant_session_cookie_path(provider.callback_url.as_ref()))
 		.removal()
 		.build()
 		.to_string()
@@ -663,6 +672,17 @@ async fn handle_uiaa(
 	Ok(sso_callback::unstable::Response { location, cookie: Some(cookie) })
 }
 
+async fn ldap_user_exists(services: &Services, user_id: &UserId) -> bool {
+	cfg!(feature = "ldap")
+		&& services.config.ldap.enable
+		&& services
+			.users
+			.search_ldap(user_id)
+			.await
+			.log_err()
+			.is_ok_and(|dns| !dns.is_empty())
+}
+
 #[tracing::instrument(
 	name = "register",
 	level = INFO_SPAN_LEVEL,
@@ -675,6 +695,7 @@ async fn register_user(
 	session: &Session,
 	userinfo: &UserInfo,
 	user_id: &UserId,
+	origin: &str,
 ) -> Result {
 	debug_info!(%user_id, "Creating new user account...");
 
@@ -683,7 +704,7 @@ async fn register_user(
 		.full_register(Register {
 			user_id: Some(user_id),
 			password: Some(PASSWORD_SENTINEL),
-			origin: Some("sso"),
+			origin: Some(origin),
 			displayname: userinfo.name.as_deref(),
 			grant_first_user_admin: true,
 			..Default::default()
@@ -711,9 +732,7 @@ async fn register_user(
 		format!("New user \"{user_id}\" registered on this server via {idp_name} ({idp_id})");
 
 	info!("{notice}");
-	if services.server.config.admin_room_notices {
-		services.admin.notice(&notice).await;
-	}
+	services.admin.notify(&notice).await;
 
 	Ok(())
 }
@@ -993,5 +1012,44 @@ mod tests {
 
 		let message = format!("{error}");
 		assert!(message.contains("invalid base64"), "unexpected error: {message}");
+	}
+
+	#[test]
+	fn grant_session_cookie_path_uses_the_callback_path() {
+		let callback = Url::parse(
+			"https://matrix.example/_matrix/client/unstable/login/sso/callback/tuwunel_abc",
+		)
+		.expect("valid URL");
+
+		assert_eq!(
+			grant_session_cookie_path(Some(&callback)),
+			"/_matrix/client/unstable/login/sso/callback/tuwunel_abc"
+		);
+		assert_eq!(grant_session_cookie_path(None), "/");
+	}
+
+	#[test]
+	fn grant_session_removal_cookie_path_matches_the_set_cookie_path() {
+		let callback = Url::parse(
+			"https://matrix.example/_matrix/client/unstable/login/sso/callback/tuwunel_abc",
+		)
+		.expect("valid URL");
+
+		let set = Cookie::build((GRANT_SESSION_COOKIE, "grant"))
+			.path(grant_session_cookie_path(Some(&callback)))
+			.build();
+
+		let removal = Cookie::build((GRANT_SESSION_COOKIE, EMPTY))
+			.path(grant_session_cookie_path(Some(&callback)))
+			.removal()
+			.build();
+
+		assert_eq!(set.path(), removal.path());
+		assert!(
+			removal
+				.to_string()
+				.contains("Path=/_matrix/client/unstable/login/sso/callback/tuwunel_abc"),
+			"unexpected removal cookie: {removal}"
+		);
 	}
 }

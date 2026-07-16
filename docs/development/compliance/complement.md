@@ -4,15 +4,15 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 
 ## Counts
 
-- Test groups: 204. Passing: **80.4%**
-  - ✅ `pass`: 164
-  - 🟨 `some`: 18
-  - ❌ `fail`: 20
+- Test groups: 205. Passing: **81.5%**
+  - ✅ `pass`: 167
+  - 🟨 `some`: 17
+  - ❌ `fail`: 19
   - ⬛ `skip`: 2
 
-- Subtests: 594. Passing: **77.9%**
-  - ✅ `pass`: 463
-  - ❌ `fail`: 118
+- Subtests: 587. Passing: **77.9%**
+  - ✅ `pass`: 457
+  - ❌ `fail`: 117
   - ⬛ `skip`: 13
 
 ## All Top-Level Tests
@@ -48,7 +48,7 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 | `TestDeletingDeviceRemovesDeviceLocalNotificationSettings` | ✅ | 1/0/0 |
 | `TestDemotingUsersViaUsersDefault` | ✅ | – |
 | `TestDeviceListUpdates` | 🟨 | 8/2/0 |
-| `TestDeviceListsUpdateOverFederation` | 🟨 | 2/1/0 |
+| `TestDeviceListsUpdateOverFederation` | ✅ | 2/0/0 |
 | `TestDeviceListsUpdateOverFederationOnRoomJoin` | ❌ | – |
 | `TestDeviceManagement` | ✅ | 7/0/0 |
 | `TestDisplayNameUpdate` | ✅ | – |
@@ -92,7 +92,7 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 | `TestJoinFederatedRoomWithUnverifiableEvents` | ✅ | 4/0/0 |
 | `TestJoinViaRoomIDAndServerName` | ✅ | – |
 | `TestJson` | ✅ | 3/0/0 |
-| `TestJumpToDateEndpoint` | ✅ | 15/0/0 |
+| `TestJumpToDateEndpoint` | ✅ | 7/0/0 |
 | `TestKeyChangesLocal` | ✅ | 1/0/0 |
 | `TestKeyClaimOrdering` | ✅ | – |
 | `TestKeysQueryWithDeviceIDAsObjectFails` | ✅ | – |
@@ -188,6 +188,7 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 | `TestRoomSpecificUsernameChange` | ✅ | 5/0/0 |
 | `TestRoomState` | ✅ | 15/0/0 |
 | `TestRoomSummary` | ✅ | – |
+| `TestRoomSummaryAllowedRoomIDs` | ✅ | 2/0/0 |
 | `TestRoomsInvite` | ✅ | 9/0/0 |
 | `TestSearch` | ✅ | 7/0/0 |
 | `TestSendAndFetchMessage` | ✅ | – |
@@ -203,7 +204,7 @@ Tuwunel runs the [Complement](https://github.com/matrix-org/complement) Matrix h
 | `TestTentativeEventualJoiningAfterRejecting` | ✅ | – |
 | `TestThreadSubscriptions` | 🟨 | 1/7/0 |
 | `TestThreadedReceipts` | ❌ | – |
-| `TestThreadsEndpoint` | ❌ | – |
+| `TestThreadsEndpoint` | ✅ | – |
 | `TestToDeviceMessages` | ✅ | – |
 | `TestToDeviceMessagesOverFederation` | ✅ | 1/0/0 |
 | `TestTxnIdWithRefreshToken` | ✅ | – |

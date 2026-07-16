@@ -30,7 +30,7 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/matrix-construct/tuwunel"
 rust-version = "1.95.0"
-version = "1.8.0"
+version = "1.8.1"
 
 [workspace.metadata.crane]
 name = "tuwunel"
@@ -365,7 +365,7 @@ default-features = false
 
 [workspace.dependencies.ruma]
 git = "https://github.com/matrix-construct/ruma"
-rev = "41bade372610c56605de0e25cfa8a03a68c25368"
+rev = "ce8b17c57da523341a0d8cc1280cdde6faa74db7"
 features = [
     "__compat",
     "appservice-api-c",
@@ -386,6 +386,7 @@ features = [
     "unstable-msc2870",
     "unstable-msc3026",
     "unstable-msc3061",
+    "unstable-msc3202", # encrypted appservice transaction extensions
     "unstable-msc3391",
     "unstable-msc3814",
     "unstable-msc3824",
@@ -414,7 +415,7 @@ features = [
 
 [workspace.dependencies.synapse-admin-api]
 git = "https://github.com/matrix-construct/synapse-admin-api"
-rev = "358d95c71d8475439a7d6529fe6a9236a69028c6"
+rev = "d0233c81bfc712511705db8dd8a74bd1500aba32"
 features = ["server"]
 
 [workspace.dependencies.rustls]
@@ -428,7 +429,7 @@ default-features = false
 
 [workspace.dependencies.rust-rocksdb]
 git = "https://github.com/matrix-construct/rust-rocksdb"
-rev = "c6a4f26f0274435d6284987dda6bdea4dc3ff8d3"
+rev = "9f26b713c204bd8783cdbc2d36a524945e44773d"
 default-features = false
 features = [
 	"bzip2",
@@ -473,6 +474,9 @@ version = "0.48"
 version = "1.0"
 default-features = false
 features = ["rc"]
+
+[workspace.dependencies.serde_bytes]
+version = "0.11"
 
 [workspace.dependencies.serde_core]
 version = "1.0"

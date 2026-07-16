@@ -160,10 +160,22 @@ impl super::Service {
 			return self.get_thumbnail_saved(metadata).await;
 		}
 
-		let metadata = self
+		// the original may be lazy preview media promoted on this very request;
+		// only an image is worth serving in a thumbnail's place
+		let Ok(metadata) = self
 			.db
 			.search_file_metadata(mxc, &Dim::default())
-			.await?;
+			.await
+		else {
+			let media = self.get_stored(mxc).await?;
+
+			return media
+				.content_type
+				.as_deref()
+				.is_some_and(|content_type| content_type.starts_with("image/"))
+				.then_some(media)
+				.ok_or_else(|| err!(Request(NotFound("Media not found."))));
+		};
 
 		self.get_thumbnail_generate(mxc, &dim, metadata)
 			.await

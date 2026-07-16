@@ -1,10 +1,14 @@
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use futures::{Stream, StreamExt, TryFutureExt, future::Either, pin_mut};
 use ruma::{
-	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, RoomId, UserId,
+	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedUserId, RoomId, UserId,
 	api::Direction,
-	events::{reaction::ReactionEventContent, relation::RelationType, room::encrypted::Relation},
+	events::{
+		AnySyncMessageLikeEvent, reaction::ReactionEventContent, relation::RelationType,
+		room::encrypted::Relation,
+	},
+	serde::Raw,
 };
 use serde::Deserialize;
 use tuwunel_core::{
@@ -74,6 +78,20 @@ const REFERENCE_BUNDLE_MAX: usize = 100;
 struct ExtractRelatesTo {
 	#[serde(rename = "m.relates_to")]
 	relates_to: Relation,
+}
+
+/// MSC3856: a served thread root's per-requester ignored-user adjustments for
+/// the /threads list. Each `Adjusted` facet is `None` when it needs no change;
+/// the redacted `root` replaces content only, the caller keeps the served
+/// `unsigned`.
+pub enum IgnoredThreadView {
+	Unchanged,
+	Omitted,
+	Adjusted {
+		root: Option<Box<Pdu>>,
+		count: Option<usize>,
+		latest: Option<Raw<AnySyncMessageLikeEvent>>,
+	},
 }
 
 impl crate::Service for Service {
@@ -201,6 +219,30 @@ pub async fn has_relation(
 		.await
 }
 
+/// MSC3440 `related_by_*`: whether any event relates to `target` with a
+/// `rel_type` in `rel_types` and a `sender` in `senders`. An empty list is
+/// unconstrained on that axis; a single relating event must satisfy both.
+#[implement(Service)]
+pub async fn has_incoming_relation(
+	&self,
+	target: PduId,
+	senders: &[OwnedUserId],
+	rel_types: &[RelationType],
+) -> bool {
+	self.get_relations(target.shortroomid, target.count, None, Direction::Forward, None)
+		.ready_any(|(_, pdu)| {
+			let sender = senders.is_empty() || senders.iter().any(is_equal_to!(pdu.sender()));
+
+			let rel_type = rel_types.is_empty()
+				|| rel_types
+					.iter()
+					.any(|rel_type| rel_type.relation_type_equal(&pdu));
+
+			sender && rel_type
+		})
+		.await
+}
+
 #[implement(Service)]
 pub fn get_relations<'a>(
 	&'a self,
@@ -259,13 +301,25 @@ pub fn get_relations<'a>(
 /// per-requester. MSC3816: the stored `m.thread` bundle carries a shared
 /// `current_user_participated`, recomputed here for `sender_user`. MSC3925:
 /// when `bundle_edit_relations` is enabled, the newest `m.replace` edit is
-/// folded in as the full replacement event. MSC3267: when
+/// folded in as the full replacement event, and the bundled thread
+/// `latest_event` carries its own newest edit (MSC3856). MSC3267: when
 /// `bundle_reference_relations` is enabled, the `m.reference` children are
 /// folded in as a `{ chunk: [{ event_id }] }` summary. The thread presence gate
 /// keeps the common no-bundle case to a substring scan; the edit and reference
 /// folds are skipped unless enabled.
 #[implement(Service)]
 pub async fn bundle_aggregations(&self, sender_user: &UserId, mut pdu: Pdu) -> Pdu {
+	// MSC4025: an erased sender's event serves as the pruned clone, and a
+	// pruned event carries no aggregations.
+	if let Some(pruned) = self
+		.services
+		.state_accessor
+		.erased_view(sender_user, &pdu)
+		.await
+	{
+		return pruned;
+	}
+
 	let has_thread = pdu
 		.unsigned()
 		.is_some_and(|unsigned| unsigned.get().contains("m.thread"));
@@ -280,6 +334,14 @@ pub async fn bundle_aggregations(&self, sender_user: &UserId, mut pdu: Pdu) -> P
 		pdu.set_thread_participated(participated)
 			.log_err()
 			.ok();
+
+		self.erase_thread_latest(sender_user, &mut pdu)
+			.await;
+
+		if self.services.server.config.bundle_edit_relations {
+			self.bundle_thread_latest_edit(sender_user, &mut pdu)
+				.await;
+		}
 	}
 
 	let replacement = self
@@ -291,7 +353,13 @@ pub async fn bundle_aggregations(&self, sender_user: &UserId, mut pdu: Pdu) -> P
 		.await
 		.flatten();
 
-	if let Some(replacement) = replacement {
+	if let Some(replacement) = replacement
+		&& !self
+			.services
+			.state_accessor
+			.erased_for(sender_user, &replacement)
+			.await
+	{
 		pdu.set_replacement_bundle(&replacement.to_format())
 			.log_err()
 			.ok();
@@ -313,6 +381,84 @@ pub async fn bundle_aggregations(&self, sender_user: &UserId, mut pdu: Pdu) -> P
 	}
 
 	pdu
+}
+
+/// MSC4025: the stored thread bundle carries a full `latest_event` of any
+/// sender; an erased hit swaps in the pruned form for this recipient. The
+/// event load and membership check run only on the erased hit.
+#[implement(Service)]
+async fn erase_thread_latest(&self, sender_user: &UserId, pdu: &mut Pdu) {
+	let Some((event_id, sender)) = pdu.thread_latest_event() else {
+		return;
+	};
+
+	if !self.services.users.is_erased(&sender).await {
+		return;
+	}
+
+	let Ok(latest) = self.services.timeline.get_pdu(&event_id).await else {
+		return;
+	};
+
+	if let Some(pruned) = self
+		.services
+		.state_accessor
+		.erased_view(sender_user, &latest)
+		.await
+	{
+		pdu.set_thread_latest_event(&pruned.to_format())
+			.log_err()
+			.ok();
+	}
+}
+
+/// The thread module's aggregated `latest_event` (MSC3856): when the edit
+/// fold is enabled, the bundled latest reply carries its own newest
+/// `m.replace` edit, so thread previews track edits. Erased-sender bundles
+/// stay in their pruned form.
+#[implement(Service)]
+async fn bundle_thread_latest_edit(&self, sender_user: &UserId, pdu: &mut Pdu) {
+	let Some((event_id, _)) = pdu.thread_latest_event() else {
+		return;
+	};
+
+	let Ok(mut latest) = self.services.timeline.get_pdu(&event_id).await else {
+		return;
+	};
+
+	if self
+		.services
+		.state_accessor
+		.erased_for(sender_user, &latest)
+		.await
+	{
+		return;
+	}
+
+	let Some(replacement) = self.newest_replacement(&latest).await else {
+		return;
+	};
+
+	if self
+		.services
+		.state_accessor
+		.erased_for(sender_user, &replacement)
+		.await
+	{
+		return;
+	}
+
+	if latest
+		.set_replacement_bundle(&replacement.to_format())
+		.log_err()
+		.is_err()
+	{
+		return;
+	}
+
+	pdu.set_thread_latest_event(&latest.to_format())
+		.log_err()
+		.ok();
 }
 
 /// MSC3925: the newest `m.replace` edit of `parent` as a full event, or `None`
@@ -337,6 +483,130 @@ async fn newest_replacement(&self, parent: &Pdu) -> Option<Pdu> {
 
 	pin_mut!(replacements);
 	replacements.next().await
+}
+
+/// MSC3856: evaluate one served thread root against the requester's ignore
+/// list. A cheap participant intersection gates the reply walk; one walk then
+/// yields the replacement `latest_event`, the ignored-aware `count`, and the
+/// omit-when-every-reply-is-ignored verdict. A root whose replies are not
+/// indexed (backfilled history) adjusts nothing beyond its own redacted form.
+#[implement(Service)]
+pub async fn ignored_thread_view(
+	&self,
+	sender_user: &UserId,
+	ignored: &BTreeSet<OwnedUserId>,
+	root: &Pdu,
+) -> IgnoredThreadView {
+	use IgnoredThreadView::{Adjusted, Omitted, Unchanged};
+
+	let Ok(root_id) = self
+		.services
+		.timeline
+		.get_pdu_id(root.event_id())
+		.await
+	else {
+		return Unchanged;
+	};
+
+	let participants = self
+		.services
+		.threads
+		.get_participants(&root_id)
+		.await
+		.unwrap_or_default();
+
+	if !participants
+		.iter()
+		.any(|user| ignored.contains(user))
+	{
+		return Unchanged;
+	}
+
+	let root_pid: PduId = root_id.into();
+	let replies = self
+		.get_relations(
+			root_pid.shortroomid,
+			root_pid.count,
+			None,
+			Direction::Backward,
+			Some(sender_user),
+		)
+		.ready_filter_map(|(_, pdu)| {
+			pdu.get_content()
+				.is_ok_and(|content: ExtractRelatesTo| {
+					matches!(content.relates_to, Relation::Thread(_))
+				})
+				.then_some(pdu)
+		});
+
+	let fold = |(total, unignored, latest): (usize, usize, Option<Pdu>), pdu: Pdu| match ignored
+		.contains(pdu.sender())
+	{
+		| true => (total.saturating_add(1), unignored, latest),
+		| false => (total.saturating_add(1), unignored.saturating_add(1), latest.or(Some(pdu))),
+	};
+
+	let (total, unignored, latest) = replies.ready_fold((0, 0, None), fold).await;
+
+	if total == 0 {
+		return match self.redacted_root(ignored, root).await {
+			| None => Unchanged,
+			| root => Adjusted { root, count: None, latest: None },
+		};
+	}
+
+	if unignored == 0 {
+		return Omitted;
+	}
+
+	let swap = root
+		.thread_latest_event()
+		.is_some_and(|(_, sender)| ignored.contains(&sender));
+
+	let latest = match swap.then_some(latest).flatten() {
+		| None => None,
+		| Some(reply) => {
+			// MSC4025: the swapped-in reply must not reopen the erased-sender
+			// seam the bundle pass gates on the stored latest.
+			let reply = self
+				.services
+				.state_accessor
+				.erased_view(sender_user, &reply)
+				.await
+				.unwrap_or(reply);
+
+			Some(reply.into_format())
+		},
+	};
+
+	let count = unignored.ne(&total).then_some(unignored);
+
+	let root = self.redacted_root(ignored, root).await;
+
+	if root.is_none() && count.is_none() && latest.is_none() {
+		return Unchanged;
+	}
+
+	Adjusted { root, count, latest }
+}
+
+/// The spec'd redacted form of an ignored sender's thread root, content side
+/// only; `None` when the sender is not ignored, or on a redaction failure
+/// (serving unredacted then matches the reference implementation).
+#[implement(Service)]
+async fn redacted_root(&self, ignored: &BTreeSet<OwnedUserId>, root: &Pdu) -> Option<Box<Pdu>> {
+	if !ignored.contains(root.sender()) {
+		return None;
+	}
+
+	self.services
+		.state
+		.get_room_version_rules(root.room_id())
+		.await
+		.log_err()
+		.ok()
+		.and_then(|rules| root.redacted(&rules.redaction).log_err().ok())
+		.map(Box::new)
 }
 
 /// Stream `parent`'s valid `m.replace` children, newest `origin_server_ts`
@@ -565,6 +835,45 @@ pub async fn delete_all_relatesto_typed_for_room(&self, room_id: &RoomId) -> Res
 		.await;
 
 	Ok(())
+}
+
+/// Purges one event's relation-index rows during a history purge. Rows keyed by
+/// this event as parent/target are removed; rows keyed by it as a surviving
+/// event's child are left dangling (harmless: relation reads discard ids that
+/// no longer resolve).
+#[implement(Service)]
+pub async fn purge_event_relations(
+	&self,
+	shortroomid: ShortRoomId,
+	parent: PduCount,
+	room_id: &RoomId,
+	event_id: &EventId,
+) {
+	let target = parent.to_be_bytes();
+
+	self.db
+		.tofrom_relation
+		.raw_keys_from(target.as_slice())
+		.ignore_err()
+		.ready_take_while(move |key| key.starts_with(&target))
+		.ready_for_each(|key| self.db.tofrom_relation.remove(key))
+		.await;
+
+	let mut prefix = ArrayVec::<u8, 16>::new();
+	prefix.extend(shortroomid.to_be_bytes());
+	prefix.extend(parent.to_be_bytes());
+
+	self.db
+		.relatesto_typed
+		.raw_keys_from(prefix.as_slice())
+		.ignore_err()
+		.ready_take_while(move |key| key.starts_with(&prefix))
+		.ready_for_each(|key| self.db.relatesto_typed.remove(key))
+		.await;
+
+	self.db.referencedevents.del((room_id, event_id));
+
+	self.db.softfailedeventids.remove(event_id);
 }
 
 /// Rebuild `relatesto_typed` from every stored PDU. Run once at startup behind

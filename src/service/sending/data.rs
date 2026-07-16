@@ -8,7 +8,7 @@ use tuwunel_core::{
 };
 use tuwunel_database::{Database, Deserialized, Map};
 
-use super::{Destination, SendingEvent};
+use super::{Destination, EduBuf, SendingEvent, TAG_DEVICE_LIST_CHANGED, TAG_TO_DEVICE};
 
 pub(super) type OutgoingItem = (Key, SendingEvent, Destination);
 pub(super) type SendingItem = (Key, SendingEvent);
@@ -71,11 +71,25 @@ impl Data {
 		events
 			.filter(|(key, _)| !key.is_empty())
 			.for_each(|(key, val)| {
-				let val = if let SendingEvent::Edu(val) = &val { &**val } else { &[] };
-
-				self.servercurrentevent_data.insert(key, val);
+				self.servercurrentevent_data
+					.insert(key, val.value_bytes());
 				self.servernameevent_data.remove(key);
 			});
+	}
+
+	/// Write composed EDUs straight into the active set, keyed by fresh counts;
+	/// unlike `mark_as_active` there is no queue row to delete.
+	pub(super) fn persist_active_edus(&self, server: &ServerName, edus: &[EduBuf]) {
+		let prefix = Destination::Federation(server.to_owned()).get_prefix();
+		self.servercurrentevent_data
+			.insert_batch(edus.iter().map(|edu| {
+				let mut key = prefix.clone();
+				let count = self.services.globals.next_count();
+				let count = count.to_be_bytes();
+				key.extend(&count);
+
+				(key, edu.as_slice())
+			}));
 	}
 
 	#[inline]
@@ -133,15 +147,7 @@ impl Data {
 			keys.iter()
 				.map(Vec::as_slice)
 				.zip(requests.map(at!(0)))
-				.map(|(key, event)| {
-					let value = if let SendingEvent::Edu(value) = &event {
-						&**value
-					} else {
-						&[]
-					};
-
-					(key, value)
-				}),
+				.map(|(key, event)| (key, event.value_bytes())),
 		);
 
 		keys
@@ -178,7 +184,10 @@ impl Data {
 	}
 }
 
-fn parse_servercurrentevent(key: &[u8], value: &[u8]) -> Result<(Destination, SendingEvent)> {
+pub(super) fn parse_servercurrentevent(
+	key: &[u8],
+	value: &[u8],
+) -> Result<(Destination, SendingEvent)> {
 	// Appservices start with a plus
 	Ok::<_, Error>(if key.starts_with(b"+") {
 		let mut parts = key[1..].splitn(2, |&b| b == 0xFF);
@@ -194,14 +203,14 @@ fn parse_servercurrentevent(key: &[u8], value: &[u8]) -> Result<(Destination, Se
 			Error::bad_database("Invalid server bytes in server_currenttransaction")
 		})?;
 
-		(
-			Destination::Appservice(server),
-			if value.is_empty() {
-				SendingEvent::Pdu(event.into())
-			} else {
-				SendingEvent::Edu(value.into())
-			},
-		)
+		let decoded = match value {
+			| [] => SendingEvent::Pdu(event.into()),
+			| [TAG_TO_DEVICE, ..] => SendingEvent::ToDevice(value.into()),
+			| [TAG_DEVICE_LIST_CHANGED, ..] => SendingEvent::DeviceListChanged(value.into()),
+			| _ => SendingEvent::Edu(value.into()),
+		};
+
+		(Destination::Appservice(server), decoded)
 	} else if key.starts_with(b"$") {
 		let mut parts = key[1..].splitn(3, |&b| b == 0xFF);
 

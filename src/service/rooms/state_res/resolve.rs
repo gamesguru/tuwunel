@@ -169,13 +169,13 @@ where
 		let lean = rezzy::LeanEvent {
 			event_id: pdu.event_id().to_owned(),
 			event_type: pdu.kind().to_string(),
-			state_key: pdu.state_key().map(|sk| sk.to_string()),
+			state_key: pdu.state_key().map(std::borrow::ToOwned::to_owned),
 			power_level: sender_power,
 			origin_server_ts: pdu.origin_server_ts().get().into(),
 			sender: pdu.sender().to_string(),
 			content: pdu.get_content_as_value(),
-			prev_events: pdu.prev_events().map(|e| e.to_owned()).collect(),
-			auth_events: pdu.auth_events().map(|e| e.to_owned()).collect(),
+			prev_events: pdu.prev_events().map(ToOwned::to_owned).collect(),
+			auth_events: pdu.auth_events().map(ToOwned::to_owned).collect(),
 			depth: pdu.as_pdu().depth.into(),
 		};
 

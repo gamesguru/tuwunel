@@ -81,18 +81,18 @@ impl Server {
 fn can_build(args: &crate::Args<'_>) -> bool {
 	let has_idp = !args.server.config.identity_provider.is_empty();
 	let has_cwk = args.server.config.well_known.client.is_some();
+	let native = args.server.config.oidc_native_auth;
 
-	if has_idp && !has_cwk {
-		warn!(
-			"OIDC server (Next-gen auth) requires `well_known.client` to be configured to serve \
-			 your `identity_provider`."
-		);
+	if (has_idp || native) && !has_cwk {
+		warn!("OIDC server (Next-gen auth) requires `well_known.client` to be configured.");
+
+		return false;
 	}
 
-	if !has_idp || !has_cwk {
+	if !has_idp && !native {
 		debug_warn!(
-			"OIDC server (Next-gen auth) requires at least one `identity_provider` to be \
-			 configured."
+			"OIDC server (Next-gen auth) requires at least one `identity_provider`, or \
+			 `oidc_native_auth` to be enabled."
 		);
 
 		return false;

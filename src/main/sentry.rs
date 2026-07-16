@@ -7,8 +7,8 @@ use std::{
 
 use reqwest::{Certificate, Client, ClientBuilder, Proxy};
 use sentry::{
-	Breadcrumb, ClientOptions, Level, Transport,
-	transports::ReqwestHttpTransport,
+	Breadcrumb, ClientOptions, Level, Transport, TransportOptions,
+	transports::ReqwestHttpTransportOptions,
 	types::{
 		Dsn,
 		protocol::v7::{Context, Event},
@@ -89,7 +89,14 @@ fn build_transport(options: &ClientOptions) -> Arc<dyn Transport> {
 		.build()
 		.expect("reqwest client must build for sentry transport");
 
-	Arc::new(ReqwestHttpTransport::with_client(options, client))
+	let transport_options = TransportOptions::try_from_client_options(options)
+		.expect("sentry client options must have a DSN");
+
+	let transport = ReqwestHttpTransportOptions::from(transport_options)
+		.with_client(client)
+		.build();
+
+	Arc::new(transport)
 }
 
 fn before_send(event: Event<'static>) -> Option<Event<'static>> {

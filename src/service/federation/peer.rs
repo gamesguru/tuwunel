@@ -1,9 +1,20 @@
 //! Per-server reachability store backed by the `servername_status` CF.
 //!
-//! Bucket key layout: `servername || u64_be(now.as_secs() / window_secs)`. The
-//! one-byte value is the [`Classification`]. Bursts within the same window
-//! collide on the same key, which is a correct collision (the window is the
-//! coalescing quantum). The storage layout is the batch.
+//! Each failure writes one row keyed `(servername, bucket)` with
+//! `bucket = now.as_secs() / window_secs`; the tuple codec joins the parts with
+//! `ser::SEP`, so the on-disk key is `servername || SEP || u64_be(bucket)`. The
+//! value is the [`Classification`] byte, optionally trailed by the failure
+//! instant as `u64_be` seconds. Two failures in one window collide on the same
+//! key (a correct collision: the window is the coalescing quantum) and two
+//! failures in different windows produce two rows, so a failure is always a
+//! blind write and never a read-modify-write.
+//!
+//! `should_attempt` scans a server's rows: the newest failure is the backoff
+//! anchor (its recorded instant) and the window span between the oldest and
+//! newest surviving rows is the streak, so the gate and the `earliest_retry`
+//! it reports are one comparison and stay coherent when the clock crosses a
+//! window boundary. `record_success` and `note_peer_alive` clear the whole
+//! prefix, so a recovered or reachable peer is immediately attemptable again.
 //!
 //! `window_secs` is sourced from `sender_timeout` at service build time so the
 //! peer-status curve does not drift from the sender's existing quadratic
@@ -16,8 +27,12 @@ use http::StatusCode;
 use ruma::ServerName;
 use tuwunel_core::{
 	Error, implement,
-	utils::{stream::TryIgnore, time::now_secs},
+	utils::{
+		stream::{ReadyExt, TryIgnore},
+		time::now_secs,
+	},
 };
+use tuwunel_database::Interfix;
 
 /// Backoff ceiling, matching `sender_retry_backoff_limit`'s 24h default.
 pub(super) const MAX_BACKOFF: Duration = Duration::from_hours(24);
@@ -67,54 +82,101 @@ pub enum ShouldAttempt {
 	Deprioritize,
 }
 
+/// Latest-failure state feeding the pure [`attempt_verdict`] decision.
+pub(super) struct Backoff {
+	pub(super) class: Classification,
+
+	/// Failure instant the delay is measured from (seconds since the epoch).
+	pub(super) anchor_secs: u64,
+
+	pub(super) streak: u32,
+
+	/// Current time (seconds since the epoch); injected for testability.
+	pub(super) now: u64,
+
+	pub(super) window_secs: u64,
+	pub(super) grace_secs: u64,
+}
+
 #[implement(super::Service)]
-pub fn record_success(&self, server: &ServerName) {
-	self.statuses.del((server, self.current_bucket()));
+pub async fn record_success(&self, server: &ServerName) {
+	self.statuses
+		.del_prefix(&(server, Interfix))
+		.await;
+}
+
+/// Clears a peer's failure rows after it has proven reachable via inbound
+/// activity, reporting whether any were present so the caller flushes only for
+/// a peer that was actually sad. The healthy-peer miss writes no tombstone.
+#[implement(super::Service)]
+#[tracing::instrument(
+	level = "trace",
+	skip(self),
+	fields(
+		%server,
+	),
+)]
+pub async fn note_peer_alive(&self, server: &ServerName) -> bool {
+	let prefix = (server, Interfix);
+	let sad = self
+		.statuses
+		.stream_prefix_raw(&prefix)
+		.ignore_err()
+		.ready_any(|_| true)
+		.await;
+
+	if sad {
+		self.statuses.del_prefix(&prefix).await;
+	}
+
+	sad
 }
 
 #[implement(super::Service)]
 pub fn record_failure(&self, server: &ServerName, classification: Classification) {
+	// Raw-value additive extension; old one-byte rows stay readable.
+	let mut value = [0_u8; 9];
+	value[0] = u8::from(classification);
+	value[1..].copy_from_slice(&now_secs().to_be_bytes());
+
 	self.statuses
-		.put_raw((server, self.current_bucket()), [u8::from(classification)]);
+		.put_raw((server, self.current_bucket()), value);
 }
 
 #[implement(super::Service)]
 #[tracing::instrument(skip(self), fields(%server), level = "trace")]
 pub async fn should_attempt(&self, server: &ServerName) -> ShouldAttempt {
-	let now_bucket = self.current_bucket();
+	let window_secs = self.window_secs;
+	let latest = self
+		.statuses
+		.stream_prefix(&(server, Interfix))
+		.ignore_err()
+		.ready_fold(None, |state, ((_, bucket), value): ((&ServerName, u64), &[u8])| {
+			let anchor_secs =
+				failure_secs(value).unwrap_or_else(|| bucket.saturating_mul(window_secs));
 
-	let Ok(handle) = self.statuses.qry(&(server, now_bucket)).await else {
+			let oldest_bucket = state.map_or(bucket, |(_, _, oldest, _)| oldest);
+
+			Some((classify(value), anchor_secs, oldest_bucket, bucket))
+		})
+		.await;
+
+	let Some((class, anchor_secs, oldest_bucket, latest_bucket)) = latest else {
 		return ShouldAttempt::Yes;
 	};
 
-	if matches!(classify(handle.as_ref()), Classification::Permanent) {
-		return ShouldAttempt::No {
-			earliest_retry: self
-				.bucket_start(now_bucket)
-				.checked_add(MAX_BACKOFF)
-				.unwrap_or_else(SystemTime::now),
-		};
-	}
-
-	// streak walks back until the first gap; async `contains` predicate
-	// forces an imperative loop rather than `take_while`.
-	let mut streak: u32 = 1;
-	while streak < self.n_max {
-		let prior = now_bucket.saturating_sub(u64::from(streak));
-		if !self.statuses.contains(&(server, prior)).await {
-			break;
-		}
-		streak = streak.saturating_add(1);
-	}
-
-	ShouldAttempt::No {
-		earliest_retry: self.earliest_retry(now_bucket, streak),
-	}
+	attempt_verdict(&Backoff {
+		class,
+		anchor_secs,
+		streak: self.streak(latest_bucket, oldest_bucket),
+		now: now_secs(),
+		window_secs,
+		grace_secs: self.grace.as_secs(),
+	})
 }
 
-/// Yields one tuple per populated bucket, ordered by `(server, bucket_start)`.
-/// The admin/metrics consumer groups adjacent rows per server to reconstruct
-/// streak and latest-failure information.
+/// Yields one tuple per populated bucket, ordered by `(server, bucket_start)`,
+/// backing the admin `peer-status snapshot` table.
 #[implement(super::Service)]
 pub fn peer_snapshot(
 	&self,
@@ -150,25 +212,71 @@ fn bucket_start(&self, bucket: u64) -> SystemTime {
 #[implement(super::Service)]
 #[inline]
 #[must_use]
-fn earliest_retry(&self, current_bucket: u64, streak: u32) -> SystemTime {
-	let window = Duration::from_secs(self.window_secs);
-	let delay = window
-		.saturating_mul(streak)
-		.saturating_mul(streak)
-		.min(MAX_BACKOFF);
+fn streak(&self, latest_bucket: u64, oldest_bucket: u64) -> u32 {
+	let span = latest_bucket
+		.saturating_sub(oldest_bucket)
+		.saturating_add(1);
 
-	self.bucket_start(current_bucket)
-		.checked_add(delay)
-		.unwrap_or_else(SystemTime::now)
+	u32::try_from(span)
+		.unwrap_or(u32::MAX)
+		.min(self.n_max)
+}
+
+/// Pure backoff verdict from a peer's latest failure state. `Permanent` and a
+/// saturating `window * streak^2` curve both cap at [`MAX_BACKOFF`]; a lone
+/// `Transient` failure gets the `grace` tier when it is enabled.
+#[must_use]
+pub(super) fn attempt_verdict(backoff: &Backoff) -> ShouldAttempt {
+	let &Backoff {
+		class,
+		anchor_secs,
+		streak,
+		now,
+		window_secs,
+		grace_secs,
+	} = backoff;
+
+	let max_backoff = MAX_BACKOFF.as_secs();
+	let delay = match class {
+		| Classification::Permanent => max_backoff,
+		| Classification::Transient if streak <= 1 && grace_secs != 0 =>
+			grace_secs.min(max_backoff),
+		| Classification::Transient => window_secs
+			.saturating_mul(u64::from(streak))
+			.saturating_mul(u64::from(streak))
+			.min(max_backoff),
+	};
+
+	let earliest_secs = anchor_secs.saturating_add(delay);
+
+	if now >= earliest_secs {
+		return ShouldAttempt::Yes;
+	}
+
+	ShouldAttempt::No {
+		earliest_retry: UNIX_EPOCH
+			.checked_add(Duration::from_secs(earliest_secs))
+			.unwrap_or_else(SystemTime::now),
+	}
 }
 
 #[inline]
 #[must_use]
-fn classify(bytes: &[u8]) -> Classification {
+pub(super) fn classify(bytes: &[u8]) -> Classification {
 	bytes
 		.first()
 		.copied()
 		.map_or(Classification::Transient, Classification::from_byte)
+}
+
+/// Failure instant (seconds since the epoch) recorded after the classification
+/// byte; old single-byte rows carry no timestamp and yield `None`.
+#[must_use]
+pub(super) fn failure_secs(bytes: &[u8]) -> Option<u64> {
+	bytes
+		.get(1..9)
+		.and_then(|tail| tail.try_into().ok())
+		.map(u64::from_be_bytes)
 }
 
 /// Classifies a failed federation attempt for the peer-reachability store, or

@@ -19,10 +19,15 @@ pub(super) use self::{
 	args::Args as Ruma, auth::auth_uiaa, client_ip::ClientIp, response::RumaResponse,
 	state::State,
 };
-use crate::{client, oidc, server};
+use crate::{
+	client::{self, mas_active},
+	oidc::{self, native_get_route, native_submit_route},
+	server,
+};
 
 pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 	let config = &server.config;
+	let mas_active = mas_active(config);
 	let router = register_client_auth_routes(router);
 	let router = register_mas_routes(router);
 	let router = register_client_profile_and_data_routes(router);
@@ -31,6 +36,12 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 	let router = register_client_state_and_sync_routes(router);
 	let router = register_client_media_and_device_routes(router);
 	let router = register_client_misc_routes(router);
+	let router = register_synapse_admin_users_routes(router, mas_active);
+	let router = register_synapse_admin_devices_routes(router, mas_active);
+	let router = register_synapse_admin_rooms_routes(router);
+	let router = register_synapse_admin_media_routes(router);
+	let router = register_synapse_admin_federation_routes(router);
+	let router = register_synapse_admin_misc_routes(router);
 	let router = register_oidc_routes(router);
 	let router = register_server_misc_routes(router);
 	let router = register_federation_routes(router, config.allow_federation);
@@ -69,8 +80,6 @@ fn register_client_auth_routes(router: Router<State>) -> Router<State> {
 		.ruma_route(&client::suspend_user_route)
 		.ruma_route(&client::is_user_locked_route)
 		.ruma_route(&client::lock_user_route)
-		.ruma_route(&client::admin_register_nonce_route)
-		.ruma_route(&client::admin_register_route)
 }
 
 fn register_mas_routes(router: Router<State>) -> Router<State> {
@@ -89,15 +98,126 @@ fn register_mas_routes(router: Router<State>) -> Router<State> {
 		.ruma_route(&client::mas::sync_devices_route)
 }
 
+fn register_synapse_admin_users_routes(router: Router<State>, mas_active: bool) -> Router<State> {
+	let router = router
+		.ruma_route(&client::users::admin_list_users_v2_route)
+		.ruma_route(&client::users::admin_list_users_v3_route)
+		.ruma_route(&client::users::admin_get_details_route)
+		.ruma_route(&client::users::admin_create_or_modify_route)
+		.ruma_route(&client::users::admin_deactivate_account_route)
+		.ruma_route(&client::users::admin_list_joined_rooms_route)
+		.ruma_route(&client::users::admin_memberships_route)
+		.ruma_route(&client::users::admin_pushers_route)
+		.ruma_route(&client::users::admin_account_data_route)
+		.ruma_route(&client::users::admin_suspend_route)
+		.ruma_route(&client::users::admin_username_available_route)
+		.ruma_route(&client::users::admin_lookup_threepid_route)
+		.ruma_route(&client::users::admin_allow_cross_signing_replacement_route)
+		// whois is served at the /_synapse admin path and the client-server admin
+		// aliases where Synapse also mounts it.
+		.route("/_synapse/admin/v1/whois/{user_id}", get(client::users::admin_whois_route))
+		.route("/_matrix/client/v3/admin/whois/{user_id}", get(client::users::admin_whois_route))
+		.route("/_matrix/client/r0/admin/whois/{user_id}", get(client::users::admin_whois_route))
+		.route(
+			"/_matrix/client/unstable/admin/whois/{user_id}",
+			get(client::users::admin_whois_route),
+		);
+
+	// The Synapse user-provisioning routes MAS owns (register pair, password
+	// reset, admin flag) are de-registered under MAS delegation, mirroring
+	// Synapse.
+	if mas_active {
+		router
+	} else {
+		router
+			.ruma_route(&client::admin_register_nonce_route)
+			.ruma_route(&client::admin_register_route)
+			.ruma_route(&client::users::admin_reset_password_route)
+			.ruma_route(&client::users::admin_is_user_admin_route)
+	}
+}
+
+fn register_synapse_admin_devices_routes(
+	router: Router<State>,
+	mas_active: bool,
+) -> Router<State> {
+	let router = router
+		.ruma_route(&client::devices::admin_list_devices_route)
+		.ruma_route(&client::devices::admin_create_device_route)
+		.ruma_route(&client::devices::admin_get_device_route)
+		.ruma_route(&client::devices::admin_update_device_route)
+		.ruma_route(&client::devices::admin_delete_device_route)
+		.ruma_route(&client::devices::admin_delete_devices_route);
+
+	// Registration-token administration is de-registered under MAS, mirroring
+	// Synapse.
+	if mas_active {
+		router
+	} else {
+		router
+			.ruma_route(&client::tokens::admin_list_tokens_route)
+			.ruma_route(&client::tokens::admin_create_token_route)
+			.ruma_route(&client::tokens::admin_get_token_route)
+			.ruma_route(&client::tokens::admin_update_token_route)
+			.ruma_route(&client::tokens::admin_delete_token_route)
+	}
+}
+
+fn register_synapse_admin_rooms_routes(router: Router<State>) -> Router<State> {
+	router
+		.ruma_route(&client::rooms::admin_list_rooms_route)
+		.ruma_route(&client::rooms::admin_room_details_route)
+		.ruma_route(&client::rooms::admin_room_members_route)
+		.ruma_route(&client::rooms::admin_join_room_route)
+		.ruma_route(&client::rooms::admin_get_room_block_route)
+		.ruma_route(&client::rooms::admin_set_room_block_route)
+		.ruma_route(&client::rooms::admin_make_room_admin_route)
+		.ruma_route(&client::rooms::admin_delete_room_v1_route)
+		.ruma_route(&client::rooms::admin_delete_room_v2_route)
+		.ruma_route(&client::rooms::admin_delete_status_by_id_route)
+		.ruma_route(&client::rooms::admin_delete_status_by_room_route)
+		.ruma_route(&client::rooms::admin_get_forward_extremities_route)
+		.ruma_route(&client::rooms::admin_delete_forward_extremities_route)
+		.ruma_route(&client::rooms::admin_purge_history_route)
+		.ruma_route(&client::rooms::admin_purge_history_by_event_route)
+		.ruma_route(&client::rooms::admin_purge_history_status_route)
+		.ruma_route(&client::rooms::admin_room_state_route)
+		.ruma_route(&client::rooms::admin_room_messages_route)
+		.ruma_route(&client::rooms::admin_room_context_route)
+		.ruma_route(&client::rooms::admin_room_timestamp_to_event_route)
+		.ruma_route(&client::rooms::admin_room_hierarchy_route)
+}
+
+fn register_synapse_admin_media_routes(router: Router<State>) -> Router<State> {
+	router
+		.ruma_route(&client::admin::media::admin_delete_media_route)
+		.ruma_route(&client::admin::media::admin_list_user_media_route)
+		.ruma_route(&client::admin::media::admin_delete_user_media_route)
+		.route(
+			"/_synapse/admin/v1/media/delete",
+			post(client::admin::media::admin_delete_media_by_date_size_route),
+		)
+		// Synapse's deprecated per-server alias for the same date/size purge.
+		.route(
+			"/_synapse/admin/v1/media/{server_name}/delete",
+			post(client::admin::media::admin_delete_media_by_date_size_route),
+		)
+}
+
+fn register_synapse_admin_federation_routes(router: Router<State>) -> Router<State> { router }
+
+fn register_synapse_admin_misc_routes(router: Router<State>) -> Router<State> {
+	router
+		.ruma_route(&client::misc::admin_server_version_route)
+		.ruma_route(&client::misc::admin_fetch_event_route)
+		.ruma_route(&client::misc::admin_scheduled_tasks_route)
+}
+
 fn register_client_profile_and_data_routes(router: Router<State>) -> Router<State> {
 	router
 		.ruma_route(&client::get_profile_field_route)
 		.ruma_route(&client::set_profile_field_route)
 		.ruma_route(&client::delete_profile_field_route)
-		.ruma_route(&client::set_displayname_route)
-		.ruma_route(&client::get_displayname_route)
-		.ruma_route(&client::set_avatar_url_route)
-		.ruma_route(&client::get_avatar_url_route)
 		.ruma_route(&client::get_profile_route)
 		.ruma_route(&client::set_presence_route)
 		.ruma_route(&client::get_presence_route)
@@ -281,6 +401,7 @@ fn register_oidc_routes(router: Router<State>) -> Router<State> {
 		.route("/_tuwunel/oidc/registration", post(oidc::registration_route))
 		.route("/_tuwunel/oidc/authorize", get(oidc::authorize_route))
 		.route("/_tuwunel/oidc/_complete", get(oidc::complete_route))
+		.route("/_tuwunel/oidc/native", get(native_get_route).post(native_submit_route))
 		.route("/_tuwunel/oidc/token", post(oidc::token_route))
 		.route("/_tuwunel/oidc/device_authorization", post(oidc::device_authorization_route))
 		.route("/_tuwunel/oidc/device", get(oidc::get_device_route))

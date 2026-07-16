@@ -22,7 +22,7 @@ use tuwunel_core::{
 	matrix::room_version,
 	pdu::AuthEvents,
 	smallvec::SmallVec,
-	trace, utils,
+	trace,
 	utils::{
 		IterStream,
 		stream::{BroadbandExt, ReadyExt, TryExpect, automatic_width},
@@ -393,8 +393,11 @@ where
 
 	// If header is invalid, fall back to standard array parsing.
 	let chain = bytes
-		.chunks_exact(size_of::<u64>())
-		.map(utils::u64_from_u8)
+		.as_chunks::<{ size_of::<u64>() }>()
+		.0
+		.iter()
+		.copied()
+		.map(u64::from_be_bytes)
 		.collect();
 
 	Ok(chain)

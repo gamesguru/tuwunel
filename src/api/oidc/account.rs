@@ -14,17 +14,16 @@ use axum::{
 	extract::{Form, Request, State},
 	response::{Html, IntoResponse, Redirect, Response},
 };
-use futures::StreamExt;
 use http::{
 	HeaderValue, Method, StatusCode,
 	header::{CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY},
 };
-use ruma::{OwnedDeviceId, OwnedRoomId};
+use ruma::OwnedDeviceId;
 use tuwunel_core::{
 	Err, Error, Result, err,
 	utils::{BoolExt, html::escape as html_escape},
 };
-use tuwunel_service::{Services, users::propagation_default};
+use tuwunel_service::Services;
 use url::Url;
 
 use self::{
@@ -37,7 +36,7 @@ use self::{
 	session_list::sessions_list_html,
 	session_view::session_view_html,
 };
-use super::url_encode;
+use super::{consume_login_token, peek_login_token, sso_redirect_url, url_encode};
 
 pub(crate) static ACCOUNT_MANAGEMENT_ACTIONS_SUPPORTED: &[&str] = &[
 	"org.matrix.profile",
@@ -58,7 +57,7 @@ static ACCOUNT_JS: &str = include_str!("account/account.js");
 /// Shared stylesheet served at `/_tuwunel/oidc/account.css`.
 static ACCOUNT_CSS: &str = include_str!("account/account.css");
 
-static ACCOUNT_HEAD: &str = r#"
+pub(super) static ACCOUNT_HEAD: &str = r#"
 	<meta charset="UTF-8">
 	<link rel="stylesheet" href="/_tuwunel/oidc/account.css">
 "#;
@@ -232,27 +231,10 @@ async fn handle_account_callback(
 				.is_false()
 				.then_some(cleaned_dn.as_str());
 
-			let all_joined_rooms: Vec<OwnedRoomId> = services
-				.state_cache
-				.rooms_joined(&user_id)
-				.map(ToOwned::to_owned)
-				.collect()
-				.await;
-
 			services
-				.users
-				.update_displayname(
-					&user_id,
-					displayname,
-					&all_joined_rooms,
-					propagation_default(
-						services
-							.server
-							.config
-							.preserve_room_profile_overrides,
-					),
-				)
-				.await;
+				.profile
+				.set_displayname(&user_id, displayname, None)
+				.await?;
 
 			profile_saved_html(&user_id, displayname).await
 		},
@@ -317,8 +299,6 @@ fn account_sso_redirect(services: &Services, action: &str, device_id: &str) -> R
 	validate_account_action(action)?;
 
 	let default_idp = account_management_idp_id(services)?;
-	let idp_id_enc = url_encode(&default_idp);
-
 	let issuer = services.oauth.get_server()?.issuer_url()?;
 	let base = issuer.trim_end_matches('/');
 
@@ -330,18 +310,12 @@ fn account_sso_redirect(services: &Services, action: &str, device_id: &str) -> R
 		.append_pair("action", action)
 		.append_pair("device_id", device_id);
 
-	let mut sso_url =
-		Url::parse(&format!("{base}/_matrix/client/v3/login/sso/redirect/{idp_id_enc}"))
-			.map_err(|_| err!(error!("Failed to build SSO URL")))?;
-
-	sso_url
-		.query_pairs_mut()
-		.append_pair("redirectUrl", callback_url.as_str());
+	let sso_url = sso_redirect_url(base, &default_idp, &callback_url)?;
 
 	Ok(Redirect::temporary(sso_url.as_str()))
 }
 
-fn account_redirect_response(redirect: Redirect) -> Response {
+pub(super) fn account_redirect_response(redirect: Redirect) -> Response {
 	let mut response = redirect.into_response();
 
 	response
@@ -357,7 +331,7 @@ fn account_redirect_response(redirect: Redirect) -> Response {
 
 // Prevent the login token in the callback URL from leaking via the Referer
 // header to any embedded resources.
-fn account_html_response(status: StatusCode, html: String) -> Response {
+pub(super) fn account_html_response(status: StatusCode, html: String) -> Response {
 	let csp = ACCOUNT_CSP.join("");
 	let headers = [
 		(CACHE_CONTROL, ACCOUNT_CACHE_CONTROL),
@@ -368,7 +342,7 @@ fn account_html_response(status: StatusCode, html: String) -> Response {
 	(status, headers, Html(html)).into_response()
 }
 
-fn account_error_response(error: &Error) -> Response {
+pub(super) fn account_error_response(error: &Error) -> Response {
 	let msg = error.sanitized_message();
 	let code = error.status_code();
 
@@ -396,33 +370,6 @@ fn account_error_page(message: &str) -> String {
 			</body>
 		</html>"#
 	)
-}
-
-/// Consume a login token (single-use authentication).
-async fn consume_login_token(
-	services: &Services,
-	token: Option<&str>,
-) -> Result<ruma::OwnedUserId> {
-	let token = token.ok_or(err!(Request(Forbidden("Missing login token"))))?;
-
-	services
-		.users
-		.find_from_login_token(token)
-		.await
-		.map_err(|_| err!(Request(Forbidden("Invalid or expired login token"))))
-}
-
-/// Verify a login token without consuming it. Used by GET handlers that embed
-/// the token in a POST confirmation form. The token is consumed later when the
-/// form is submitted.
-async fn peek_login_token(services: &Services, token: Option<&str>) -> Result<ruma::OwnedUserId> {
-	let token = token.ok_or(err!(Request(Forbidden("Missing login token"))))?;
-
-	services
-		.users
-		.peek_login_token(token)
-		.await
-		.map_err(|_| err!(Request(Forbidden("Invalid or expired login token"))))
 }
 
 fn account_management_idp_id(services: &Services) -> Result<String> {

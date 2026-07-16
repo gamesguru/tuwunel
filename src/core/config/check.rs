@@ -1,6 +1,7 @@
 use std::{env::consts::OS, fs::read_to_string, net::SocketAddr};
 
 use either::Either;
+use http::HeaderValue;
 use itertools::Itertools;
 use regex::RegexSet;
 use url::Url;
@@ -393,6 +394,18 @@ fn check_url_previews(config: &Config) -> Result {
 		));
 	}
 
+	if let Some(user_agent) = config.url_preview_user_agent.as_deref()
+		&& HeaderValue::from_str(user_agent).is_err()
+	{
+		return Err!(Config("url_preview_user_agent", "Not a valid HTTP header value."));
+	}
+
+	if let Some(user_agent) = config.url_preview_media_user_agent.as_deref()
+		&& HeaderValue::from_str(user_agent).is_err()
+	{
+		return Err!(Config("url_preview_media_user_agent", "Not a valid HTTP header value."));
+	}
+
 	Ok(())
 }
 
@@ -402,6 +415,17 @@ fn check_room_version(config: &Config) -> Result {
 			"default_room_version",
 			"Room version {:?} is not available",
 			config.default_room_version
+		));
+	}
+
+	if config
+		.default_power_level_content_override
+		.as_ref()
+		.is_some_and(|value| !value.is_object())
+	{
+		return Err!(Config(
+			"default_power_level_content_override",
+			"must be a table (a JSON object)"
 		));
 	}
 

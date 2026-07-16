@@ -4,7 +4,13 @@ mod ping;
 mod registration_info;
 pub(crate) mod request;
 
-use std::{collections::BTreeMap, ffi::OsStr, fs, iter::IntoIterator, sync::Arc};
+use std::{
+	collections::BTreeMap,
+	ffi::OsStr,
+	fs::{self, read_dir},
+	iter::IntoIterator,
+	sync::Arc,
+};
 
 use async_trait::async_trait;
 use futures::{Future, FutureExt, Stream, TryStreamExt};
@@ -57,7 +63,11 @@ impl crate::Service for Service {
 		}
 
 		if let Some(appservice_dir) = &self.services.config.appservice_dir {
-			for dir_entry in fs::read_dir(appservice_dir)? {
+			let entries = read_dir(appservice_dir).map_err(|e| {
+				err!(Config("appservice_dir", "Failed to read {appservice_dir:?}: {e}"))
+			})?;
+
+			for dir_entry in entries {
 				let path = dir_entry?.path();
 
 				if !path.is_file()
@@ -183,6 +193,16 @@ impl Service {
 			.map(|info| info.registration)
 	}
 
+	/// Retrieve a registration with its compiled namespaces (`sender`,
+	/// `is_user_match`), which a bare `Registration` lacks.
+	pub async fn get_registration_info(&self, id: &str) -> Option<RegistrationInfo> {
+		self.registration_info
+			.read()
+			.await
+			.get(id)
+			.cloned()
+	}
+
 	pub async fn find_from_access_token(&self, token: &str) -> Result<RegistrationInfo> {
 		self.read()
 			.await
@@ -198,6 +218,14 @@ impl Service {
 			.await
 			.values()
 			.any(|info| info.is_exclusive_user_match(user_id))
+	}
+
+	/// Checks if a given user id matches any appservice's user namespace.
+	pub async fn is_interested_in_user(&self, user_id: &UserId) -> bool {
+		self.read()
+			.await
+			.values()
+			.any(|info| info.is_user_match(user_id))
 	}
 
 	/// Checks if a given room alias matches any exclusive appservice regex

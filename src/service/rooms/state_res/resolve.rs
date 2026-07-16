@@ -3,8 +3,6 @@ mod tests;
 
 mod auth_difference;
 mod conflicted_subgraph;
-mod iterative_auth_check;
-mod mainline_sort;
 mod power_sort;
 mod split_conflicted;
 
@@ -33,11 +31,6 @@ use tuwunel_core::{
 use self::{
 	auth_difference::auth_difference, conflicted_subgraph::conflicted_subgraph_dfs,
 	power_sort::power_level_for_pdu_sender, split_conflicted::split_conflicted_state,
-};
-#[cfg(test)]
-use self::{
-	iterative_auth_check::iterative_auth_check, mainline_sort::mainline_sort,
-	power_sort::power_sort,
 };
 #[cfg(test)]
 use super::test_utils;
@@ -169,7 +162,7 @@ where
 		let lean = rezzy::LeanEvent {
 			event_id: pdu.event_id().to_owned(),
 			event_type: pdu.kind().to_string(),
-			state_key: pdu.state_key().map(std::borrow::ToOwned::to_owned),
+			state_key: pdu.state_key().map(ToOwned::to_owned),
 			power_level: sender_power,
 			origin_server_ts: pdu.origin_server_ts().get().into(),
 			sender: pdu.sender().to_string(),

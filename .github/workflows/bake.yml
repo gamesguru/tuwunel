@@ -180,7 +180,10 @@ jobs:
       if: ${{ (github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && !contains(matrix.bake_target, 'complement') }}
       uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
       with:
-        toolchain: ${{ matrix.rust_toolchain == 'nightly' && 'nightly' || 'stable' }}
+        # Pin to the same nightly the dockerized build uses (inputs.rust_nightly)
+        # rather than a bare floating "nightly", so forks don't get tripped up
+        # by lints/behavior that landed in rustc after the pinned date.
+        toolchain: ${{ matrix.rust_toolchain == 'nightly' && inputs.rust_nightly || 'stable' }}
         components: rustfmt, clippy
 
     - name: Run Host Task (Fork)

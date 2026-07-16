@@ -36,45 +36,22 @@ async fn test_event_sort() {
 			.finish(),
 	);
 
-	let rules = RoomVersionRules::V6;
 	let events = INITIAL_EVENTS();
-
-	let auth_chain = Default::default();
-
-	let sorted_power_events = super::power_sort(&rules, &auth_chain, &async |id| {
-		events.get(&id).cloned().ok_or_else(not_found)
-	})
-	.await
-	.unwrap();
-
-	let sorted_power_events = sorted_power_events
-		.iter()
-		.stream()
-		.map(AsRef::as_ref);
-
-	let resolved_power =
-		super::iterative_auth_check(&rules, sorted_power_events, StateMap::new(), &async |id| {
-			events.get(&id).cloned().ok_or_else(not_found)
-		})
-		.await
-		.expect("iterative auth check failed on resolved events");
+	let lean_events = to_lean_map(&events);
 
 	// don't remove any events so we know it sorts them all correctly
 	let mut events_to_sort = events.keys().cloned().collect::<Vec<_>>();
 
 	events_to_sort.shuffle(&mut rand::rng());
 
-	let power_level = resolved_power
-		.get(&(StateEventType::RoomPowerLevels, "".into()))
-		.cloned();
+	let mut refs = events_to_sort
+		.iter()
+		.map(|id| &lean_events[id])
+		.collect::<Vec<_>>();
 
-	let events_to_sort = events_to_sort.iter().stream().map(AsRef::as_ref);
-
-	let sorted_event_ids = super::mainline_sort(power_level, events_to_sort, &async |id| {
-		events.get(&id).cloned().ok_or_else(not_found)
-	})
-	.await
-	.unwrap();
+	// No mainline: every event has an equal (zero) mainline position, so the
+	// tie-break of ascending `origin_server_ts` determines the final order.
+	rezzy::resolve::sorting::mainline_sort(&mut refs, &[], &lean_events);
 
 	assert_eq!(
 		vec![
@@ -87,9 +64,8 @@ async fn test_event_sort() {
 			"$START:foo",
 			"$END:foo"
 		],
-		sorted_event_ids
-			.iter()
-			.map(ToString::to_string)
+		refs.iter()
+			.map(|ev| ev.event_id.to_string())
 			.collect::<Vec<_>>()
 	);
 }
@@ -1020,19 +996,50 @@ async fn mainline_sort_no_pl_ancestor_sorts_first() {
 			.map(|e| (e.event_id().to_owned(), e))
 			.collect();
 
+	let lean_events = to_lean_map(&events);
+
+	// The mainline is the chain of power-levels events reachable from the
+	// currently resolved PL (PL3), nearest first.
+	let mainline = vec![event_id("PL3"), event_id("PL2"), event_id("PL1")];
+
 	let to_sort = [event_id("OLDEST_ROOTED"), event_id("CURRENT_ROOTED"), event_id("NO_PL")];
+	let mut refs = to_sort
+		.iter()
+		.map(|id| &lean_events[id])
+		.collect::<Vec<_>>();
 
-	let sorted = super::mainline_sort(
-		Some(event_id("PL3")),
-		to_sort.iter().map(AsRef::as_ref).stream(),
-		&async |id| events.get(&id).cloned().ok_or_else(not_found),
-	)
-	.await
-	.unwrap();
+	rezzy::resolve::sorting::mainline_sort(&mut refs, &mainline, &lean_events);
 
-	assert_eq!(sorted, vec![
-		event_id("NO_PL"),
-		event_id("OLDEST_ROOTED"),
-		event_id("CURRENT_ROOTED"),
-	]);
+	assert_eq!(
+		refs.iter()
+			.map(|ev| ev.event_id.clone())
+			.collect::<Vec<_>>(),
+		vec![event_id("NO_PL"), event_id("OLDEST_ROOTED"), event_id("CURRENT_ROOTED")]
+	);
+}
+
+/// Converts a [`PduEvent`] into the `rezzy::LeanEvent` shape used by the
+/// production sort/resolve entry points in `resolve.rs`.
+fn to_lean(pdu: &PduEvent) -> rezzy::LeanEvent<OwnedEventId> {
+	rezzy::LeanEvent {
+		event_id: pdu.event_id().to_owned(),
+		event_type: pdu.kind().to_string(),
+		state_key: pdu.state_key().map(ToOwned::to_owned),
+		power_level: 0,
+		origin_server_ts: pdu.origin_server_ts().get().into(),
+		sender: pdu.sender().to_string(),
+		content: pdu.get_content_as_value(),
+		prev_events: pdu.prev_events().map(ToOwned::to_owned).collect(),
+		auth_events: pdu.auth_events().map(ToOwned::to_owned).collect(),
+		depth: pdu.as_pdu().depth.into(),
+	}
+}
+
+fn to_lean_map(
+	events: &HashMap<OwnedEventId, PduEvent>,
+) -> HashMap<OwnedEventId, rezzy::LeanEvent<OwnedEventId>> {
+	events
+		.iter()
+		.map(|(id, pdu)| (id.clone(), to_lean(pdu)))
+		.collect()
 }

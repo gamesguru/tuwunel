@@ -339,3 +339,19 @@ impl Ord for Pdu {
 impl PartialOrd for Pdu {
 	fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
 }
+
+impl rezzy::DagNode for Pdu {
+	type Id = OwnedEventId;
+
+	#[inline]
+	fn event_id(&self) -> &Self::Id { &self.event_id }
+
+	#[inline]
+	fn depth(&self) -> u64 { self.depth.into() }
+
+	#[inline]
+	fn prev_events(&self) -> &[Self::Id] { &self.prev_events }
+
+	#[inline]
+	fn auth_events(&self) -> &[Self::Id] { &self.auth_events }
+}

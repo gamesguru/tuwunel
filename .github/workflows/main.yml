@@ -102,18 +102,6 @@ on:
         type: boolean
         default: true
         description: Enable Complement Crypto tests
-      enable_test_complement_interop:
-        type: boolean
-        default: false
-        description: "Interop: run Complement against a foreign homeserver"
-      enable_test_complement_interop_inverse:
-        type: boolean
-        default: false
-        description: "Interop: run Complement with the foreign homeserver as hs1"
-      complement_interop_run:
-        type: string
-        default: '.*'
-        description: "Interop: test selector regex"
       playwright_shards:
         type: string
         default: '1'
@@ -122,30 +110,6 @@ on:
         type: string
         default: '1'
         description: "Playwright: workers per shard"
-      enable_package_book:
-        type: boolean
-        default: true
-        description: "Enable packaging of mdbook documentation"
-      enable_package_docs:
-        type: boolean
-        default: true
-        description: "Enable packaging of rustdoc api documentation"
-      enable_package_binary:
-        type: boolean
-        default: true
-        description: "Enable packaging of executable binaries"
-      enable_package_container:
-        type: boolean
-        default: true
-        description: "Enable packaging of container images"
-      enable_package_distro:
-        type: boolean
-        default: false
-        description: "Enable packaging of distribution packages"
-      enable_package_checks:
-        type: boolean
-        default: false
-        description: "Enable testing of built distribution packages"
 
 concurrency:
   group: ${{github.workflow}}-${{github.ref}}

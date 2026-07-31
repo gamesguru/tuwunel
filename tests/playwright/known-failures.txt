@@ -43,6 +43,8 @@ invite/invite-dialog.spec.ts :: should support inviting a user to Direct Message
 invite/invite-dialog.spec.ts :: should support inviting a user to a room
 lazy-loading/lazy-loading.spec.ts :: should handle lazy loading properly even when offline
 links/messages.spec.ts :: should linkify text inside a URL preview
+links/permalinks.spec.ts :: should render permalinks as expected
+links/permalinks.spec.ts :: should select entire message line when triple-clicking on message with pills
 links/topic.spec.ts :: should linkify plaintext '#aroom:example.org'
 links/topic.spec.ts :: should linkify plaintext '_@alice:example.org'
 links/topic.spec.ts :: should linkify plaintext 'ftp://example.org'

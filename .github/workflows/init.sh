@@ -150,6 +150,14 @@ fi
 
 set -eux
 
+# Runners on forked repos carry labels absent from the JSON maps above
+# (e.g. a fork's self-hosted runner name); fall back to the "aws" defaults
+# rather than failing the jq lookup.
+reserved_space=$(echo -n "$reserved_space" | jq -r --arg r "$runner" '.[$r] // .["aws"]')
+max_used_space=$(echo -n "$max_used_space" | jq -r --arg r "$runner" '.[$r] // .["aws"]')
+min_free_space=$(echo -n "$min_free_space" | jq -r --arg r "$runner" '.[$r] // .["aws"]')
+safety_free_space=$(echo -n "$safety_free_space" | jq -r --arg r "$runner" '.[$r] // .["aws"]')
+
 cat <<EOF > ./buildkitd.toml
 [system]
   platformsCacheMaxAge = "504h"

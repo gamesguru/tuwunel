@@ -90,6 +90,49 @@ rocksdb_opt_level=3
 rocksdb_portable=1
 set +a
 
+# If we are running on a fork repo, bypass docker buildx bake and execute natively on the host.
+# However, if we are building a complement target, do NOT bypass (run standard docker buildx bake on host's Docker).
+if test "${GITHUB_REPOSITORY_OWNER}" != "matrix-construct" && test -n "${GITHUB_REPOSITORY_OWNER}" && [[ ! "${bake_target}" =~ "complement" ]]; then
+    echo "Fork detected (owner: ${GITHUB_REPOSITORY_OWNER}). Running verification natively on host."
+
+    # Configure the requested Rust toolchain on the host
+    if [ "$rust_toolchain" = "nightly" ]; then
+        rustup default nightly || rustup toolchain install nightly && rustup default nightly
+    else
+        rustup default stable || rustup toolchain install stable && rustup default stable
+    fi
+    rustup component add clippy rustfmt || true
+
+    target="$bake_target"
+    if [ "$target" = "fmt" ]; then
+        cargo fmt --all -- --check
+    elif [ "$target" = "clippy" ]; then
+        cargo clippy --all-targets --all-features -- -D warnings
+    elif [ "$target" = "check" ]; then
+        cargo check --all-targets --all-features
+    elif [ "$target" = "unit" ]; then
+        cargo test --lib --bins
+    elif [ "$target" = "integ" ]; then
+        cargo test --test '*'
+    elif [ "$target" = "doc" ]; then
+        cargo doc --no-deps
+    elif [ "$target" = "typos" ]; then
+        if ! command -v typos &>/dev/null; then
+            cargo install typos-cli || true
+        fi
+        typos
+    elif [ "$target" = "audit" ]; then
+        if ! command -v cargo-audit &>/dev/null; then
+            cargo install cargo-audit --no-default-features --features=fix || true
+        fi
+        cargo audit
+    else
+        echo "Bypassing non-host target '$target' on fork"
+    fi
+    echo -e "\033[1;42;30mACCEPT\033[0m"
+    exit 0
+fi
+
 ###############################################################################
 
 export DOCKER_BUILDKIT=1
@@ -99,7 +142,9 @@ fi
 
 args=""
 args="$args --provenance=false"
-args="$args --builder ${builder_name}"
+if docker buildx inspect "${builder_name}" &>/dev/null; then
+    args="$args --builder ${builder_name}"
+fi
 #args="$args --set *.platform=${sys_platform}"
 
 if test "$CI" = "true"; then

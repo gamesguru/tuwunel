@@ -3,7 +3,8 @@ name: Main
 on:
   push:
     branches:
-      - "**"
+      - "main"
+      - "test"
     tags:
       - "v*"
   pull_request:
@@ -77,18 +78,30 @@ on:
         type: boolean
         default: false
         description: Enable publication stage
-      enable_test_complement_interop:
+      enable_test_playwright:
         type: boolean
         default: false
-        description: "Interop: run Complement against a foreign homeserver"
-      enable_test_complement_interop_inverse:
+        description: Enable Playwright tests
+      enable_audit:
         type: boolean
         default: false
-        description: "Interop: run Complement with the foreign homeserver as hs1"
-      complement_interop_run:
-        type: string
-        default: '.*'
-        description: "Interop: test selector regex"
+        description: Enable auditing stage
+      enable_test_unit:
+        type: boolean
+        default: true
+        description: Enable unit tests
+      enable_test_smoke:
+        type: boolean
+        default: false
+        description: Enable smoke tests
+      enable_test_complement:
+        type: boolean
+        default: true
+        description: Enable Complement tests
+      enable_test_complement_crypto:
+        type: boolean
+        default: true
+        description: Enable Complement Crypto tests
       playwright_shards:
         type: string
         default: '1'
@@ -146,33 +159,36 @@ jobs:
       enable_test_bench: ${{fromJSON(inputs.enable_test_bench || 'true')}}
       enable_test_memcheck: ${{fromJSON(inputs.enable_test_memcheck || env.is_test)}}
       enable_test_smoke: ${{fromJSON(inputs.enable_test_smoke || env.is_fat || 'false')}}
-      enable_test_nix: ${{fromJSON(inputs.enable_test_nix || 'true')}}
-      enable_test_rustsdk: ${{fromJSON(inputs.enable_test_rustsdk || 'true')}}
-      enable_test_complement: ${{fromJSON(inputs.enable_test_complement || 'true')}}
+      enable_test_nix: ${{fromJSON(inputs.enable_test_nix || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      enable_test_rustsdk: ${{fromJSON(inputs.enable_test_rustsdk || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      # Complement runs standalone via complement.yml so it shows as its own
+      # status check; keep it off here by default to avoid running it twice
+      # per push/PR. Still overridable via manual dispatch.
+      enable_test_complement: ${{fromJSON(inputs.enable_test_complement || 'false')}}
       enable_test_complement_debug: ${{fromJSON(inputs.enable_test_complement_debug || 'true')}}
       complement_verbose: ${{fromJSON(inputs.complement_verbose || 'false')}}
-      complement_runner: 'het'
-      enable_test_complement_crypto: ${{fromJSON(inputs.enable_test_complement_crypto || 'true')}}
+      complement_runner: ${{ (github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && 'ubuntu-latest' || 'het' }}
+      enable_test_complement_crypto: ${{fromJSON(inputs.enable_test_complement_crypto || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
       complement_crypto_verbose: ${{fromJSON(inputs.complement_crypto_verbose || 'false')}}
-      enable_test_complement_interop: ${{fromJSON(inputs.enable_test_complement_interop || 'true')}}
-      enable_test_complement_interop_inverse: ${{fromJSON(inputs.enable_test_complement_interop_inverse || 'true')}}
+      enable_test_complement_interop: ${{fromJSON(inputs.enable_test_complement_interop || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      enable_test_complement_interop_inverse: ${{fromJSON(inputs.enable_test_complement_interop_inverse || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
       complement_interop_run: ${{inputs.complement_interop_run || '.*'}}
-      enable_test_mas: ${{fromJSON(inputs.enable_test_mas || 'true')}}
+      enable_test_mas: ${{fromJSON(inputs.enable_test_mas || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
       mas_verbose: ${{fromJSON(inputs.mas_verbose || 'false')}}
-      enable_test_playwright: ${{fromJSON(inputs.enable_test_playwright || env.is_branch || 'false')}}
-      playwright_runner: 'het'
+      enable_test_playwright: ${{fromJSON(inputs.enable_test_playwright || env.is_branch || 'false') && vars.TUWUNEL_GH_ACTIONS_DISABLE_HEAVY == '' && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      playwright_runner: ${{ (github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && 'ubuntu-latest' || 'het' }}
       playwright_shards: ${{inputs.playwright_shards || vars.PLAYWRIGHT_SHARDS || env.default_playwright_shards}}
       playwright_workers: ${{inputs.playwright_workers || vars.PLAYWRIGHT_WORKERS || env.default_playwright_workers}}
-      enable_package: ${{fromJSON(inputs.enable_package || 'true')}}
-      enable_package_book: ${{fromJSON(inputs.enable_package_book || 'true')}}
-      enable_package_docs: ${{fromJSON(inputs.enable_package_docs || 'true')}}
-      enable_package_binary: ${{fromJSON(inputs.enable_package_binary || env.is_fat || env.is_pull || 'false')}}
-      enable_package_container: ${{fromJSON(inputs.enable_package_container || env.is_fat || 'true')}}
+      enable_package: ${{fromJSON(inputs.enable_package || 'true') && vars.TUWUNEL_GH_ACTIONS_DISABLE_HEAVY == '' && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      enable_package_book: ${{fromJSON(inputs.enable_package_book || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      enable_package_docs: ${{fromJSON(inputs.enable_package_docs || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      enable_package_binary: ${{fromJSON(inputs.enable_package_binary || env.is_fat || env.is_pull || 'false') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      enable_package_container: ${{fromJSON(inputs.enable_package_container || env.is_fat || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
       package_containers: ${{inputs.package_containers || env.default_package_containers}}
-      enable_package_distro: ${{fromJSON(inputs.enable_package_distro || env.is_fat || 'false')}}
+      enable_package_distro: ${{fromJSON(inputs.enable_package_distro || env.is_fat || 'false') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
       package_distros: ${{inputs.package_distros || env.default_package_distros}}
-      enable_package_checks: ${{fromJSON(inputs.enable_package_checks || env.is_test || 'false')}}
-      enable_publish: ${{fromJSON(inputs.enable_publish || 'true')}}
+      enable_package_checks: ${{fromJSON(inputs.enable_package_checks || env.is_test || 'false') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork)}}
+      enable_publish: ${{fromJSON(inputs.enable_publish || 'true') && !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && vars.TUWUNEL_GH_ACTIONS_DISABLE_HEAVY == ''}}
       is_release: ${{fromJSON(env.is_release || 'false')}}
       is_main: ${{fromJSON(env.is_main || 'false')}}
       is_test: ${{fromJSON(env.is_test || 'false')}}
@@ -187,16 +203,18 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        runner: ${{fromJSON(inputs.runners || vars.RUNNERS || '["het"]')}}
+        runner: ${{fromJSON((github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) && '["ubuntu-latest"]' || inputs.runners || vars.RUNNERS || '["het"]')}}
         machine: ${{fromJSON(inputs.machines || vars.MACHINES || '["X64"]')}}
         exclude: ${{fromJSON(vars.RUNNERS_EXCLUDES || '[]')}}
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       with:
         ref: ${{inputs.checkout || github.sha}}
+        persist-credentials: false
 
     - name: Initialize Builder
+      if: ${{ !(github.repository_owner != 'matrix-construct' || github.event.repository.fork || github.event.pull_request.head.repo.fork) }}
       env:
         runner: ${{matrix.runner}}
         pipeline: ${{inputs.pipeline || github.event.head_commit.message || github.event.workflow_run.head_commit.message}}
@@ -435,6 +453,7 @@ jobs:
 
     name: Publish
     needs: [init, test, package]
+    permissions: write-all
     uses: ./.github/workflows/publish.yml
     with:
       checkout: ${{needs.init.outputs.checkout}}

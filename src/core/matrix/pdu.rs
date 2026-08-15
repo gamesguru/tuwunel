@@ -129,11 +129,13 @@ pub struct Pdu {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub unsigned: Option<Unsigned>,
 
-	//TODO: https://spec.matrix.org/v1.14/rooms/v11/#rejected-events
-	/// Whether state resolution rejected this event in test fixtures.
+	/// Whether this event was rejected under the authorization rules.
 	///
-	/// Production builds derive rejection state outside the serialized PDU.
-	#[cfg(test)]
+	/// Never part of the wire format; the event itself carries no such field
+	/// per spec. This is populated from a separate rejection marker at fetch
+	/// time (see `pdu_metadata::is_event_rejected`) by call sites that need
+	/// the verdict for auth checks, such as `event_fetch`. Any other
+	/// construction path defaults to `false`.
 	#[serde(default, skip_serializing)]
 	pub rejected: bool,
 }
@@ -327,13 +329,8 @@ where
 	#[inline]
 	fn redacts(&self) -> Option<&EventId> { self.redacts.as_deref() }
 
-	#[cfg(test)]
 	#[inline]
 	fn rejected(&self) -> bool { self.rejected }
-
-	#[cfg(not(test))]
-	#[inline]
-	fn rejected(&self) -> bool { false }
 
 	#[inline]
 	fn room_id(&self) -> &RoomId { &self.room_id }
@@ -398,13 +395,8 @@ where
 	#[inline]
 	fn redacts(&self) -> Option<&EventId> { self.redacts.as_deref() }
 
-	#[cfg(test)]
 	#[inline]
 	fn rejected(&self) -> bool { self.rejected }
-
-	#[cfg(not(test))]
-	#[inline]
-	fn rejected(&self) -> bool { false }
 
 	#[inline]
 	fn room_id(&self) -> &RoomId { &self.room_id }

@@ -26,6 +26,7 @@ struct Data {
 	tofrom_relation: Arc<Map>,
 	relatesto_typed: Arc<Map>,
 	referencedevents: Arc<Map>,
+	rejectedeventids: Arc<Map>,
 	softfailedeventids: Arc<Map>,
 }
 
@@ -63,6 +64,7 @@ impl crate::Service for Service {
 				tofrom_relation: args.db["tofrom_relation"].clone(),
 				relatesto_typed: args.db["relatesto_typed"].clone(),
 				referencedevents: args.db["referencedevents"].clone(),
+				rejectedeventids: args.db["rejectedeventids"].clone(),
 				softfailedeventids: args.db["softfailedeventids"].clone(),
 			},
 		}))

@@ -128,6 +128,30 @@ pub fn clear_event_soft_failed(&self, event_id: &EventId) {
 	self.db.softfailedeventids.remove(event_id);
 }
 
+/// Marks an event as rejected under the authorization rules.
+///
+/// Unlike a soft-fail, rejection is a permanent verdict on the event itself:
+/// the event failed auth against the state at the point it claims, so any
+/// later event citing it as an auth event must be rejected too. The event
+/// stays stored (as an outlier or otherwise) so it remains fetchable; only
+/// this marker distinguishes it from an accepted one.
+#[implement(Service)]
+#[tracing::instrument(skip(self), level = "debug")]
+pub fn mark_event_rejected(&self, event_id: &EventId) {
+	self.db.rejectedeventids.insert(event_id, []);
+}
+
+/// Whether an event carries a rejection marker.
+#[implement(Service)]
+#[tracing::instrument(skip(self), level = "debug", ret)]
+pub async fn is_event_rejected(&self, event_id: &EventId) -> bool {
+	self.db
+		.rejectedeventids
+		.get(event_id)
+		.await
+		.is_ok()
+}
+
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "debug")]
 pub async fn delete_all_referenced_for_room(&self, room_id: &RoomId) -> Result {

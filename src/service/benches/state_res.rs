@@ -457,8 +457,7 @@ where
 		prev_events,
 		depth: uint!(0),
 		hashes: EventHash::default(),
-		//#[cfg(test)]
-		//rejected: false,
+		rejected: false,
 	}
 }
 

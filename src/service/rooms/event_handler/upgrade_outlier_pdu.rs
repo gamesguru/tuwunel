@@ -108,8 +108,19 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 		)
 		.await?;
 
-	self.auth_check_outlier_pdu(room_id, &incoming_pdu, &room_rules, &state_at_incoming_event)
-		.await?;
+	if let Err(e) = self
+		.auth_check_outlier_pdu(room_id, &incoming_pdu, &room_rules, &state_at_incoming_event)
+		.await
+	{
+		// The event already exists as a stored outlier (step 7 ran before this
+		// check), so it stays fetchable; mark it so any later event citing it as
+		// an auth event is rejected too, per the auth rules.
+		self.services
+			.pdu_metadata
+			.mark_event_rejected(incoming_pdu.event_id());
+
+		return Err(e);
+	}
 
 	let soft_fail = !cleared
 		&& self

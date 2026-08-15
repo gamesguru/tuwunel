@@ -17,10 +17,7 @@ use tuwunel_core::{
 		event::gen_event_id,
 		pdu::{MAX_PREV_EVENTS, check_room_id},
 	},
-	utils::{
-		BoolExt,
-		stream::{IterStream, automatic_width},
-	},
+	utils::{BoolExt, stream::IterStream},
 };
 
 use crate::{
@@ -63,17 +60,16 @@ where
 		.await
 		.unwrap_or(has_gap);
 
-	has_gap
-		.then_async(|| {
-			self.prefetch_missing_events(
-				origin,
-				room_id,
-				incoming_event_id,
-				room_version,
-				recursion_level,
-			)
-		})
-		.await;
+	if has_gap {
+		self.prefetch_missing_events(
+			origin,
+			room_id,
+			incoming_event_id,
+			room_version,
+			recursion_level,
+		)
+		.await?;
+	}
 
 	let mut todo_outlier_stack: FuturesOrdered<_> = initial_set
 		.stream()
@@ -123,7 +119,7 @@ where
 			json_opt = self
 				.services
 				.timeline
-				.get_outlier_pdu_json(&prev_event_id)
+				.get_pdu_json(&prev_event_id)
 				.await
 				.ok();
 		}
@@ -250,7 +246,7 @@ async fn prefetch_missing_events(
 	incoming_event_id: &EventId,
 	room_version: &RoomVersionId,
 	recursion_level: usize,
-) {
+) -> Result {
 	let boundary: EventWindow = self
 		.services
 		.state
@@ -268,22 +264,19 @@ async fn prefetch_missing_events(
 		.fanout_for_op();
 
 	let Ok(outcome) = self.services.fetcher.fetch(opts).await else {
-		return;
+		return Ok(());
 	};
 
 	let Ok(events) = serde_json::from_slice::<Vec<Box<RawJsonValue>>>(&outcome.bytes) else {
-		return;
+		return Ok(());
 	};
 
-	events
-		.into_iter()
-		.stream()
-		.for_each_concurrent(automatic_width(), async |pdu| {
-			self.land_missing_event(origin, room_id, &pdu, room_version, recursion_level)
-				.await
-				.ok();
-		})
-		.await;
+	for pdu in events {
+		self.land_missing_event(origin, room_id, &pdu, room_version, recursion_level)
+			.await?;
+	}
+
+	Ok(())
 }
 
 /// Authenticate and persist one event from the missing-events batch as an
@@ -320,6 +313,7 @@ async fn land_missing_event(
 		room_version,
 		recursion_level,
 		false,
+		true,
 	))
 	.await
 	.map(|_| ())

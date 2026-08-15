@@ -96,6 +96,7 @@ where
 						room_version,
 						expected!(recursion_level + 1),
 						true,
+						false,
 					));
 
 					match outlier

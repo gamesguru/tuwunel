@@ -146,7 +146,16 @@ pub async fn handle_incoming_pdu<'a>(
 	let recursion_level = 0;
 
 	let (incoming_pdu, pdu) = self
-		.handle_outlier_pdu(origin, room_id, event_id, pdu, &room_version, recursion_level, false)
+		.handle_outlier_pdu(
+			origin,
+			room_id,
+			event_id,
+			pdu,
+			&room_version,
+			recursion_level,
+			false,
+			false,
+		)
 		.await?;
 
 	// 8. if not timeline event: stop

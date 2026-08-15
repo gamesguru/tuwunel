@@ -162,6 +162,23 @@ async fn fetch_auth_chain(
 	// b. Look at outlier pdu tree
 	// (get_pdu_json checks both)
 	if let Ok(local_pdu) = self.services.timeline.get_pdu(event_id).await {
+		let mut local_pdu = local_pdu;
+		match self
+			.services
+			.pdu_metadata
+			.is_event_rejected(event_id)
+			.await
+		{
+			| Ok(true) => local_pdu.rejected = true,
+			| Ok(false) => {},
+			| Err(e) => {
+				warn!(
+					?event_id,
+					error = %e,
+					"Failed to read rejection marker for local auth event",
+				);
+			},
+		}
 		trace!(?event_id, "Found in database");
 		return (event_id.to_owned(), Some(local_pdu), vec![]);
 	}

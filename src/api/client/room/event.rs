@@ -28,6 +28,14 @@ pub(crate) async fn get_room_event_route(
 		.get_pdu(event_id)
 		.map_err(|_| err!(Request(NotFound("Event {} not found.", event_id))));
 
+	if services
+		.pdu_metadata
+		.is_event_rejected(event_id)
+		.await?
+	{
+		return Err!(Request(NotFound("Event not found.")));
+	}
+
 	let retained_event = body
 		.include_unredacted_content
 		.then_async(async || {

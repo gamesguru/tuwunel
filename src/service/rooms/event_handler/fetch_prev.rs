@@ -88,10 +88,10 @@ where
 				.fetch_auth(origin, room_id, events, room_version, recursion_level)
 				.await?;
 
-			(event_id, auth)
+			Ok::<_, tuwunel_core::Error>((event_id, auth))
 		})
 		.map(FutureExt::boxed)
-		.collect()
+		.collect::<FuturesOrdered<_>>()
 		.await;
 
 	let mut amount = 0;
@@ -155,7 +155,7 @@ where
 						)
 						.await?;
 
-					(prev_prev, fetch)
+					Ok::<_, tuwunel_core::Error>((prev_prev, fetch))
 				};
 
 				todo_outlier_stack.push_back(fetch.boxed());

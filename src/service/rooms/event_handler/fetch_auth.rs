@@ -3,21 +3,23 @@ use std::{
 	time::Duration,
 };
 
-use futures::{FutureExt, StreamExt, TryFutureExt};
+use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, RoomId, RoomVersionId,
 	ServerName,
 };
 use tuwunel_core::{
-	Error, debug, debug_error, debug_warn, expected, implement,
+	Error, Result, debug, debug_error, debug_warn, expected, implement,
 	matrix::{PduEvent, pdu::MAX_AUTH_EVENTS},
 	trace,
-	utils::stream::{BroadbandExt, IterStream, TryBroadbandExt},
+	utils::stream::{IterStream, TryBroadbandExt},
 	warn,
 };
 
 use super::backoff::{Context, Disposition};
 use crate::fetcher::{Op, Opts};
+
+type AuthChain = (OwnedEventId, Option<PduEvent>, Vec<(OwnedEventId, CanonicalJsonObject)>);
 
 /// Find the event and auth it. Once the event is validated (steps 1 - 8)
 /// it is appended to the outliers Tree.
@@ -100,10 +102,9 @@ where
 						false,
 					));
 
-					match outlier
-						.await
-						.inspect_err(|e| warn!("Authentication of event {next_id} failed: {e:?}"))
-					{
+					match outlier.await.inspect_err(
+						|e| warn!(?next_id, error = ?e, "Authentication of event failed"),
+					) {
 						| Ok((pdu, json)) => {
 							if next_id == id {
 								pdus.push((pdu, Some(json)));
@@ -159,7 +160,7 @@ async fn fetch_auth_chain(
 	room_id: &RoomId,
 	event_id: &EventId,
 	room_version: &RoomVersionId,
-) -> Result<(OwnedEventId, Option<PduEvent>, Vec<(OwnedEventId, CanonicalJsonObject)>)> {
+) -> Result<AuthChain> {
 	// a. Look in the main timeline (pduid_pdu tree)
 	// b. Look at outlier pdu tree
 	// (get_pdu_json checks both)

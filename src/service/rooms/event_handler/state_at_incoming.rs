@@ -162,18 +162,15 @@ where
 		.map(ToOwned::to_owned)
 		.stream()
 		.broad_then(async |prev_event_id| {
-			let prev_event = match self
+			let Ok(prev_event) = self
 				.services
 				.timeline
 				.get_pdu(&prev_event_id)
 				.inspect_err(|e| debug_warn!(?prev_event_id, "Missing prev event: {e}"))
 				.await
-			{
-				| Ok(prev_event) => prev_event,
-				| Err(_) => {
-					extremity_lookup_failed.store(true, Ordering::Relaxed);
-					return None;
-				},
+			else {
+				extremity_lookup_failed.store(true, Ordering::Relaxed);
+				return None;
 			};
 			let prev_event_is_rejected = self
 				.services

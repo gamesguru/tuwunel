@@ -97,7 +97,7 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 		return Ok(None);
 	};
 
-	let (state_at_incoming_event, resolved_via) = self
+	let (state_at_incoming_event, _) = self
 		.resolve_state_at_incoming_event(
 			origin,
 			room_id,
@@ -107,6 +107,19 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 			create_event_id,
 		)
 		.await?;
+
+	trace!("Compressing state...");
+	let state_ids_compressed: Arc<CompressedState> = self
+		.services
+		.state_compressor
+		.compress_state_events(
+			state_at_incoming_event
+				.iter()
+				.map(|(ssk, eid)| (ssk, eid.borrow())),
+		)
+		.collect()
+		.map(Arc::new)
+		.await;
 
 	if let Err(e) = self
 		.auth_check_outlier_pdu(room_id, &incoming_pdu, &room_rules, &state_at_incoming_event)
@@ -118,6 +131,8 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 		self.services
 			.pdu_metadata
 			.mark_event_rejected(incoming_pdu.event_id());
+		self.cache_resolved_state(room_id, incoming_pdu.event_id(), state_ids_compressed)
+			.await;
 
 		return Err(e);
 	}
@@ -159,20 +174,7 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 		debug!(?summary, "Pruned forward extremities over the cap.");
 	}
 
-	trace!("Compressing state...");
-	let state_ids_compressed: Arc<CompressedState> = self
-		.services
-		.state_compressor
-		.compress_state_events(
-			state_at_incoming_event
-				.iter()
-				.map(|(ssk, eid)| (ssk, eid.borrow())),
-		)
-		.collect()
-		.map(Arc::new)
-		.await;
-
-	if matches!(resolved_via, ResolvedVia::Local | ResolvedVia::Fetch) && !soft_fail {
+	if !soft_fail {
 		self.cache_resolved_state(room_id, incoming_pdu.event_id(), state_ids_compressed.clone())
 			.await;
 	}

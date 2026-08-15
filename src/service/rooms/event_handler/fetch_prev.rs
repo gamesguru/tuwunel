@@ -272,8 +272,15 @@ async fn prefetch_missing_events(
 	};
 
 	for pdu in events {
-		self.land_missing_event(origin, room_id, &pdu, room_version, recursion_level)
-			.await?;
+		if let Err(e) = self
+			.land_missing_event(origin, room_id, &pdu, room_version, recursion_level)
+			.await
+		{
+			// Missing-events batches are best-effort. One malformed or rejected
+			// event should not prevent later valid events in the same batch from
+			// being landed locally and satisfying the prev walk.
+			debug_warn!(error = %e, "Ignoring missing-events batch entry");
+		}
 	}
 
 	Ok(())

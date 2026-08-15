@@ -2,7 +2,7 @@ use std::{borrow::Borrow, collections::HashMap, iter::once, sync::Arc, time::Ins
 
 use futures::{FutureExt, StreamExt};
 use ruma::{
-	CanonicalJsonObject, EventId, OwnedEventId, RoomId, RoomVersionId, ServerName,
+	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, RoomId, RoomVersionId, ServerName,
 	events::StateEventType, room_version_rules::RoomVersionRules,
 };
 use tuwunel_core::{
@@ -50,6 +50,18 @@ enum Standing {
 
 	/// The standing verdict holds; leave the event withheld.
 	Withheld,
+}
+
+struct UpgradeOutlierResult {
+	room_id: OwnedRoomId,
+	incoming_pdu: PduEvent,
+	pdu_json: CanonicalJsonObject,
+	room_version: RoomVersionId,
+	timer: Instant,
+	cleared: bool,
+	state_at_incoming_event: HashMap<u64, OwnedEventId>,
+	state_ids_compressed: Arc<CompressedState>,
+	soft_fail: bool,
 }
 
 #[implement(super::Service)]
@@ -148,19 +160,18 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 			.compute_soft_fail(&incoming_pdu, &room_rules, &mut pdu_json)
 			.await?;
 
-	self
-		.finish_upgrade_outlier_to_timeline_pdu(
-			room_id,
-			incoming_pdu,
-			pdu_json,
-			room_version,
-			timer,
-			cleared,
-			state_at_incoming_event,
-			state_ids_compressed,
-			soft_fail,
-		)
-		.await
+	self.finish_upgrade_outlier_to_timeline_pdu(UpgradeOutlierResult {
+		room_id: room_id.to_owned(),
+		incoming_pdu,
+		pdu_json,
+		room_version: room_version.to_owned(),
+		timer,
+		cleared,
+		state_at_incoming_event,
+		state_ids_compressed,
+		soft_fail,
+	})
+	.await
 }
 
 /// Re-examines an event that already carries a soft-fail marker.
@@ -212,23 +223,27 @@ async fn soft_fail_standing(
 #[implement(super::Service)]
 async fn finish_upgrade_outlier_to_timeline_pdu(
 	&self,
-	room_id: &RoomId,
-	incoming_pdu: PduEvent,
-	pdu_json: CanonicalJsonObject,
-	room_version: &RoomVersionId,
-	timer: Instant,
-	cleared: bool,
-	state_at_incoming_event: HashMap<u64, OwnedEventId>,
-	state_ids_compressed: Arc<CompressedState>,
-	soft_fail: bool,
+	ctx: UpgradeOutlierResult,
 ) -> Result<Option<(RawPduId, bool)>> {
+	let UpgradeOutlierResult {
+		room_id,
+		incoming_pdu,
+		pdu_json,
+		room_version,
+		timer,
+		cleared,
+		state_at_incoming_event,
+		state_ids_compressed,
+		soft_fail,
+	} = ctx;
+
 	// 13. Use state resolution to find new room state
 	// We start looking at current room state now, so lets lock the room
 	trace!("Locking the room");
-	let state_lock = self.services.state.mutex.lock(room_id).await;
+	let state_lock = self.services.state.mutex.lock(&room_id).await;
 
 	let mut extremities = self
-		.compute_remaining_extremities(room_id, &incoming_pdu)
+		.compute_remaining_extremities(&room_id, &incoming_pdu)
 		.await;
 
 	let config = &self.services.server.config;
@@ -248,23 +263,27 @@ async fn finish_upgrade_outlier_to_timeline_pdu(
 		let summary = self
 			.services
 			.state
-			.prune_forward_extremities(room_id, &mut extremities, goal, Trigger::Receive)
+			.prune_forward_extremities(&room_id, &mut extremities, goal, Trigger::Receive)
 			.await;
 
 		debug!(?summary, "Pruned forward extremities over the cap.");
 	}
 
 	if !soft_fail {
-		self.cache_resolved_state(room_id, incoming_pdu.event_id(), state_ids_compressed.clone())
-			.await;
+		self.cache_resolved_state(
+			&room_id,
+			incoming_pdu.event_id(),
+			state_ids_compressed.clone(),
+		)
+		.await;
 	}
 
 	// A soft-failed event is not a forward extremity, so it never drives the
 	// room's current state; only an accepted state event resolves forward.
 	if incoming_pdu.state_key().is_some() && !soft_fail {
 		self.resolve_and_force_state_after(
-			room_id,
-			room_version,
+			&room_id,
+			&room_version,
 			&incoming_pdu,
 			&state_at_incoming_event,
 			&state_lock,

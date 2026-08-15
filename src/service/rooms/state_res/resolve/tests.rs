@@ -34,7 +34,7 @@ use super::{
 	},
 };
 
-async fn test_event_sort() {
+fn test_event_sort() {
 	_ = tracing::subscriber::set_default(
 		tracing_subscriber::fmt()
 			.with_test_writer()
@@ -80,7 +80,7 @@ async fn sort() {
 	for _ in 0..20 {
 		// since we shuffle the eventIds before we sort them introducing randomness
 		// seems like we should test this a few times
-		test_event_sort().await;
+		test_event_sort();
 	}
 }
 

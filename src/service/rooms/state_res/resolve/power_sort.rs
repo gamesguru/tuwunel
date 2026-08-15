@@ -91,11 +91,17 @@ where
 		.as_ref()
 		.and_then(|event| event.creators(&rules.authorization).ok());
 
-	if let Some(creators) = creators {
-		power_levels_event.user_power_level(event.sender(), creators, &rules.authorization)
-	} else {
-		power_levels_event
-			.get_as_int_or_default(RoomPowerLevelsIntField::UsersDefault, &rules.authorization)
-			.map(Into::into)
-	}
+	creators.map_or_else(
+		|| {
+			power_levels_event
+				.get_as_int_or_default(
+					RoomPowerLevelsIntField::UsersDefault,
+					&rules.authorization,
+				)
+				.map(Into::into)
+		},
+		|creators| {
+			power_levels_event.user_power_level(event.sender(), creators, &rules.authorization)
+		},
+	)
 }

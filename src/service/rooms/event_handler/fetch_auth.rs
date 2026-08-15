@@ -109,11 +109,11 @@ where
 							}
 							self.record_success(Context::Auth, &next_id).await;
 						},
-						| Err(Error::AuthCheck(inner)) => {
-							self.services
-								.timeline
-								.add_pdu_outlier(&next_id, &value);
+						| Err(Error::AuthCheck(inner)) =>
 							if inner.is_not_found() {
+								self.services
+									.timeline
+									.add_pdu_outlier(&next_id, &value);
 								warn!(?next_id, error = %inner, "Auth dependency unavailable");
 								self.record_outcome(
 									Context::Auth,
@@ -130,8 +130,7 @@ where
 									&next_id,
 									Disposition::Permanent,
 								);
-							}
-						},
+							},
 						| Err(_) => {
 							self.record_outcome(Context::Auth, &next_id, Disposition::Transient);
 						},
@@ -175,9 +174,9 @@ async fn fetch_auth_chain(
 				warn!(
 					?event_id,
 					error = %e,
-					"Failed to read rejection marker for local auth event; omitting it from auth chain",
+					"Failed to read rejection marker for local auth event; treating it as rejected in auth chain",
 				);
-				return (event_id.to_owned(), None, vec![]);
+				local_pdu.rejected = true;
 			},
 		}
 		trace!(?event_id, "Found in database");

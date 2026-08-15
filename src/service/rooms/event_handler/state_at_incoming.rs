@@ -48,6 +48,12 @@ where
 		.timeline
 		.get_pdu(prev_event_id)
 		.map_err(|e| err!(Database("Could not find prev_event, but we know the state: {e:?}")));
+	let prev_event_is_rejected = self
+		.services
+		.pdu_metadata
+		.is_event_rejected(prev_event_id)
+		.await
+		.unwrap_or(false);
 
 	let prev_state = match self
 		.services
@@ -101,6 +107,11 @@ where
 	};
 
 	if let Some(state_key) = prev_event.state_key() {
+		if prev_event_is_rejected {
+			debug!(?prev_event_id, "Skipping rejected state event when folding cached state.",);
+			return Ok(Some(state));
+		}
+
 		let prev_event_type = prev_event.event_type().to_cow_str().into();
 
 		let shortstatekey = self
@@ -157,6 +168,12 @@ where
 			let Ok(prev_event) = prev_event else {
 				return None;
 			};
+			let prev_event_is_rejected = self
+				.services
+				.pdu_metadata
+				.is_event_rejected(&prev_event_id)
+				.await
+				.unwrap_or(false);
 
 			let prev_state = match self
 				.services
@@ -173,7 +190,7 @@ where
 				},
 			};
 
-			Some((prev_event_id, prev_state, prev_event))
+			Some((prev_event_id, prev_state, prev_event, prev_event_is_rejected))
 		})
 		.filter_map(async |state| state)
 		.collect()
@@ -183,13 +200,14 @@ where
 	let (fork_states, auth_chain_sets) = extremity_states
 		.into_iter()
 		.try_stream()
-		.wide_and_then(|(prev_event_id, prev_state, prev_event)| {
+		.wide_and_then(|(prev_event_id, prev_state, prev_event, prev_event_is_rejected)| {
 			self.state_at_incoming_fork(
 				room_id,
 				room_version,
 				prev_event_id,
 				prev_state,
 				prev_event,
+				prev_event_is_rejected,
 			)
 		})
 		.try_collect()
@@ -241,25 +259,31 @@ async fn state_at_incoming_fork<Pdu>(
 	prev_event_id: OwnedEventId,
 	prev_state: PrevState,
 	prev_event: Pdu,
+	prev_event_is_rejected: bool,
 ) -> Result<(StateMap<OwnedEventId>, AuthSet<OwnedEventId>)>
 where
 	Pdu: Event,
 {
-	let leaf: Vec<_> = prev_event
-		.state_key()
-		.map_stream(async |state_key| {
-			let event_id = prev_event.event_id();
-			let event_type = prev_event.kind().to_cow_str().into();
-			let shortstatekey = self
-				.services
-				.short
-				.get_or_create_shortstatekey(&event_type, state_key)
-				.await;
+	let leaf: Vec<_> = if prev_event_is_rejected {
+		debug!(?prev_event_id, "Skipping rejected state event when folding fork leaf.",);
+		Vec::new()
+	} else {
+		prev_event
+			.state_key()
+			.map_stream(async |state_key| {
+				let event_id = prev_event.event_id();
+				let event_type = prev_event.kind().to_cow_str().into();
+				let shortstatekey = self
+					.services
+					.short
+					.get_or_create_shortstatekey(&event_type, state_key)
+					.await;
 
-			(shortstatekey, event_id.to_owned())
-		})
-		.collect()
-		.await;
+				(shortstatekey, event_id.to_owned())
+			})
+			.collect()
+			.await
+	};
 
 	let leaf_state_after_event: Vec<_> = match prev_state {
 		| PrevState::Hash(sstatehash) => {

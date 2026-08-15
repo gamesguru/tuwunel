@@ -9,7 +9,7 @@ use ruma::{
 	ServerName,
 };
 use tuwunel_core::{
-	debug, debug_error, debug_warn, expected, implement,
+	Error, debug, debug_error, debug_warn, expected, implement,
 	matrix::{PduEvent, pdu::MAX_AUTH_EVENTS},
 	trace,
 	utils::stream::{BroadbandExt, IterStream},
@@ -98,16 +98,29 @@ where
 						true,
 					));
 
-					if let Ok((pdu, json)) = outlier
+					match outlier
 						.await
 						.inspect_err(|e| warn!("Authentication of event {next_id} failed: {e:?}"))
 					{
-						if next_id == id {
-							pdus.push((pdu, Some(json)));
-						}
-						self.record_success(Context::Auth, &next_id).await;
-					} else {
-						self.record_outcome(Context::Auth, &next_id, Disposition::Transient);
+						| Ok((pdu, json)) => {
+							if next_id == id {
+								pdus.push((pdu, Some(json)));
+							}
+							self.record_success(Context::Auth, &next_id).await;
+						},
+						| Err(Error::AuthCheck(inner)) => {
+							warn!(?next_id, error = %inner, "Rejected auth event");
+							self.services
+								.timeline
+								.add_pdu_outlier(&next_id, &value);
+							self.services
+								.pdu_metadata
+								.mark_event_rejected(&next_id);
+							self.record_outcome(Context::Auth, &next_id, Disposition::Permanent);
+						},
+						| Err(_) => {
+							self.record_outcome(Context::Auth, &next_id, Disposition::Transient);
+						},
 					}
 
 					pdus

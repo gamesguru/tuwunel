@@ -5,7 +5,12 @@ use ruma::{
 };
 use tuwunel_core::{
 	Err, Result, debug, debug_info, err, implement,
-	matrix::{Event, PduEvent, event::TypeExt, pdu::check_room_id, room_version},
+	matrix::{
+		Event, PduEvent,
+		event::TypeExt,
+		pdu::{check_room_id, from_incoming_federation},
+		room_version,
+	},
 	ref_at, trace,
 	utils::{future::TryExtExt, stream::IterStream},
 	warn,
@@ -86,6 +91,7 @@ pub(super) async fn handle_outlier_pdu(
 		// but we do not apply the strict federation format gate here. That lets
 		// oversized state keys survive long enough to be evaluated by auth/state
 		// handling, which is what the complement regression expects.
+		let pdu_json = from_incoming_federation(room_id, event_id, pdu_json, &room_rules);
 		let mut pdu_json = pdu_json;
 		pdu_json
 			.insert("event_id".into(), CanonicalJsonValue::String(event_id.as_str().to_owned()));

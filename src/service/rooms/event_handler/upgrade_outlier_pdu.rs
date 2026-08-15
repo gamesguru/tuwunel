@@ -146,8 +146,6 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 				self.services
 					.pdu_metadata
 					.mark_event_rejected(incoming_pdu.event_id());
-				self.cache_resolved_state(room_id, incoming_pdu.event_id(), state_ids_compressed)
-					.await;
 
 				return Err(e);
 			},

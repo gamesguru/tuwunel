@@ -175,8 +175,9 @@ async fn fetch_auth_chain(
 				warn!(
 					?event_id,
 					error = %e,
-					"Failed to read rejection marker for local auth event",
+					"Failed to read rejection marker for local auth event; omitting it from auth chain",
 				);
+				return (event_id.to_owned(), None, vec![]);
 			},
 		}
 		trace!(?event_id, "Found in database");

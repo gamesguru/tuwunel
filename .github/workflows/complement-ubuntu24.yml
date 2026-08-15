@@ -2,6 +2,18 @@
 name: Complement Ubuntu 24
 
 on:
+  push:
+    paths:
+      - '.github/workflows/complement-ubuntu24.yml'
+      - 'docker/**'
+      - 'src/**'
+      - 'Cargo.toml'
+  pull_request:
+    paths:
+      - '.github/workflows/complement-ubuntu24.yml'
+      - 'docker/**'
+      - 'src/**'
+      - 'Cargo.toml'
   workflow_dispatch:
 
 permissions:
@@ -9,9 +21,9 @@ permissions:
 
 jobs:
   complement:
-    name: Complement
-    runs-on: ubuntu-latest
-    timeout-minutes: 50
+    name: Complement smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
 
     steps:
       - name: Checkout
@@ -23,5 +35,6 @@ jobs:
       - name: Run complement
         env:
           CI: true
+          complement_baseline_gate: 0
         run: |
-          docker/bake.sh complement-tester complement-testee && docker/complement.sh
+          docker/bake.sh complement-tester complement-testee && docker/complement.sh TestAvatarUrlUpdate

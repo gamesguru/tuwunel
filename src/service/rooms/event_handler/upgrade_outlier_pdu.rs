@@ -126,20 +126,21 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 		.await
 	{
 		| Ok(()) => {},
-		| Err(ref e @ tuwunel_core::Error::AuthCheck(ref inner)) if !inner.is_not_found() => {
-			// The event already exists as a stored outlier (step 7 ran before this
-			// check), so it stays fetchable; mark it so any later event citing it as
-			// an auth event is rejected too, per the auth rules.
-			self.services
-				.pdu_metadata
-				.mark_event_rejected(incoming_pdu.event_id());
-			self.cache_resolved_state(room_id, incoming_pdu.event_id(), state_ids_compressed)
-				.await;
+		| Err(e) => match &e {
+			| tuwunel_core::Error::AuthCheck(inner) if !inner.is_not_found() => {
+				// The event already exists as a stored outlier (step 7 ran before this
+				// check), so it stays fetchable; mark it so any later event citing it as
+				// an auth event is rejected too, per the auth rules.
+				self.services
+					.pdu_metadata
+					.mark_event_rejected(incoming_pdu.event_id());
+				self.cache_resolved_state(room_id, incoming_pdu.event_id(), state_ids_compressed)
+					.await;
 
-			return Err(e.clone());
+				return Err(e);
+			},
+			| _ => return Err(e),
 		},
-		| Err(e @ tuwunel_core::Error::AuthCheck(_)) => return Err(e),
-		| Err(e) => return Err(e),
 	}
 
 	let soft_fail = !cleared

@@ -8,9 +8,7 @@ use tuwunel_core::{
 	ref_at, trace,
 	utils::{
 		option::OptionExt,
-		stream::{
-			BroadbandExt, IterStream, ReadyExt, TryBroadbandExt, TryWidebandExt, WidebandExt,
-		},
+		stream::{BroadbandExt, IterStream, ReadyExt, TryWidebandExt, WidebandExt},
 	},
 };
 
@@ -18,6 +16,11 @@ use crate::rooms::{
 	short::{ShortStateHash, ShortStateKey},
 	state_res::{AuthSet, StateMap},
 };
+
+enum PrevState {
+	Hash(ShortStateHash),
+	Cached(HashMap<u64, OwnedEventId>),
+}
 
 // TODO: if we know the prev_events of the incoming event we can avoid the
 #[implement(super::Service)]
@@ -40,39 +43,62 @@ where
 		.next()
 		.expect("at least one prev_event");
 
-	let Ok(prev_event_sstatehash) = self
-		.services
-		.state
-		.pdu_shortstatehash(prev_event_id)
-		.inspect_err(|e| debug_warn!(?prev_event_id, "Missing state at prev_event: {e}"))
-		.await
-	else {
-		return Ok(None);
-	};
-
-	debug!(?prev_event_id, ?prev_event_sstatehash, "Resolving state at prev_event.");
-
 	let prev_event = self
 		.services
 		.timeline
 		.get_pdu(prev_event_id)
 		.map_err(|e| err!(Database("Could not find prev_event, but we know the state: {e:?}")));
 
-	let state = self
+	let prev_state = match self
 		.services
-		.state_accessor
-		.state_full_ids(prev_event_sstatehash)
-		.collect::<HashMap<_, _>>()
-		.map(Ok);
+		.state
+		.pdu_shortstatehash(prev_event_id)
+		.inspect_err(|e| debug_warn!(?prev_event_id, "Missing state at prev_event: {e}"))
+		.await
+	{
+		| Ok(prev_event_sstatehash) => PrevState::Hash(prev_event_sstatehash),
+		| Err(_) => {
+			let Some(state) = self.cached_resolved_state(prev_event_id).await else {
+				return Ok(None);
+			};
 
-	let (prev_event, mut state) = try_join(prev_event, state).await?;
+			debug!(?prev_event_id, "Resolving state at prev_event from cached resolution.");
+			PrevState::Cached(state)
+		},
+	};
 
-	debug!(
-		?prev_event_id,
-		?prev_event_sstatehash,
-		state_ids = state.len(),
-		"Resolved state at prev_event.",
-	);
+	let (prev_event, mut state) = match prev_state {
+		| PrevState::Hash(prev_event_sstatehash) => {
+			debug!(?prev_event_id, ?prev_event_sstatehash, "Resolving state at prev_event.");
+
+			let state = self
+				.services
+				.state_accessor
+				.state_full_ids(prev_event_sstatehash)
+				.collect::<HashMap<_, _>>()
+				.map(Ok);
+
+			let (prev_event, state) = try_join(prev_event, state).await?;
+
+			debug!(
+				?prev_event_id,
+				?prev_event_sstatehash,
+				state_ids = state.len(),
+				"Resolved state at prev_event.",
+			);
+
+			(prev_event, state)
+		},
+		| PrevState::Cached(state) => {
+			let prev_event = prev_event.await?;
+			debug!(
+				?prev_event_id,
+				state_ids = state.len(),
+				"Resolved state at prev_event from cache.",
+			);
+			(prev_event, state)
+		},
+	};
 
 	if let Some(state_key) = prev_event.state_key() {
 		let prev_event_type = prev_event.event_type().to_cow_str().into();
@@ -88,7 +114,6 @@ where
 		debug!(
 			?prev_event_id,
 			?prev_event_type,
-			?prev_event_sstatehash,
 			?shortstatekey,
 			state_ids = state.len(),
 			"Added prev_event to state.",
@@ -117,33 +142,51 @@ where
 	);
 
 	trace!("Calculating extremity statehashes...");
-	let Ok(extremity_sstatehashes) = incoming_pdu
-		.prev_events()
-		.try_stream()
-		.broad_and_then(|prev_event_id| {
-			let sstatehash = self
-				.services
-				.state
-				.pdu_shortstatehash(prev_event_id);
+	let mut extremity_states = Vec::new();
+	for prev_event_id in incoming_pdu.prev_events() {
+		let prev_event = self
+			.services
+			.timeline
+			.get_pdu(prev_event_id)
+			.inspect_err(|e| debug_warn!(?prev_event_id, "Missing prev event: {e}"))
+			.await;
 
-			let prev_event = self.services.timeline.get_pdu(prev_event_id);
+		let Ok(prev_event) = prev_event else {
+			return Ok(None);
+		};
 
-			try_join(sstatehash, prev_event).inspect_err(move |e| {
+		let prev_state = match self
+			.services
+			.state
+			.pdu_shortstatehash(prev_event_id)
+			.await
+		{
+			| Ok(sstatehash) => PrevState::Hash(sstatehash),
+			| Err(e) => {
 				debug_warn!(?prev_event_id, "Missing state at prev_event: {e}");
-			})
-		})
-		.try_collect::<HashMap<_, _>>()
-		.await
-	else {
-		return Ok(None);
-	};
+				let Some(state) = self.cached_resolved_state(prev_event_id).await else {
+					return Ok(None);
+				};
+
+				PrevState::Cached(state)
+			},
+		};
+
+		extremity_states.push((prev_event_id.to_owned(), prev_state, prev_event));
+	}
 
 	trace!("Calculating fork states...");
-	let (fork_states, auth_chain_sets) = extremity_sstatehashes
+	let (fork_states, auth_chain_sets) = extremity_states
 		.into_iter()
 		.try_stream()
-		.wide_and_then(|(sstatehash, prev_event)| {
-			self.state_at_incoming_fork(room_id, room_version, sstatehash, prev_event)
+		.wide_and_then(|(prev_event_id, prev_state, prev_event)| {
+			self.state_at_incoming_fork(
+				room_id,
+				room_version,
+				prev_event_id,
+				prev_state,
+				prev_event,
+			)
 		})
 		.try_collect()
 		.map_ok(Vec::into_iter)
@@ -180,25 +223,25 @@ where
 
 #[implement(super::Service)]
 #[tracing::instrument(
-	name = "fork",
-	level = "debug",
-	skip_all,
-	fields(
-		?sstatehash,
-		prev_event = ?prev_event.event_id(),
-	)
-)]
+		name = "fork",
+		level = "debug",
+		skip_all,
+		fields(
+			prev_event = ?prev_event.event_id(),
+		)
+	)]
 async fn state_at_incoming_fork<Pdu>(
 	&self,
 	room_id: &RoomId,
 	room_version: &RoomVersionId,
-	sstatehash: ShortStateHash,
+	prev_event_id: OwnedEventId,
+	prev_state: PrevState,
 	prev_event: Pdu,
 ) -> Result<(StateMap<OwnedEventId>, AuthSet<OwnedEventId>)>
 where
 	Pdu: Event,
 {
-	let leaf = prev_event
+	let leaf: Vec<_> = prev_event
 		.state_key()
 		.map_stream(async |state_key| {
 			let event_id = prev_event.event_id();
@@ -210,19 +253,36 @@ where
 				.await;
 
 			(shortstatekey, event_id.to_owned())
-		});
-
-	let leaf_state_after_event: Vec<_> = self
-		.services
-		.state_accessor
-		.state_full_ids(sstatehash)
-		.chain(leaf)
+		})
 		.collect()
 		.await;
 
+	let leaf_state_after_event: Vec<_> = match prev_state {
+		| PrevState::Hash(sstatehash) => {
+			let state: Vec<_> = self
+				.services
+				.state_accessor
+				.state_full_ids(sstatehash)
+				.collect()
+				.await;
+
+			state
+				.into_iter()
+				.chain(leaf.into_iter())
+				.collect()
+		},
+		| PrevState::Cached(state) => {
+			debug!(?prev_event_id, "Using cached resolved state for fork.");
+			state
+				.into_iter()
+				.chain(leaf.into_iter())
+				.collect()
+		},
+	};
+
 	trace!(
 		prev_event = ?prev_event.event_id(),
-		?sstatehash,
+		?prev_event_id,
 		leaf_states = leaf_state_after_event.len(),
 		"leaf state after event"
 	);

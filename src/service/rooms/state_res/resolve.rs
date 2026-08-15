@@ -212,6 +212,8 @@ where
 			prev_events: pdu.prev_events().map(ToOwned::to_owned).collect(),
 			auth_events: pdu.auth_events().map(ToOwned::to_owned).collect(),
 			depth: pdu.as_pdu().depth.into(),
+			rejected: pdu.rejected(),
+			soft_fail: false,
 		};
 
 		if full_conflicted_set.contains(&id) {
@@ -237,9 +239,9 @@ where
 
 	// Convert unconflicted_state BTreeMap into the imbl::OrdMap format expected by
 	// rezzy
-	let mut unconflicted_shared = imbl::OrdMap::new();
+	let mut unconflicted_shared = rezzy::SharedState::new();
 	for (key, id) in &unconflicted_state {
-		unconflicted_shared.insert((key.0.to_string(), key.1.to_string()), id.clone());
+		unconflicted_shared.insert((key.0.to_string().into(), key.1.to_string()), id.clone());
 	}
 
 	// Perform state resolution using rezzy
@@ -248,12 +250,14 @@ where
 		conflicted_events,
 		&auth_context,
 		version,
+		&mut HashMap::new(),
 	);
 
 	// Convert back into tuwunel's StateMap format
 	let mut final_state = BTreeMap::new();
 	for (key, id) in resolved {
-		final_state.insert((key.0.into(), key.1.into()), id);
+		final_state
+			.insert((ruma::events::StateEventType::from(key.0.to_string()), key.1.into()), id);
 	}
 
 	final_state.extend(unconflicted_state);

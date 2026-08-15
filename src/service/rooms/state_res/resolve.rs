@@ -214,11 +214,7 @@ where
 			auth_events: pdu.auth_events().map(ToOwned::to_owned).collect(),
 			depth: pdu.as_pdu().depth.into(),
 			rejected: pdu.rejected(),
-			soft_fail: self
-				.services
-				.pdu_metadata
-				.is_event_soft_failed(pdu.event_id())
-				.await,
+			soft_fail: false,
 		};
 
 		if full_conflicted_set.contains(&id) {

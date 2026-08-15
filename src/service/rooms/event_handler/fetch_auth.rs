@@ -3,21 +3,23 @@ use std::{
 	time::Duration,
 };
 
-use futures::{FutureExt, StreamExt, TryFutureExt};
+use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, RoomId, RoomVersionId,
 	ServerName,
 };
 use tuwunel_core::{
-	debug, debug_error, debug_warn, expected, implement,
+	Error, Result, debug, debug_error, debug_warn, expected, implement,
 	matrix::{PduEvent, pdu::MAX_AUTH_EVENTS},
 	trace,
-	utils::stream::{BroadbandExt, IterStream},
+	utils::stream::{IterStream, TryBroadbandExt},
 	warn,
 };
 
 use super::backoff::{Context, Disposition};
 use crate::fetcher::{Op, Opts};
+
+type AuthChain = (OwnedEventId, Option<PduEvent>, Vec<(OwnedEventId, CanonicalJsonObject)>);
 
 /// Find the event and auth it. Once the event is validated (steps 1 - 8)
 /// it is appended to the outliers Tree.
@@ -45,18 +47,19 @@ pub(super) async fn fetch_auth<'a, Events>(
 	events: Events,
 	room_version: &RoomVersionId,
 	recursion_level: usize,
-) -> Vec<(PduEvent, Option<CanonicalJsonObject>)>
+) -> Result<Vec<(PduEvent, Option<CanonicalJsonObject>)>>
 where
 	Events: Iterator<Item = &'a EventId> + Clone + Send,
 {
 	let events_with_auth_events: Vec<_> = events
 		.stream()
-		.broad_then(|event_id| self.fetch_auth_chain(origin, room_id, event_id, room_version))
-		.collect()
+		.map(Ok)
+		.broad_and_then(|event_id| self.fetch_auth_chain(origin, room_id, event_id, room_version))
+		.try_collect()
 		.boxed()
-		.await;
+		.await?;
 
-	events_with_auth_events
+	let pdus = events_with_auth_events
 		.into_iter()
 		.stream()
 		.fold(Vec::new(), async |mut pdus, (id, local_pdu, events_in_reverse_order)| {
@@ -96,25 +99,52 @@ where
 						room_version,
 						expected!(recursion_level + 1),
 						true,
+						false,
 					));
 
-					if let Ok((pdu, json)) = outlier
-						.await
-						.inspect_err(|e| warn!("Authentication of event {next_id} failed: {e:?}"))
-					{
-						if next_id == id {
-							pdus.push((pdu, Some(json)));
-						}
-						self.record_success(Context::Auth, &next_id).await;
-					} else {
-						self.record_outcome(Context::Auth, &next_id, Disposition::Transient);
+					match outlier.await.inspect_err(
+						|e| warn!(?next_id, error = ?e, "Authentication of event failed"),
+					) {
+						| Ok((pdu, json)) => {
+							if next_id == id {
+								pdus.push((pdu, Some(json)));
+							}
+							self.record_success(Context::Auth, &next_id).await;
+						},
+						| Err(Error::AuthCheck(inner)) =>
+							if inner.is_not_found() {
+								self.services
+									.timeline
+									.add_pdu_outlier(&next_id, &value);
+								warn!(?next_id, error = %inner, "Auth dependency unavailable");
+								self.record_outcome(
+									Context::Auth,
+									&next_id,
+									Disposition::Transient,
+								);
+							} else {
+								warn!(?next_id, error = %inner, "Rejected auth event");
+								self.services
+									.pdu_metadata
+									.mark_event_rejected(&next_id);
+								self.record_outcome(
+									Context::Auth,
+									&next_id,
+									Disposition::Permanent,
+								);
+							},
+						| Err(_) => {
+							self.record_outcome(Context::Auth, &next_id, Disposition::Transient);
+						},
 					}
 
 					pdus
 				})
 				.await
 		})
-		.await
+		.await;
+
+	Ok(pdus)
 }
 
 #[implement(super::Service)]
@@ -130,13 +160,31 @@ async fn fetch_auth_chain(
 	room_id: &RoomId,
 	event_id: &EventId,
 	room_version: &RoomVersionId,
-) -> (OwnedEventId, Option<PduEvent>, Vec<(OwnedEventId, CanonicalJsonObject)>) {
+) -> Result<AuthChain> {
 	// a. Look in the main timeline (pduid_pdu tree)
 	// b. Look at outlier pdu tree
 	// (get_pdu_json checks both)
 	if let Ok(local_pdu) = self.services.timeline.get_pdu(event_id).await {
+		let mut local_pdu = local_pdu;
+		match self
+			.services
+			.pdu_metadata
+			.is_event_rejected(event_id)
+			.await
+		{
+			| Ok(true) => local_pdu.rejected = true,
+			| Ok(false) => {},
+			| Err(e) => {
+				warn!(
+					?event_id,
+					error = %e,
+					"Failed to read rejection marker for local auth event",
+				);
+				return Err(e);
+			},
+		}
 		trace!(?event_id, "Found in database");
-		return (event_id.to_owned(), Some(local_pdu), vec![]);
+		return Ok((event_id.to_owned(), Some(local_pdu), vec![]));
 	}
 
 	// c. Ask origin server over federation
@@ -216,5 +264,5 @@ async fn fetch_auth_chain(
 		events_all.insert(next_id);
 	}
 
-	(event_id.to_owned(), None, events_in_reverse_order)
+	Ok((event_id.to_owned(), None, events_in_reverse_order))
 }

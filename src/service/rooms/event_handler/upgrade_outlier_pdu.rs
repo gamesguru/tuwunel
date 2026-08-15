@@ -2,7 +2,7 @@ use std::{borrow::Borrow, collections::HashMap, iter::once, sync::Arc, time::Ins
 
 use futures::{FutureExt, StreamExt};
 use ruma::{
-	CanonicalJsonObject, EventId, OwnedEventId, RoomId, RoomVersionId, ServerName,
+	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, RoomId, RoomVersionId, ServerName,
 	events::StateEventType, room_version_rules::RoomVersionRules,
 };
 use tuwunel_core::{
@@ -52,6 +52,18 @@ enum Standing {
 	Withheld,
 }
 
+struct UpgradeOutlierResult {
+	room_id: OwnedRoomId,
+	incoming_pdu: PduEvent,
+	pdu_json: CanonicalJsonObject,
+	room_version: RoomVersionId,
+	timer: Instant,
+	cleared: bool,
+	state_at_incoming_event: HashMap<u64, OwnedEventId>,
+	state_ids_compressed: Arc<CompressedState>,
+	soft_fail: bool,
+}
+
 #[implement(super::Service)]
 #[tracing::instrument(
 	name = "upgrade",
@@ -97,7 +109,7 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 		return Ok(None);
 	};
 
-	let (state_at_incoming_event, resolved_via) = self
+	let (state_at_incoming_event, _) = self
 		.resolve_state_at_incoming_event(
 			origin,
 			room_id,
@@ -108,21 +120,136 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 		)
 		.await?;
 
-	self.auth_check_outlier_pdu(room_id, &incoming_pdu, &room_rules, &state_at_incoming_event)
-		.await?;
+	trace!("Compressing state...");
+	let state_ids_compressed: Arc<CompressedState> = self
+		.services
+		.state_compressor
+		.compress_state_events(
+			state_at_incoming_event
+				.iter()
+				.map(|(ssk, eid)| (ssk, eid.borrow())),
+		)
+		.collect()
+		.map(Arc::new)
+		.await;
+
+	match self
+		.auth_check_outlier_pdu(room_id, &incoming_pdu, &room_rules, &state_at_incoming_event)
+		.await
+	{
+		| Ok(()) => {},
+		| Err(e) => match &e {
+			| tuwunel_core::Error::AuthCheck(inner) if !inner.is_not_found() => {
+				// Keep the resolved-state memo around so later children of this
+				// rejected state event do not have to refetch `/state_ids`, but
+				// let the state-at-incoming fold decide whether to actually apply
+				// the rejected event's own state contribution.
+				self.services
+					.pdu_metadata
+					.mark_event_rejected(incoming_pdu.event_id());
+
+				self.cache_resolved_state(
+					room_id,
+					incoming_pdu.event_id(),
+					state_ids_compressed.clone(),
+				)
+				.await;
+
+				return Err(e);
+			},
+			| _ => return Err(e),
+		},
+	}
 
 	let soft_fail = !cleared
 		&& self
 			.compute_soft_fail(&incoming_pdu, &room_rules, &mut pdu_json)
 			.await?;
 
+	self.finish_upgrade_outlier_to_timeline_pdu(UpgradeOutlierResult {
+		room_id: room_id.to_owned(),
+		incoming_pdu,
+		pdu_json,
+		room_version: room_version.to_owned(),
+		timer,
+		cleared,
+		state_at_incoming_event,
+		state_ids_compressed,
+		soft_fail,
+	})
+	.await
+}
+
+/// Re-examines an event that already carries a soft-fail marker.
+///
+/// The marker is a standing verdict rather than a permanent rejection, so it
+/// lapses on the upgrade backoff and the event is weighed again. Asking before
+/// state resolution keeps a still-refused event cheap to decline, since a
+/// cached policy answer needs no round trip.
+#[implement(super::Service)]
+async fn soft_fail_standing(
+	&self,
+	incoming_pdu: &PduEvent,
+	room_rules: &RoomVersionRules,
+	pdu_json: &mut CanonicalJsonObject,
+) -> Result<Standing> {
+	let event_id = incoming_pdu.event_id();
+
+	if !self
+		.services
+		.pdu_metadata
+		.is_event_soft_failed(event_id)
+		.await
+	{
+		return Ok(Standing::Evaluate(false));
+	}
+
+	if self
+		.is_suppressed(Context::Upgrade, event_id, UPGRADE_RETRY)
+		.await
+		.is_deny()
+	{
+		debug!(%event_id, "Soft failed; deferring re-evaluation.");
+		return Ok(Standing::Withheld);
+	}
+
+	if self
+		.compute_soft_fail(incoming_pdu, room_rules, pdu_json)
+		.await?
+	{
+		self.record_outcome(Context::Upgrade, event_id, Disposition::Transient);
+
+		debug!(%event_id, "Still soft failed.");
+		return Ok(Standing::Withheld);
+	}
+
+	Ok(Standing::Evaluate(true))
+}
+
+#[implement(super::Service)]
+async fn finish_upgrade_outlier_to_timeline_pdu(
+	&self,
+	ctx: UpgradeOutlierResult,
+) -> Result<Option<(RawPduId, bool)>> {
+	let UpgradeOutlierResult {
+		room_id,
+		incoming_pdu,
+		pdu_json,
+		room_version,
+		timer,
+		cleared,
+		state_at_incoming_event,
+		state_ids_compressed,
+		soft_fail,
+	} = ctx;
+
 	// 13. Use state resolution to find new room state
 	// We start looking at current room state now, so lets lock the room
 	trace!("Locking the room");
-	let state_lock = self.services.state.mutex.lock(room_id).await;
+	let state_lock = self.services.state.mutex.lock(&room_id).await;
 
 	let mut extremities = self
-		.compute_remaining_extremities(room_id, &incoming_pdu)
+		.compute_remaining_extremities(&room_id, &incoming_pdu)
 		.await;
 
 	let config = &self.services.server.config;
@@ -142,36 +269,27 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 		let summary = self
 			.services
 			.state
-			.prune_forward_extremities(room_id, &mut extremities, goal, Trigger::Receive)
+			.prune_forward_extremities(&room_id, &mut extremities, goal, Trigger::Receive)
 			.await;
 
 		debug!(?summary, "Pruned forward extremities over the cap.");
 	}
 
-	trace!("Compressing state...");
-	let state_ids_compressed: Arc<CompressedState> = self
-		.services
-		.state_compressor
-		.compress_state_events(
-			state_at_incoming_event
-				.iter()
-				.map(|(ssk, eid)| (ssk, eid.borrow())),
+	if !soft_fail {
+		self.cache_resolved_state(
+			&room_id,
+			incoming_pdu.event_id(),
+			state_ids_compressed.clone(),
 		)
-		.collect()
-		.map(Arc::new)
 		.await;
-
-	if matches!(resolved_via, ResolvedVia::Local | ResolvedVia::Fetch) && !soft_fail {
-		self.cache_resolved_state(room_id, incoming_pdu.event_id(), state_ids_compressed.clone())
-			.await;
 	}
 
 	// A soft-failed event is not a forward extremity, so it never drives the
 	// room's current state; only an accepted state event resolves forward.
 	if incoming_pdu.state_key().is_some() && !soft_fail {
 		self.resolve_and_force_state_after(
-			room_id,
-			room_version,
+			&room_id,
+			&room_version,
 			&incoming_pdu,
 			&state_at_incoming_event,
 			&state_lock,
@@ -248,52 +366,6 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 	);
 
 	Ok(pdu_id.zip(Some(true)))
-}
-
-/// Re-examines an event that already carries a soft-fail marker.
-///
-/// The marker is a standing verdict rather than a permanent rejection, so it
-/// lapses on the upgrade backoff and the event is weighed again. Asking before
-/// state resolution keeps a still-refused event cheap to decline, since a
-/// cached policy answer needs no round trip.
-#[implement(super::Service)]
-async fn soft_fail_standing(
-	&self,
-	incoming_pdu: &PduEvent,
-	room_rules: &RoomVersionRules,
-	pdu_json: &mut CanonicalJsonObject,
-) -> Result<Standing> {
-	let event_id = incoming_pdu.event_id();
-
-	if !self
-		.services
-		.pdu_metadata
-		.is_event_soft_failed(event_id)
-		.await
-	{
-		return Ok(Standing::Evaluate(false));
-	}
-
-	if self
-		.is_suppressed(Context::Upgrade, event_id, UPGRADE_RETRY)
-		.await
-		.is_deny()
-	{
-		debug!(%event_id, "Soft failed; deferring re-evaluation.");
-		return Ok(Standing::Withheld);
-	}
-
-	if self
-		.compute_soft_fail(incoming_pdu, room_rules, pdu_json)
-		.await?
-	{
-		self.record_outcome(Context::Upgrade, event_id, Disposition::Transient);
-
-		debug!(%event_id, "Still soft failed.");
-		return Ok(Standing::Withheld);
-	}
-
-	Ok(Standing::Evaluate(true))
 }
 
 #[implement(super::Service)]

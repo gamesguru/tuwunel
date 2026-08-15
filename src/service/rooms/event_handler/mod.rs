@@ -89,7 +89,21 @@ async fn event_exists(&self, event_id: &EventId) -> bool {
 	fields(%event_id)
 )]
 async fn event_fetch(&self, event_id: &EventId) -> Result<PduEvent> {
-	self.services.timeline.get_pdu(event_id).await
+	let mut pdu = self.services.timeline.get_pdu(event_id).await?;
+
+	// The stored PDU carries no rejection state of its own; consult the
+	// separate marker so callers doing auth checks (e.g. `auth_event.rejected()`)
+	// see the real verdict instead of always `false`.
+	if self
+		.services
+		.pdu_metadata
+		.is_event_rejected(event_id)
+		.await?
+	{
+		pdu.rejected = true;
+	}
+
+	Ok(pdu)
 }
 
 /// Extract a room's version from the create event in a stripped-state list (as

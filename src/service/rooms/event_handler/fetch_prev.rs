@@ -17,10 +17,7 @@ use tuwunel_core::{
 		event::gen_event_id,
 		pdu::{MAX_PREV_EVENTS, check_room_id},
 	},
-	utils::{
-		BoolExt,
-		stream::{IterStream, automatic_width},
-	},
+	utils::{BoolExt, stream::IterStream},
 };
 
 use crate::{
@@ -63,17 +60,16 @@ where
 		.await
 		.unwrap_or(has_gap);
 
-	has_gap
-		.then_async(|| {
-			self.prefetch_missing_events(
-				origin,
-				room_id,
-				incoming_event_id,
-				room_version,
-				recursion_level,
-			)
-		})
-		.await;
+	if has_gap {
+		self.prefetch_missing_events(
+			origin,
+			room_id,
+			incoming_event_id,
+			room_version,
+			recursion_level,
+		)
+		.await?;
+	}
 
 	let mut todo_outlier_stack: FuturesOrdered<_> = initial_set
 		.stream()
@@ -90,18 +86,19 @@ where
 			let events = once(event_id.as_ref());
 			let auth = self
 				.fetch_auth(origin, room_id, events, room_version, recursion_level)
-				.await;
+				.await?;
 
-			(event_id, auth)
+			Ok::<_, tuwunel_core::Error>((event_id, auth))
 		})
 		.map(FutureExt::boxed)
-		.collect()
+		.collect::<FuturesOrdered<_>>()
 		.await;
 
 	let mut amount = 0;
 	let mut eventid_info = HashMap::new();
 	let mut graph: HashMap<OwnedEventId, _> = HashMap::with_capacity(todo_outlier_stack.len());
-	while let Some((prev_event_id, mut outlier)) = todo_outlier_stack.next().await {
+	while let Some(result) = todo_outlier_stack.next().await {
+		let (prev_event_id, mut outlier) = result?;
 		self.services.server.check_running()?;
 
 		let Some((pdu, mut json_opt)) = outlier.pop() else {
@@ -123,7 +120,7 @@ where
 			json_opt = self
 				.services
 				.timeline
-				.get_outlier_pdu_json(&prev_event_id)
+				.get_pdu_json(&prev_event_id)
 				.await
 				.ok();
 		}
@@ -156,9 +153,9 @@ where
 							room_version,
 							recursion_level,
 						)
-						.await;
+						.await?;
 
-					(prev_prev, fetch)
+					Ok::<_, tuwunel_core::Error>((prev_prev, fetch))
 				};
 
 				todo_outlier_stack.push_back(fetch.boxed());
@@ -250,7 +247,7 @@ async fn prefetch_missing_events(
 	incoming_event_id: &EventId,
 	room_version: &RoomVersionId,
 	recursion_level: usize,
-) {
+) -> Result {
 	let boundary: EventWindow = self
 		.services
 		.state
@@ -268,22 +265,50 @@ async fn prefetch_missing_events(
 		.fanout_for_op();
 
 	let Ok(outcome) = self.services.fetcher.fetch(opts).await else {
-		return;
+		return Ok(());
 	};
 
 	let Ok(events) = serde_json::from_slice::<Vec<Box<RawJsonValue>>>(&outcome.bytes) else {
-		return;
+		return Ok(());
 	};
 
-	events
-		.into_iter()
-		.stream()
-		.for_each_concurrent(automatic_width(), async |pdu| {
+	best_effort_missing_events(
+		events,
+		async |pdu| {
 			self.land_missing_event(origin, room_id, &pdu, room_version, recursion_level)
 				.await
-				.ok();
-		})
-		.await;
+		},
+		|| self.services.server.check_running(),
+	)
+	.await?;
+
+	Ok(())
+}
+
+async fn best_effort_missing_events<I, F, Fut, E, C>(
+	events: I,
+	mut land: F,
+	mut check_running: C,
+) -> Result
+where
+	I: IntoIterator,
+	F: FnMut(I::Item) -> Fut,
+	Fut: Future<Output = std::result::Result<(), E>>,
+	E: std::fmt::Display,
+	C: FnMut() -> Result,
+{
+	for pdu in events {
+		check_running()?;
+
+		if let Err(e) = land(pdu).await {
+			// Missing-events batches are best-effort. One malformed or rejected
+			// event should not prevent later valid events in the same batch from
+			// being landed locally and satisfying the prev walk.
+			debug_warn!(error = %e, "Ignoring missing-events batch entry");
+		}
+	}
+
+	Ok(())
 }
 
 /// Authenticate and persist one event from the missing-events batch as an
@@ -320,7 +345,40 @@ async fn land_missing_event(
 		room_version,
 		recursion_level,
 		false,
+		true,
 	))
 	.await
 	.map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+	use std::sync::{
+		Arc,
+		atomic::{AtomicUsize, Ordering},
+	};
+
+	use super::best_effort_missing_events;
+
+	#[tokio::test]
+	async fn missing_events_keep_going_after_an_error() {
+		let seen = Arc::new(AtomicUsize::new(0));
+		let seen_in_closure = Arc::clone(&seen);
+
+		best_effort_missing_events(
+			vec![1, 2, 3],
+			move |_| {
+				let seen = Arc::clone(&seen_in_closure);
+				async move {
+					let call = seen.fetch_add(1, Ordering::SeqCst);
+					if call == 0 { Err("boom") } else { Ok(()) }
+				}
+			},
+			|| Ok(()),
+		)
+		.await
+		.unwrap();
+
+		assert_eq!(seen.load(Ordering::SeqCst), 3);
+	}
 }

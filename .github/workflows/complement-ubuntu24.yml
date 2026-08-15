@@ -1,0 +1,27 @@
+---
+name: Complement Ubuntu 24
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  complement:
+    name: Complement
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Run complement
+        env:
+          CI: true
+        run: |
+          docker/bake.sh complement-tester complement-testee && docker/complement.sh

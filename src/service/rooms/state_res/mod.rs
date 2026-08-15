@@ -16,10 +16,8 @@
 //! 2. `ruma_signatures::verify_event()` - The event should be dropped on error.
 //!    The PDU should be redacted before checking the authorization rules if the
 //!    result is `Verified::Signatures`.
-//! 3. `check_state_independent_auth_rules()` - The event should be rejected on
-//!    error.
-//! 4. `check_state_dependent_auth_rules()` - This function must be called 3
-//!    times:
+//! 3. `auth_check()` - Runs both the state-independent and state-dependent
+//!    authorization rules together. This function must be called 3 times:
 //!     1. With the `auth_events` for the state, the event should be rejected on
 //!        error.
 //!     2. With the state before the event, the event should be rejected on
@@ -68,7 +66,7 @@ pub mod topological_sort;
 
 use tuwunel_core::matrix::TypeStateKey;
 
-use self::{event_auth::check_state_dependent_auth_rules, fetch_state::FetchStateExt};
+use self::fetch_state::FetchStateExt;
 pub use self::{
 	event_auth::{AuthTypes, auth_check, auth_types_for_event},
 	resolve::{AuthSet, ConflictMap, StateMap, resolve},

@@ -1,10 +1,16 @@
 use futures::{StreamExt, TryFutureExt};
 use ruma::{
-	CanonicalJsonObject, EventId, RoomId, RoomVersionId, ServerName, events::TimelineEventType,
+	CanonicalJsonObject, CanonicalJsonValue, EventId, RoomId, RoomVersionId, ServerName,
+	events::TimelineEventType,
 };
 use tuwunel_core::{
 	Err, Result, debug, debug_info, err, implement,
-	matrix::{Event, PduEvent, event::TypeExt, room_version},
+	matrix::{
+		Event, PduEvent,
+		event::TypeExt,
+		pdu::{check_room_id, from_incoming_federation},
+		room_version,
+	},
 	ref_at, trace,
 	utils::{future::TryExtExt, stream::IterStream},
 	warn,
@@ -29,6 +35,7 @@ pub(super) async fn handle_outlier_pdu(
 	room_version: &RoomVersionId,
 	recursion_level: usize,
 	auth_events_known: bool,
+	allow_relaxed_format: bool,
 ) -> Result<(PduEvent, CanonicalJsonObject)> {
 	debug!(?event_id, ?auth_events_known, %recursion_level, "handle outlier");
 
@@ -79,8 +86,22 @@ pub(super) async fn handle_outlier_pdu(
 	// Now that we have checked the signature and hashes we can make mutations and
 	// convert to our PduEvent type.
 	let room_rules = room_version::rules(room_version)?;
-	let (event, pdu_json) =
-		PduEvent::from_object_federation(room_id, event_id, pdu_json, &room_rules)?;
+	let (event, pdu_json) = if allow_relaxed_format {
+		// `/get_missing_events` responses are still authenticated and auth-checked,
+		// but we do not apply the strict federation format gate here. That lets
+		// oversized state keys survive long enough to be evaluated by auth/state
+		// handling, which is what the complement regression expects.
+		let pdu_json = from_incoming_federation(room_id, event_id, pdu_json, &room_rules);
+		let mut pdu_json = pdu_json;
+		pdu_json
+			.insert("event_id".into(), CanonicalJsonValue::String(event_id.as_str().to_owned()));
+
+		let event = PduEvent::from_object(pdu_json.clone())?;
+		check_room_id(&event, room_id)?;
+		(event, pdu_json)
+	} else {
+		PduEvent::from_object_federation(room_id, event_id, pdu_json, &room_rules)?
+	};
 
 	if !auth_events_known {
 		// 4. fetch any missing auth events doing all checks listed here starting at 1.
@@ -96,7 +117,7 @@ pub(super) async fn handle_outlier_pdu(
 			room_version,
 			recursion_level,
 		))
-		.await;
+		.await?;
 	}
 
 	// 6. Reject "due to auth events" if the event doesn't pass auth based on the
@@ -132,7 +153,7 @@ pub(super) async fn handle_outlier_pdu(
 		.collect()
 		.await;
 
-	state_res::auth_check(
+	let auth_check = state_res::auth_check(
 		&room_rules,
 		&event,
 		&async |event_id| self.event_fetch(&event_id).await,
@@ -146,8 +167,23 @@ pub(super) async fn handle_outlier_pdu(
 				.ok_or_else(|| err!(Request(NotFound("state not found"))))
 		},
 	)
-	.inspect_ok(|()| trace!("Validation successful."))
-	.await?;
+	.await;
+
+	match auth_check {
+		| Ok(()) => trace!("Validation successful."),
+		| Err(e @ tuwunel_core::Error::AuthCheck(_)) => {
+			// Rejected events must stay fetchable so later auth checks can see the
+			// rejection marker instead of treating them as missing.
+			self.services
+				.timeline
+				.add_pdu_outlier(event.event_id(), &pdu_json);
+			self.services
+				.pdu_metadata
+				.mark_event_rejected(event.event_id());
+			return Err(e);
+		},
+		| Err(e) => return Err(e),
+	}
 
 	// 7. Persist the event as an outlier.
 	self.services

@@ -89,6 +89,7 @@ pin-project-lite.workspace = true
 rand.workspace = true
 regex.workspace = true
 reqwest.workspace = true
+rezzy.workspace = true
 ruma.workspace = true
 sanitize-filename.workspace = true
 serde_core.workspace = true

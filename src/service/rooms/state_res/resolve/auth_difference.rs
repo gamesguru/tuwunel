@@ -1,30 +1,55 @@
-use std::{borrow::Borrow, collections::HashMap, hash::Hash};
+use std::{borrow::Borrow, collections::BTreeMap};
 
 use futures::{FutureExt, Stream};
+use roaring::RoaringBitmap;
 use ruma::EventId;
-use tuwunel_core::{
-	matrix::event_id::RandomState,
-	utils::stream::{IterStream, ReadyExt},
-};
+use tuwunel_core::utils::stream::{IterStream, ReadyExt};
 
 use super::AuthSet;
 
-struct Counts<Id> {
-	by_id: HashMap<Id, usize, RandomState>,
-	total: usize,
+struct RoaringState<Id: Ord> {
+	id_to_index: BTreeMap<Id, u32>,
+	index_to_id: Vec<Id>,
+	union: RoaringBitmap,
+	intersection: RoaringBitmap,
+	first: bool,
 }
 
-impl<Id> Default for Counts<Id> {
-	fn default() -> Self { Self { by_id: HashMap::default(), total: 0 } }
+impl<Id: Ord> Default for RoaringState<Id> {
+	fn default() -> Self {
+		Self {
+			id_to_index: BTreeMap::new(),
+			index_to_id: Vec::new(),
+			union: RoaringBitmap::new(),
+			intersection: RoaringBitmap::new(),
+			first: true,
+		}
+	}
 }
 
-impl<Id: Eq + Hash> Counts<Id> {
+impl<Id: Ord + Clone> RoaringState<Id> {
 	fn merge(mut self, set: AuthSet<Id>) -> Self {
-		self.total = self.total.saturating_add(1);
+		let mut bitmap = RoaringBitmap::new();
 		for id in set {
-			let count = self.by_id.entry(id).or_default();
+			let idx = match self.id_to_index.get(&id) {
+				| Some(&idx) => idx,
+				| None => {
+					let idx = u32::try_from(self.index_to_id.len()).expect("too many event IDs");
+					self.id_to_index.insert(id.clone(), idx);
+					self.index_to_id.push(id);
+					idx
+				},
+			};
+			bitmap.insert(idx);
+		}
 
-			*count = count.saturating_add(1);
+		if self.first {
+			self.union.clone_from(&bitmap);
+			self.intersection = bitmap;
+			self.first = false;
+		} else {
+			self.union |= &bitmap;
+			self.intersection &= bitmap;
 		}
 
 		self
@@ -54,15 +79,24 @@ impl<Id: Eq + Hash> Counts<Id> {
 pub(super) fn auth_difference<'a, AuthSets, Id>(auth_sets: AuthSets) -> impl Stream<Item = Id>
 where
 	AuthSets: Stream<Item = AuthSet<Id>>,
-	Id: Borrow<EventId> + Clone + Eq + Hash + Send + 'a,
+	Id: Borrow<EventId> + Clone + Eq + Ord + Send + 'a,
 {
 	auth_sets
-		.ready_fold_default(Counts::<Id>::merge)
-		.map(|Counts { by_id, total }: Counts<Id>| {
-			by_id
-				.into_iter()
-				.filter_map(move |(id, count)| (count < total).then_some(id))
-				.stream()
+		.ready_fold_default(RoaringState::<Id>::merge)
+		.map(|state: RoaringState<Id>| {
+			if state.first {
+				Vec::new().into_iter().stream()
+			} else {
+				let diff = std::ops::Sub::sub(state.union, state.intersection);
+				let result_ids: Vec<Id> = diff
+					.into_iter()
+					.map(move |idx| {
+						let index = usize::try_from(idx).expect("idx fits in usize");
+						state.index_to_id[index].clone()
+					})
+					.collect();
+				result_ids.into_iter().stream()
+			}
 		})
 		.flatten_stream()
 }

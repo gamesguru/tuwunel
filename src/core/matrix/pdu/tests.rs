@@ -65,6 +65,29 @@ fn redacted_keeps_member_membership() {
 }
 
 #[test]
+fn rejected_is_not_deserialized_but_can_be_set_locally() {
+	let mut pdu: Pdu = serde_json::from_value(json!({
+		"type": "m.room.message",
+		"content": { "body": "hi", "msgtype": "m.text" },
+		"event_id": "$event:example.com",
+		"room_id": "!room:example.com",
+		"sender": "@erased:example.com",
+		"prev_events": ["$prev:example.com"],
+		"auth_events": ["$auth:example.com"],
+		"origin_server_ts": 1_838_188_000,
+		"depth": 12,
+		"hashes": { "sha256": "thishashcoversallfieldsincasethisisredacted" },
+		"rejected": true,
+	}))
+	.expect("valid pdu");
+
+	assert!(!pdu.rejected, "wire input must not set the rejection marker");
+
+	pdu.rejected = true;
+	assert!(pdu.rejected, "local rejection markers must still be assignable");
+}
+
+#[test]
 fn backfilled_parse() {
 	let count: Count = "-987654".parse().expect("parse() failed");
 	let backfilled = matches!(count, Count::Backfilled(_));

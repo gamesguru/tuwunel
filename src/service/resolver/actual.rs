@@ -116,8 +116,6 @@ async fn actual_dest(
 		| None if let Some(pos) = dest.as_str().find(':') =>
 			self.actual_dest_2(dest, cache, pos).await,
 		| None => {
-			self.maybe_query_and_cache(dest.as_str(), 8448, true)
-				.await?;
 			self.services.server.check_running()?;
 			match self.request_well_known(dest.as_str()).await? {
 				| Some(delegated) => self.actual_dest_3(host, cache, &delegated).await,

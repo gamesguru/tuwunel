@@ -98,7 +98,7 @@ async fn event_fetch(&self, event_id: &EventId) -> Result<PduEvent> {
 		.services
 		.pdu_metadata
 		.is_event_rejected(event_id)
-		.await
+		.await?
 	{
 		pdu.rejected = true;
 	}

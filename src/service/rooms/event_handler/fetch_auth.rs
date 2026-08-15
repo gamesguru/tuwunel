@@ -110,14 +110,27 @@ where
 							self.record_success(Context::Auth, &next_id).await;
 						},
 						| Err(Error::AuthCheck(inner)) => {
-							warn!(?next_id, error = %inner, "Rejected auth event");
 							self.services
 								.timeline
 								.add_pdu_outlier(&next_id, &value);
-							self.services
-								.pdu_metadata
-								.mark_event_rejected(&next_id);
-							self.record_outcome(Context::Auth, &next_id, Disposition::Permanent);
+							if inner.is_not_found() {
+								warn!(?next_id, error = %inner, "Auth dependency unavailable");
+								self.record_outcome(
+									Context::Auth,
+									&next_id,
+									Disposition::Transient,
+								);
+							} else {
+								warn!(?next_id, error = %inner, "Rejected auth event");
+								self.services
+									.pdu_metadata
+									.mark_event_rejected(&next_id);
+								self.record_outcome(
+									Context::Auth,
+									&next_id,
+									Disposition::Permanent,
+								);
+							}
 						},
 						| Err(_) => {
 							self.record_outcome(Context::Auth, &next_id, Disposition::Transient);

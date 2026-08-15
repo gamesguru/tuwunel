@@ -12,7 +12,7 @@ use std::{
 	vec::IntoIter,
 };
 
-use futures::{FutureExt, Stream, StreamExt};
+use futures::{FutureExt, Stream, StreamExt, stream};
 use ruma::{
 	OwnedEventId, events::room::power_levels::UserPowerLevel,
 	room_version_rules::RoomVersionRules,
@@ -25,7 +25,7 @@ use tuwunel_core::{
 	trace,
 	utils::{
 		BoolExt,
-		stream::{BroadbandExt, IterStream},
+		stream::{BroadbandExt, IterStream, automatic_width},
 	},
 };
 
@@ -161,36 +161,37 @@ where
 	)
 	.await;
 
-	// Use FuturesUnordered to fetch all required PDUs and their sender's power
-	// level in parallel.
-	let mut conflicted_events = HashMap::new();
-	let mut auth_context = HashMap::new();
-
 	let mut all_ids_to_fetch = full_conflicted_set.clone();
 	for id in unconflicted_state.values() {
 		all_ids_to_fetch.insert(id.clone());
 	}
 
-	let mut fetch_futures = futures::stream::FuturesUnordered::new();
-	for id in all_ids_to_fetch {
-		let id_clone = id.clone();
-		let is_conflicted = full_conflicted_set.contains(&id_clone);
-		fetch_futures.push(async move {
-			let pdu_res = fetch(id_clone.clone()).await;
-			match pdu_res {
-				| Ok(pdu) =>
-					if is_conflicted {
-						let pl_res =
-							power_level_for_pdu_sender::<_, _, Pdu>(&pdu, rules, fetch).await;
-						(id_clone, Ok(pdu), Some(pl_res))
-					} else {
-						(id_clone, Ok(pdu), None)
-					},
-				| Err(e) => (id_clone, Err(e), None),
+	// Bound the per-event fetch work so state resolution does not fan out
+	// unbounded concurrent database and auth-chain lookups.
+	let fetch_futures = stream::iter(all_ids_to_fetch.into_iter())
+		.map(|id| {
+			let is_conflicted = full_conflicted_set.contains(&id);
+			async move {
+				let pdu_res = fetch(id.clone()).await;
+				match pdu_res {
+					| Ok(pdu) =>
+						if is_conflicted {
+							let pl_res =
+								power_level_for_pdu_sender::<_, _, Pdu>(&pdu, rules, fetch).await;
+							(id, Ok(pdu), Some(pl_res))
+						} else {
+							(id, Ok(pdu), None)
+						},
+					| Err(e) => (id, Err(e), None),
+				}
 			}
-		});
-	}
+		})
+		.buffer_unordered(automatic_width());
 
+	let mut conflicted_events = HashMap::new();
+	let mut auth_context = HashMap::new();
+
+	let mut fetch_futures = fetch_futures;
 	while let Some((id, pdu_res, pl_res)) = fetch_futures.next().await {
 		let pdu = pdu_res?;
 

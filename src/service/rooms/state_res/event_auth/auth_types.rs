@@ -29,7 +29,7 @@ pub fn auth_types_for_event(
 	rules: &AuthorizationRules,
 	always_create: bool,
 ) -> Result<AuthTypes> {
-	let val: serde_json::Value = serde_json::from_str(content.get()).unwrap_or_default();
+	let val: serde_json::Value = serde_json::from_str(content.get())?;
 	let version = if rules.room_create_event_id_as_room_id {
 		rezzy::StateResVersion::V2_1
 	} else {

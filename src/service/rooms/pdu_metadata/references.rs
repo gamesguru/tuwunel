@@ -144,12 +144,12 @@ pub fn mark_event_rejected(&self, event_id: &EventId) {
 /// Whether an event carries a rejection marker.
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "debug", ret)]
-pub async fn is_event_rejected(&self, event_id: &EventId) -> bool {
-	self.db
-		.rejectedeventids
-		.get(event_id)
-		.await
-		.is_ok()
+pub async fn is_event_rejected(&self, event_id: &EventId) -> Result<bool> {
+	match self.db.rejectedeventids.get(event_id).await {
+		| Ok(_) => Ok(true),
+		| Err(e) if e.is_not_found() => Ok(false),
+		| Err(e) => Err(e),
+	}
 }
 
 #[implement(Service)]

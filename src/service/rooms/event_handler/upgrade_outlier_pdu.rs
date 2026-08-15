@@ -121,20 +121,24 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 		.map(Arc::new)
 		.await;
 
-	if let Err(e) = self
+	match self
 		.auth_check_outlier_pdu(room_id, &incoming_pdu, &room_rules, &state_at_incoming_event)
 		.await
 	{
-		// The event already exists as a stored outlier (step 7 ran before this
-		// check), so it stays fetchable; mark it so any later event citing it as
-		// an auth event is rejected too, per the auth rules.
-		self.services
-			.pdu_metadata
-			.mark_event_rejected(incoming_pdu.event_id());
-		self.cache_resolved_state(room_id, incoming_pdu.event_id(), state_ids_compressed)
-			.await;
+		| Ok(()) => {},
+		| Err(e @ tuwunel_core::Error::AuthCheck(_)) => {
+			// The event already exists as a stored outlier (step 7 ran before this
+			// check), so it stays fetchable; mark it so any later event citing it as
+			// an auth event is rejected too, per the auth rules.
+			self.services
+				.pdu_metadata
+				.mark_event_rejected(incoming_pdu.event_id());
+			self.cache_resolved_state(room_id, incoming_pdu.event_id(), state_ids_compressed)
+				.await;
 
-		return Err(e);
+			return Err(e);
+		},
+		| Err(e) => return Err(e),
 	}
 
 	let soft_fail = !cleared

@@ -136,7 +136,7 @@ pub struct Pdu {
 	/// time (see `pdu_metadata::is_event_rejected`) by call sites that need
 	/// the verdict for auth checks, such as `event_fetch`. Any other
 	/// construction path defaults to `false`.
-	#[serde(default, skip_serializing)]
+	#[serde(default, skip_serializing, skip_deserializing)]
 	pub rejected: bool,
 }
 

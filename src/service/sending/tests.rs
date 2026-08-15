@@ -1,5 +1,5 @@
 use super::{
-	Destination, EduBuf, SendingEvent, TAG_DEVICE_LIST_CHANGED, TAG_TO_DEVICE,
+	Destination, EduBuf, SendingEvent, TAG_BADGE_REFRESH, TAG_DEVICE_LIST_CHANGED, TAG_TO_DEVICE,
 	data::parse_servercurrentevent,
 };
 
@@ -42,6 +42,7 @@ fn appservice_device_list_round_trips() {
 		TAG_DEVICE_LIST_CHANGED,
 		b"@ghost:remote.example",
 	));
+
 	let (_, decoded) = parse_servercurrentevent(&count_key(), event.value_bytes())
 		.expect("appservice device-list row decodes");
 
@@ -64,13 +65,15 @@ fn appservice_empty_value_decodes_as_pdu() {
 
 	let (_, decoded) = parse_servercurrentevent(&key, &[]).expect("empty appservice row decodes");
 
+	let value = decoded.value_bytes();
+
 	assert!(matches!(decoded, SendingEvent::Pdu(_)));
-	assert!(decoded.value_bytes().is_empty());
+	assert!(value.is_empty(), "{value:?}");
 }
 
 #[test]
 fn appservice_unknown_tag_decodes_as_edu() {
-	let (_, decoded) = parse_servercurrentevent(&count_key(), &[0x03, 0xAA, 0xBB])
+	let (_, decoded) = parse_servercurrentevent(&count_key(), &[0x04, 0xAA, 0xBB])
 		.expect("unknown-tag appservice row decodes");
 
 	assert!(matches!(decoded, SendingEvent::Edu(_)));
@@ -80,6 +83,7 @@ fn appservice_unknown_tag_decodes_as_edu() {
 fn federation_branch_ignores_tag_bytes() {
 	let mut key =
 		Destination::Federation("remote.example".try_into().expect("server name")).get_prefix();
+
 	key.extend_from_slice(&[0x11; NORMAL_PDU_LEN]);
 
 	let (dest, event) = parse_servercurrentevent(&key, &[]).expect("federation pdu row decodes");
@@ -88,21 +92,35 @@ fn federation_branch_ignores_tag_bytes() {
 
 	let (_, event) = parse_servercurrentevent(&key, &[TAG_TO_DEVICE, 0x00])
 		.expect("federation non-empty row decodes");
+
 	assert!(matches!(event, SendingEvent::Edu(_)));
 }
 
 #[test]
-fn push_branch_ignores_tag_bytes() {
-	let mut key =
-		Destination::Push("@u:remote.example".try_into().expect("user id"), "pushkey".to_owned())
-			.get_prefix();
-	key.extend_from_slice(&[0x22; NORMAL_PDU_LEN]);
+fn push_branch_distinguishes_badge_refresh() {
+	let destination =
+		Destination::Push("@u:remote.example".try_into().expect("user id"), "pushkey".to_owned());
 
-	let (dest, event) = parse_servercurrentevent(&key, &[]).expect("push pdu row decodes");
-	assert!(matches!(dest, Destination::Push(..)));
+	let mut pdu_key = destination.get_prefix();
+	pdu_key.extend_from_slice(&[0x11; NORMAL_PDU_LEN]);
+
+	let (_, event) = parse_servercurrentevent(&pdu_key, &[]).expect("push pdu row decodes");
 	assert!(matches!(event, SendingEvent::Pdu(_)));
 
-	let (_, event) = parse_servercurrentevent(&key, &[TAG_TO_DEVICE, 0x00])
+	let mut badge_key = destination.get_prefix();
+	badge_key.extend_from_slice(&7_u64.to_be_bytes());
+
+	let badge = SendingEvent::BadgeRefresh;
+	assert_eq!(badge.value_bytes(), &[TAG_BADGE_REFRESH]);
+
+	let (dest, event) = parse_servercurrentevent(&badge_key, badge.value_bytes())
+		.expect("badge refresh row decodes");
+
+	assert!(matches!(dest, Destination::Push(..)));
+	assert_eq!(event, SendingEvent::BadgeRefresh);
+
+	let (_, event) = parse_servercurrentevent(&badge_key, &[TAG_TO_DEVICE, 0x00])
 		.expect("push non-empty row decodes");
+
 	assert!(matches!(event, SendingEvent::Edu(_)));
 }

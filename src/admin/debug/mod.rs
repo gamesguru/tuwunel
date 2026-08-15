@@ -23,6 +23,8 @@ mod list_dependencies;
 mod memory_stats;
 mod parse_pdu;
 mod ping;
+mod rebuild_relation_index;
+mod rebuild_thread_index;
 mod resolve_true_destination;
 mod resync_database;
 mod runtime_interval;
@@ -311,6 +313,13 @@ pub(super) enum DebugCommand {
 
 	/// - Synchronize database with primary (secondary only)
 	ResyncDatabase,
+
+	/// - Rebuild the typed relation index (relatesto_typed) from all PDUs
+	RebuildRelationIndex,
+
+	/// - Rebuild the thread activity index (threadactivityid_rootid) from all
+	///   thread roots
+	RebuildThreadIndex,
 
 	/// - Retrieves the saved original PDU before it has been redacted
 	GetRetainedPdu {

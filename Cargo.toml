@@ -30,7 +30,7 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/matrix-construct/tuwunel"
 rust-version = "1.95.0"
-version = "1.8.1"
+version = "1.8.3"
 
 [workspace.metadata.crane]
 name = "tuwunel"
@@ -57,6 +57,11 @@ version = "2.3.1"
 [workspace.dependencies.async-trait]
 version = "0.1"
 
+[workspace.dependencies.aws-lc-rs]
+version = "1.17"
+default-features = false
+features = ["aws-lc-sys"]
+
 [workspace.dependencies.axum]
 version = "0.8"
 default-features = false
@@ -75,8 +80,8 @@ version = "0.12"
 default-features = false
 features = [
 	"cookie",
-	"typed-header",
 	"tracing",
+	"typed-header",
 ]
 
 [workspace.dependencies.axum-server]
@@ -140,9 +145,9 @@ features = ["proc"]
 version = "0.8"
 default-features = false
 features = [
-	"cargo_bench_support",
 	"async_futures",
 	"async_tokio",
+	"cargo_bench_support",
 ]
 
 [workspace.dependencies.ctor]
@@ -200,18 +205,18 @@ version = "0.1"
 version = "1.8"
 default-features = false
 features = [
-	"server",
 	"http1",
 	"http2",
+	"server",
 ]
 
 [workspace.dependencies.image]
 version = "0.25"
 default-features = false
 features = [
+	"gif",
 	"jpeg",
 	"png",
-	"gif",
 	"webp",
 ]
 
@@ -231,20 +236,17 @@ features = [
 ]
 
 [workspace.dependencies.itertools]
-version = "0.14"
+version = "0.15"
 
 [workspace.dependencies.jevmalloc]
 git = "https://github.com/matrix-construct/jevmalloc"
-rev = "93795449913f65ab533b7fa482333eef63fc3ae0"
+rev = "faa391081abf35f6ff084c40104d2645be132dd7"
 
 [workspace.dependencies.jsonwebtoken]
-version = "10.3"
+version = "11.0"
 default-features = false
 features = [
 	"aws_lc_rs",
-	"ed25519-dalek",
-	"hmac",
-	"sha2",
 	"use_pem",
 ]
 
@@ -258,10 +260,10 @@ features = ["sync", "tls-rustls"]
 version = "0.11"
 default-features = false
 features = [
+	"aws-lc-rs",
 	"builder",
 	"hostname",
 	"pool",
-	"ring",
 	"rustls-platform-verifier",
 	"smtp-transport",
 	"tokio1",
@@ -292,13 +294,14 @@ version = "2.2"
 features = ["std"]
 
 [workspace.dependencies.minicbor-serde]
-version = "0.6"
+version = "0.7"
 features = ["std"]
 
 [workspace.dependencies.nix]
 version = "0"
 default-features = false
 features = [
+	"net",
 	"resource",
 	"socket",
 	"user",
@@ -311,12 +314,11 @@ version = "1"
 version = "0.2"
 
 [workspace.dependencies.object_store]
-version = "0.13"
+version = "0.14"
 default-features = false
 features = [
 	"aws",
 	"fs",
-	"tls-webpki-roots",
 ]
 
 [workspace.dependencies.opentelemetry]
@@ -359,10 +361,6 @@ features = [
 	"socks",
 ]
 
-[workspace.dependencies.ring]
-version = "0.17"
-default-features = false
-
 [workspace.dependencies.rezzy]
 #version = "0.4.0"
 git = "https://github.com/gamesguru/rezzy"
@@ -378,7 +376,7 @@ version = "0.11.4"
 
 [workspace.dependencies.ruma]
 git = "https://github.com/matrix-construct/ruma"
-rev = "ce8b17c57da523341a0d8cc1280cdde6faa74db7"
+rev = "7cf3483a30fa331843531da2c99451d25771176a"
 features = [
     "__compat",
     "appservice-api-c",
@@ -392,26 +390,23 @@ features = [
     "push-gateway-api-c",
     "rand",
     "ring-compat",
+    "unstable-extensible-events",
     "unstable-msc2448",
     "unstable-msc2666",
     "unstable-msc2815",
-    "unstable-msc2867",
-    "unstable-msc2870",
     "unstable-msc3026",
-    "unstable-msc3061",
     "unstable-msc3202", # encrypted appservice transaction extensions
-    "unstable-msc3391",
-    "unstable-msc3814",
-    "unstable-msc3824",
     "unstable-msc3245",
     "unstable-msc3381", # polls
+    "unstable-msc3391",
     "unstable-msc3489", # beacon / live location
+    "unstable-msc3814",
     "unstable-msc3930", # polls push rules
+    "unstable-msc3983", # appservice one-time key claims
+    "unstable-msc3984", # appservice device key queries
     "unstable-msc4075",
-    "unstable-msc4095",
     "unstable-msc4121",
     "unstable-msc4125",
-    "unstable-msc4133",
     "unstable-msc4143",
     "unstable-msc4186",
     "unstable-msc4195",
@@ -419,22 +414,26 @@ features = [
     "unstable-msc4265",
     "unstable-msc4266",
     "unstable-msc4310",
-    "unstable-msc4311",
     "unstable-msc4383",
+    "unstable-msc4388",
     "unstable-msc4439",
     "unstable-msc4466",
-    "unstable-extensible-events",
 ]
 
 [workspace.dependencies.synapse-admin-api]
 git = "https://github.com/matrix-construct/synapse-admin-api"
-rev = "d0233c81bfc712511705db8dd8a74bd1500aba32"
+rev = "5cb409a3fc10b2dc9d8ed4f0f2ed7a68ca910a6d"
 features = ["server"]
 
 [workspace.dependencies.rustls]
 version = "0.23"
 default-features = false
-features = ["aws_lc_rs", "logging", "tls12", "prefer-post-quantum"]
+features = [
+	"aws_lc_rs",
+	"logging",
+	"prefer-post-quantum",
+	"tls12",
+]
 
 [workspace.dependencies.rustyline-async]
 version = "0.4.6"
@@ -442,9 +441,10 @@ default-features = false
 
 [workspace.dependencies.rust-rocksdb]
 git = "https://github.com/matrix-construct/rust-rocksdb"
-rev = "9f26b713c204bd8783cdbc2d36a524945e44773d"
+rev = "22e4c7739a7f49af08c3c4c71abd294a9f881875"
 default-features = false
 features = [
+	"bindgen-runtime",
 	"bzip2",
 	"lto",
 	"lz4",
@@ -468,13 +468,13 @@ features = [
     "backtrace",
     "contexts",
     "debug-images",
+    "log",
     "panic",
+    "reqwest",
     "rustls",
     "tower",
     "tower-http",
     "tracing",
-    "reqwest",
-    "log",
 ]
 
 [workspace.dependencies.sentry-tower]
@@ -550,12 +550,12 @@ features = [
 	"extra-traits",
 	"full",
 	"parsing",
-	"proc-macro",
 	"printing",
+	"proc-macro",
 ]
 
 [workspace.dependencies.termimad]
-version = "0.34"
+version = "0.35"
 default-features = false
 
 [workspace.dependencies.thiserror]
@@ -563,17 +563,18 @@ version = "2.0"
 default-features = false
 
 [workspace.dependencies.tokio]
-version = "1.52"
+version = "1.53"
 default-features = false
 features = [
 	"fs",
-	"net",
-	"macros",
-	"sync",
-	"signal",
-	"time",
-	"rt-multi-thread",
 	"io-util",
+	"macros",
+	"net",
+	"process",
+	"rt-multi-thread",
+	"signal",
+	"sync",
+	"time",
 	"tracing",
 ]
 
@@ -638,9 +639,6 @@ features = ["serde"]
 version = "2.0"
 default-features = false
 
-[workspace.dependencies.webpki-root-certs]
-version = "1.0"
-
 #
 # Patches
 #
@@ -677,6 +675,10 @@ rev = "0510e3a3cba7aedd504b4ee0d69fbf41e76a524f"
 [patch.crates-io.resolv-conf]
 git = "https://github.com/matrix-construct/resolv-conf"
 rev = "ab5c3e44016bc76b8798ec837a5a9cf9d88bf233"
+
+[patch.crates-io.rustls-platform-verifier]
+git = "https://github.com/matrix-construct/rustls-platform-verifier"
+rev = "c68093b6ac7d739e6b3aefb809c646a5e0210306"
 
 #
 # Our crates
@@ -891,66 +893,67 @@ opt-level = 'z'
 #
 
 [workspace.lints.rust]
-absolute-paths-not-starting-with-crate = "warn"
-#box-pointers = "warn"
-deprecated-in-future = "warn"
-elided-lifetimes-in-paths = "warn"
-explicit-outlives-requirements = "warn"
-ffi-unwind-calls = "warn"
-keyword-idents = "warn"
-macro-extended-temporary-scopes = "warn"
-macro-use-extern-crate = "warn"
-meta-variable-misuse = "warn"
-missing-abi = "warn"
-#missing-copy-implementations = "warn"                               # TODO
-#missing-debug-implementations = "warn"                              # TODO
-non-ascii-idents = "warn"
-rust-2021-incompatible-closure-captures = "warn"
-rust-2021-incompatible-or-patterns = "warn"
-rust-2021-prefixes-incompatible-syntax = "warn"
-rust-2021-prelude-collisions = "warn"
-semicolon-in-expressions-from-macros = "warn"
-single-use-lifetimes = "warn"
-trivial-casts = "warn"
-trivial-numeric-casts = "warn"
-unit-bindings = "warn"
-#unnameable-types = "warn"                                           # TODO
-unreachable-pub = "warn"
-unsafe-op-in-unsafe-fn = "warn"
-unstable-features = "warn"
-unused-extern-crates = "warn"
-unused-import-braces = "warn"
-unused-lifetimes = "warn"
-unused-macro-rules = "warn"
-unused-must-use = "warn"
-unused-qualifications = "warn"
-#unused-results = "warn"                                             # TODO
+absolute_paths_not_starting_with_crate = "warn"
+ambiguous_negative_literals = "warn"
+closure_returning_async_block = "warn"
+deprecated_in_future = "warn"
+deref_into_dyn_supertrait = "warn"
+elided_lifetimes_in_paths = "warn"
+explicit_outlives_requirements = "warn"
+ffi_unwind_calls = "warn"
+impl_trait_redundant_captures = "warn"
+keyword_idents = { level = "warn", priority = -1 }
+macro_use_extern_crate = "warn"
+meta_variable_misuse = "warn"
+missing_abi = "warn"
+missing_copy_implementations = "warn"
+#missing_debug_implementations = "warn"                              # TODO
+non_ascii_idents = "warn"
+redundant_imports = "warn"
+redundant_lifetimes = "warn"
+rust_2021_incompatible_closure_captures = "warn"
+rust_2021_incompatible_or_patterns = "warn"
+rust_2021_prefixes_incompatible_syntax = "warn"
+rust_2021_prelude_collisions = "warn"
+semicolon_in_expressions_from_macros = "warn"
+single_use_lifetimes = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unit_bindings = "warn"
+unnameable_types = "warn"
+unreachable_pub = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+unstable_features = "warn"
+unused_extern_crates = "warn"
+unused_import_braces = "warn"
+unused_lifetimes = "warn"
+unused_macro_rules = "warn"
+unused_must_use = "warn"
+unused_qualifications = "warn"
+#unused_results = "warn"                                             # TODO
 
 ## some sadness
-elided_named_lifetimes = "allow"                                     # TODO!
-mismatched_lifetime_syntaxes = "allow"                               # TODO!
+mismatched_lifetime_syntaxes = "allow"
+# counts every pub item of test and bench executables as dead code
+dead_code_pub_in_binary = "allow"
 let_underscore_drop = "allow"
 missing_docs = "allow"
 # cfgs cannot be limited to expected cfgs or their de facto non-transitive/opt-in use-case e.g.
 # tokio_unstable will warn.
 unexpected_cfgs = "allow"
-# this seems to suggest broken code and is not working correctly
-unused_braces = "allow"
 # buggy, but worth checking on occasionally
 unused_crate_dependencies = "allow"
 unsafe_code = "allow"
+# skips niche-encoded enums (nearly all of ours) and compares a ratio rather
+# than a magnitude; clippy::large_enum_variant covers this by size instead.
 variant_size_differences = "allow"
 
 # we check nightly clippy lints
 unknown_lints = "allow"
 
-# rust claims elided_named_lifetimes has been replaced by
-# mismatched_lifetime_syntaxes but it actually has not.
-renamed_and_removed_lints = "allow"
-
-# nightly has a new lint that conflicts with our BoolExt trait at
-# src/core/utils/bool.rs:68:48
-# <https://github.com/rust-lang/rust/issues/142748>
+# BoolExt::ok_or/ok_or_else collide with unstable bool inherents on the pinned
+# stable toolchain; silent on nightly, where std no longer has them.
+# <https://github.com/rust-lang/rust/issues/48919>
 unstable_name_collisions = "allow"                                   # TODO
 
 #######################################
@@ -980,9 +983,7 @@ nursery = { level = "warn", priority = -1 }
 
 ## some sadness
 missing_const_for_fn = { level = "allow", priority = 1 }             # TODO
-option_if_let_else = { level = "allow", priority = 1 }               # TODO
 redundant_pub_crate = { level = "allow", priority = 1 }              # TODO
-significant_drop_in_scrutinee = { level = "allow", priority = 1 }    # TODO
 significant_drop_tightening = { level = "allow", priority = 1 }      # TODO
 tuple_array_conversions = { level = "allow", priority = 1 }
 unused_async_trait_impl = { level = "allow", priority = 1 }          # trait-mandated async (FromRequestParts, #[admin_command])
@@ -991,13 +992,10 @@ unused_async_trait_impl = { level = "allow", priority = 1 }          # trait-man
 pedantic = { level = "warn", priority = -1 }
 
 ## some sadness
-too_long_first_doc_paragraph = { level = "allow", priority = 1 }
 default_trait_access = { level = "allow", priority = 1 }
 doc_markdown = { level = "allow", priority = 1 }
-elidable_lifetime_names = { level = "allow", priority = 1 }
 enum_glob_use = { level = "allow", priority = 1 }
 if_not_else = { level = "allow", priority = 1 }
-if_then_some_else_none = { level = "allow", priority = 1 }
 inline_always = { level = "allow", priority = 1 }
 map_unwrap_or = { level = "allow", priority = 1 }
 match_bool = { level = "allow", priority = 1 }
@@ -1005,10 +1003,7 @@ missing_docs_in_private_items = { level = "allow", priority = 1 }
 missing_errors_doc = { level = "allow", priority = 1 }
 missing_panics_doc = { level = "allow", priority = 1 }
 module_name_repetitions = { level = "allow", priority = 1 }
-needless_continue = { level = "allow", priority = 1 }
-no_effect_underscore_binding = { level = "allow", priority = 1 }
 similar_names = { level = "allow", priority = 1 }
-single_match_else = { level = "allow", priority = 1 }
 struct_excessive_bools = { level = "allow", priority = 1 }
 struct_field_names = { level = "allow", priority = 1 }
 unnecessary_wraps = { level = "allow", priority = 1 }
@@ -1019,14 +1014,21 @@ perf = { level = "warn", priority = -1 }
 ###################
 #restriction = "warn"
 
+allow_attributes = "warn"
 arithmetic_side_effects = "warn"
 as_conversions = "warn"
+as_pointer_underscore = "warn"
 as_underscore = "warn"
 assertions_on_result_states = "warn"
+# moved from nursery to restriction in 1.91, silently dropping out of coverage
+cognitive_complexity = "warn"
+create_dir = "warn"
 dbg_macro = "warn"
 default_union_representation = "warn"
 deref_by_slicing = "warn"
+doc_include_without_cfg = "warn"
 empty_drop = "warn"
+empty_enum_variants_with_brackets = "warn"
 empty_structs_with_brackets = "warn"
 exit = "warn"
 filetype_is_file = "warn"
@@ -1034,18 +1036,37 @@ float_cmp_const = "warn"
 fn_to_numeric_cast_any = "warn"
 format_push_string = "warn"
 get_unwrap = "warn"
+# on-disk record keys are big-endian; a native or little-endian byte
+# projection near the schema is a bug
+host_endian_bytes = "warn"
+if_then_some_else_none = "warn"
 impl_trait_in_params = "warn"
+infinite_loop = "warn"
+large_include_file = "warn"
+let_underscore_must_use = "warn"
 let_underscore_untyped = "warn"
+little_endian_bytes = "warn"
 lossy_float_literal = "warn"
+map_with_unused_argument_over_ranges = "warn"
 mem_forget = "warn"
 missing_assert_message = "warn"
+mixed_read_write_in_expression = "warn"
+multiple_unsafe_ops_per_block = "warn"
 mutex_atomic = "warn"
+mutex_integer = "warn"
+needless_raw_strings = "warn"
+non_zero_suggestions = "warn"
+pathbuf_init_then_push = "warn"
+pointer_format = "warn"
+precedence_bits = "warn"
 pub_without_shorthand = "warn"
 rc_buffer = "warn"
 rc_mutex = "warn"
+redundant_test_prefix = "warn"
 redundant_type_annotations = "warn"
 semicolon_outside_block = "warn"
 str_to_string = "warn"
+string_add = "warn"
 string_lit_chars_any = "warn"
 string_slice = "warn"
 implicit_clone = "warn"
@@ -1067,9 +1088,11 @@ style = { level = "warn", priority = -1 }
 ## some sadness
 # trivial assertions are quite alright
 assertions_on_constants = { level = "allow", priority = 1 }
+# async_trait marks its generated pinned-box futures must_use; not ours to remove
+double_must_use = { level = "allow", priority = 1 }
 module_inception = { level = "allow", priority = 1 }
 obfuscated_if_else = { level = "allow", priority = 1 }
-toplevel-ref-arg = { level = "allow", priority = 1 }
+toplevel_ref_arg = { level = "allow", priority = 1 }
 
 ###################
 suspicious = { level = "warn", priority = -1 }

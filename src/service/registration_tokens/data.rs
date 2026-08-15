@@ -3,7 +3,7 @@ use std::{sync::Arc, time::SystemTime};
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 use tuwunel_core::{
-	Err, Result,
+	Err, Result, err,
 	utils::{
 		self,
 		stream::{ReadyExt, TryIgnore},
@@ -16,7 +16,7 @@ pub(super) struct Data {
 }
 
 /// Metadata of a registration token.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct DatabaseTokenInfo {
 	/// The number of times this token has been used to create an account.
 	pub uses: u64,
@@ -59,7 +59,7 @@ impl std::fmt::Display for DatabaseTokenInfo {
 	}
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct TokenExpires {
 	pub max_uses: Option<u64>,
 	pub max_age: Option<SystemTime>,
@@ -177,13 +177,12 @@ impl Data {
 	}
 
 	/// Look up a token's stored metadata, returning `None` when it is absent.
-	pub(super) async fn get_token_info(&self, token: &str) -> Result<Option<DatabaseTokenInfo>> {
+	pub(super) async fn get_token_info(&self, token: &str) -> Result<DatabaseTokenInfo> {
 		self.registrationtoken_info
 			.get(token)
 			.await
 			.deserialized()
-			.map(Some)
-			.or_else(|e| e.is_not_found().then_some(None).ok_or(e))
+			.map_err(|_| err!(Request(NotFound("Registration token not found"))))
 	}
 
 	/// Replace a token's expiry while preserving its use counter.
@@ -192,9 +191,7 @@ impl Data {
 		token: &str,
 		expires: TokenExpires,
 	) -> Result<DatabaseTokenInfo> {
-		let Some(current) = self.get_token_info(token).await? else {
-			return Err!(Request(NotFound("Registration token not found")));
-		};
+		let current = self.get_token_info(token).await?;
 
 		let info = DatabaseTokenInfo { uses: current.uses, expires };
 

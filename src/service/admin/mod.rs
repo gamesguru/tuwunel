@@ -28,9 +28,6 @@ pub struct Service {
 	channel: StdRwLock<Option<mpsc::Sender<CommandInput>>>,
 	pub command: StdRwLock<Option<Arc<dyn Command>>>,
 	pub admin_alias: OwnedRoomAliasId,
-	/// Resolved Synapse-compatible registration shared secret. Live for the
-	/// lifetime of the service; the matching nonce store sits beside it.
-	register_shared_secret: Option<String>,
 	register_nonces: StdMutex<BTreeMap<String, Instant>>,
 	#[cfg(feature = "console")]
 	pub console: Arc<console::Console>,
@@ -54,9 +51,10 @@ pub trait Command: Send + Sync + 'static {
 	async fn dispatch(&self, matches: clap::ArgMatches, context: &Context<'_>) -> Result;
 }
 
-/// Result wrapping of a command's handling. The text has already digested any
-/// prior errors; the wrapping preserves whether the command failed without
-/// interpreting the text. Ok(None) outputs are dropped to produce no response.
+/// Carries a rendered command outcome while preserving its status.
+///
+/// `Ok(Some(output))` reports success, `Err(output)` reports failure, and
+/// `Ok(None)` suppresses the response. Callers do not infer status from text.
 pub type ProcessorResult = Result<Option<CommandOutput>, CommandOutput>;
 
 /// Textual output of a completed command. Markdown is the norm; Plain carries
@@ -88,7 +86,6 @@ impl crate::Service for Service {
 			command: StdRwLock::new(None),
 			admin_alias: OwnedRoomAliasId::try_from(format!("#admins:{}", args.server.name))
 				.expect("#admins:server_name is valid alias name"),
-			register_shared_secret: register::resolve_shared_secret(&args.server.config),
 			register_nonces: StdMutex::new(BTreeMap::new()),
 			#[cfg(feature = "console")]
 			console: console::Console::new(args),
@@ -112,9 +109,8 @@ impl crate::Service for Service {
 					Some(command) => self.handle_command(command).await,
 					None => break,
 				},
-				sig = signals.recv() => match sig {
-					Ok(sig) => self.handle_signal(sig).await,
-					Err(_) => continue,
+				sig = signals.recv() => if let Ok(sig) = sig {
+					self.handle_signal(sig).await;
 				},
 			}
 		}

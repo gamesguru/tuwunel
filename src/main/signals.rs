@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use tokio::signal;
-use tuwunel_core::{debug_error, trace, warn};
+#[cfg(unix)]
+use tuwunel_core::trace;
+use tuwunel_core::{debug_error, warn};
 
 use super::server::Server;
 

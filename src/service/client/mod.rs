@@ -7,8 +7,10 @@ use std::{
 
 use bytes::{Bytes, BytesMut};
 use ipaddress::{IPAddress, ipv4::from_u32 as ipv4_from_u32};
-use reqwest::{Certificate, Client, ClientBuilder, dns::Resolve, header::HeaderValue, redirect};
-use tuwunel_core::{Config, Err, Result, debug, either::Either, err, implement, trace};
+use reqwest::{Client, ClientBuilder, dns::Resolve, header::HeaderValue, redirect};
+use tuwunel_core::{
+	Config, Err, Result, debug, either::Either, err, error::error_chain, implement, trace,
+};
 
 use crate::{Services, resolver::Validating, service};
 
@@ -44,6 +46,8 @@ impl crate::Service for Service {
 	fn build(args: &crate::Args<'_>) -> Result<Arc<Self>> {
 		let config = &args.server.config;
 
+		probe_tls(config)?;
+
 		Ok(Arc::new(Self {
 			clients: LazyLock::new(Box::new({
 				let services = args.services.clone();
@@ -63,6 +67,25 @@ impl crate::Service for Service {
 	}
 
 	fn name(&self) -> &str { service::make_name(std::module_path!()) }
+}
+
+/// Fails startup when an HTTPS client cannot be constructed.
+///
+/// The clients are built lazily on first use, so a platform trust store that
+/// yields no roots surfaces as a panic inside whichever worker reaches for a
+/// client first. Probing once at startup turns that into a legible boot error.
+fn probe_tls(config: &Config) -> Result {
+	base(config, None)?
+		.build()
+		.map(drop)
+		.map_err(|e| {
+			err!(error!(
+				chain = %error_chain(&e),
+				"Failed to construct an HTTPS client. If the system trust store is empty, \
+				 install a CA bundle (ca-certificates on Debian and Ubuntu) or point \
+				 SSL_CERT_FILE at one.",
+			))
+		})
 }
 
 fn make_clients(services: &Services) -> Result<Clients> {
@@ -217,13 +240,6 @@ fn base(config: &Config, name: Option<&str>) -> Result<ClientBuilder> {
 		.user_agent(user_agent)
 		.redirect(redirect::Policy::limited(6))
 		.danger_accept_invalid_certs(config.allow_invalid_tls_certificates)
-		.tls_certs_merge(
-			webpki_root_certs::TLS_SERVER_ROOT_CERTS
-				.iter()
-				.map(|der| {
-					Certificate::from_der(der).expect("certificate must be valid der encoding")
-				}),
-		)
 		.connection_verbose(cfg!(debug_assertions))
 		// Check if env var is set to avoid locking the keyfile mutex on every connection open
 		.tls_sslkeylogfile(std::env::var_os("SSLKEYLOGFILE").is_some());
@@ -245,10 +261,11 @@ fn base(config: &Config, name: Option<&str>) -> Result<ClientBuilder> {
 	}
 }
 
-/// Buffer a remote response body, rejecting any response larger than `limit`
-/// bytes. reqwest enforces no response-size limit, so an unbounded `bytes()`
-/// lets a peer drive an allocator abort; refuse an oversized advertised length
-/// and hold the same bound while streaming for when that length is absent.
+/// Prevents a remote peer from forcing unbounded response-body allocation.
+///
+/// An advertised `Content-Length` above `limit` is rejected before the body
+/// buffer is allocated. The streaming loop enforces the same bound when the
+/// length is absent or inaccurate.
 pub async fn read_response_capped(
 	mut response: reqwest::Response,
 	limit: usize,
@@ -296,11 +313,15 @@ fn builder_interface(builder: ClientBuilder, config: Option<&str>) -> Result<Cli
 fn builder_interface(builder: ClientBuilder, config: Option<&str>) -> Result<ClientBuilder> {
 	use tuwunel_core::Err;
 
-	if let Some(iface) = config {
-		Err!("Binding to network-interface {iface:?} by name is not supported on this platform.")
-	} else {
-		Ok(builder)
-	}
+	config.map_or_else(
+		|| Ok(builder),
+		|iface| {
+			Err!(
+				"Binding to network-interface {iface:?} by name is not supported on this \
+				 platform."
+			)
+		},
+	)
 }
 
 fn appservice_resolver(services: &Services) -> Arc<dyn Resolve> {

@@ -1,3 +1,10 @@
+//! Deserialization for the database's compact record codec.
+//!
+//! Compound values are divided into records by [`crate::SEP`]. A trailing type
+//! that accepts empty input can decode a missing final field from an older,
+//! shorter tuple, while writing the extended tuple emits an additional
+//! separator before that appended field.
+
 use serde::{
 	Deserialize, de,
 	de::{DeserializeSeed, Visitor},
@@ -7,7 +14,17 @@ use tuwunel_core::{
 	utils::string,
 };
 
-/// Deserialize into T from buffer.
+/// Deserializes a value from database record bytes.
+///
+/// The result may borrow from `buf` according to `T`'s deserialization
+/// implementation. Debug builds additionally verify that decoding consumed the
+/// input, apart from one trailing record separator.
+///
+/// # Panics
+///
+/// Panics if `T` requests a Serde data-model operation unsupported by this
+/// codec. In debug builds, decoding also panics when record-layout invariants
+/// are violated or unexpected trailing bytes remain.
 #[cfg_attr(
 	unabridged,
 	tracing::instrument(
@@ -17,7 +34,7 @@ use tuwunel_core::{
 		fields(len = %buf.len()),
 	)
 )]
-pub(crate) fn from_slice<'a, T>(buf: &'a [u8]) -> Result<T>
+pub fn from_slice<'a, T>(buf: &'a [u8]) -> Result<T>
 where
 	T: Deserialize<'a>,
 {
@@ -30,7 +47,12 @@ where
 	})
 }
 
-/// Deserialization state.
+/// Cursor state for decoding the compact database record format.
+///
+/// The byte position and record counters advance independently so incomplete
+/// tuple tails can be presented to inner deserializers as empty input.
+/// `next_element_seed` compares the record count with the expected sequence
+/// length when deciding whether iteration is complete.
 pub(crate) struct Deserializer<'de> {
 	buf: &'de [u8],
 	pos: usize,
@@ -38,14 +60,20 @@ pub(crate) struct Deserializer<'de> {
 	seq: usize,
 }
 
-/// Directive to ignore a record. This type can be used to skip deserialization
-/// until the next separator is found.
-#[derive(Debug, Deserialize)]
+/// Skips one encoded record when deserialized inside a sequence.
+///
+/// At the top level, the directive consumes all remaining records so the input
+/// finishes cleanly. It produces only the unit value represented by this
+/// marker.
+#[derive(Clone, Copy, Debug, Deserialize)]
 pub struct Ignore;
 
-/// Directive to ignore all remaining records. This can be used in a sequence to
-/// ignore the rest of the sequence.
-#[derive(Debug, Deserialize)]
+/// Skips the current record and every record that follows it.
+///
+/// Place this directive inside a sequence to discard its remaining encoded
+/// elements. It consumes the trailing input and produces only the unit value
+/// represented by this marker.
+#[derive(Clone, Copy, Debug, Deserialize)]
 pub struct IgnoreAll;
 
 impl<'de> Deserializer<'de> {

@@ -1,19 +1,28 @@
 #![allow(unused_features)] // 1.96.0-nightly 2026-03-07 bug
 #![expect(clippy::needless_borrows_for_generic_args)]
 
-use std::fmt::Debug;
+use std::{env::var, fmt::Debug, process::id as process_id, sync::Arc};
 
+use rocksdb::WriteBatch;
 use serde::{Deserialize, Serialize};
+use tokio::runtime::Handle;
+use tracing::subscriber::NoSubscriber;
 use tuwunel_core::{
+	Result, Server,
 	arrayvec::ArrayVec,
+	config::{Config, Figment, Sources},
+	log::{LogLevelReloadHandles, Logging, capture::State},
+	metrics::Metrics,
 	ruma::{EventId, RoomId, UserId, serde::Raw},
 };
 
 use crate::{
-	Cbor, Ignore, Interfix,
+	Cbor, Database, Ignore, Interfix, Txn,
 	de::from_slice,
+	keyval::{serialize_key, serialize_val},
 	ser,
 	ser::{Json, serialize_to_vec},
+	txn::next_record,
 };
 
 #[test]
@@ -1072,4 +1081,226 @@ fn lazy_media_outlives_url_preview() {
 		ttl("mediaid_lazy") >= ttl("url_preview"),
 		"a served preview's mxc must still resolve while the preview is cached"
 	);
+}
+
+#[test]
+fn txn_record_golden() {
+	let mut batch = WriteBatch::default();
+	batch.put(b"key", b"value");
+	batch.delete(b"deleted");
+	batch.put(b"empty", b"");
+
+	let data = batch.data();
+	let mut records = data
+		.get(12..)
+		.expect("batch shorter than its header");
+
+	assert_eq!(next_record(&mut records), Some((0, b"key".as_slice())));
+	assert_eq!(next_record(&mut records), Some((0, b"deleted".as_slice())));
+	assert_eq!(next_record(&mut records), Some((0, b"empty".as_slice())));
+	assert!(records.is_empty(), "{records:?}");
+}
+
+#[test]
+fn txn_record_golden_long_key() {
+	let long = [0xAA_u8; 300];
+
+	let mut batch = WriteBatch::default();
+	batch.put(long.as_slice(), b"");
+
+	let data = batch.data();
+	let mut records = data
+		.get(12..)
+		.expect("batch shorter than its header");
+
+	assert_eq!(next_record(&mut records), Some((0, long.as_slice())));
+	assert!(records.is_empty(), "{records:?}");
+}
+
+#[test]
+fn txn_record_cf() {
+	// kTypeColumnFamilyValue cf=200 "k"="v", then kTypeColumnFamilyDeletion cf=9
+	// "del"
+	let mut records: &[u8] =
+		&[0x5, 0xC8, 0x1, 0x1, b'k', 0x1, b'v', 0x4, 0x9, 0x3, b'd', b'e', b'l'];
+
+	assert_eq!(next_record(&mut records), Some((200, b"k".as_slice())));
+	assert_eq!(next_record(&mut records), Some((9, b"del".as_slice())));
+	assert!(records.is_empty(), "{records:?}");
+}
+
+#[test]
+fn txn_record_unrecognized() {
+	let mut records: &[u8] = &[0x2, 0x1, b'k', 0x1, b'v'];
+
+	assert_eq!(next_record(&mut records), None);
+}
+
+#[test]
+fn txn_record_truncated() {
+	let mut records: &[u8] = &[0x1, 0x5, b'k'];
+
+	assert_eq!(next_record(&mut records), None);
+}
+
+#[tokio::test]
+async fn txn_insert_raw_preserves_bytes() -> Result {
+	let root = var("TMPDIR").unwrap_or_else(|_| "/nvme/target/tmp".into());
+
+	let path = format!("{root}/tuwunel-database-txn-{}", process_id());
+	let raw_config = Figment::new()
+		.merge(("server_name", "localhost"))
+		.merge(("database_path", &path))
+		.merge(("test", ["fresh", "cleanup"]));
+
+	let config = Config::new(&raw_config)?;
+	let runtime = Handle::current();
+	let logging = Logging {
+		subscriber: Arc::new(NoSubscriber::new()),
+		reload: LogLevelReloadHandles::default(),
+		capture: Arc::new(State::new()),
+	};
+
+	let metrics = Metrics::new(Some(&runtime));
+	let server =
+		Arc::new(Server::new(config, Sources::default(), Some(&runtime), logging, metrics));
+	let database = Database::open(&server).await?;
+
+	let first = database.get("alias_roomid")?;
+	let second = database.get("alias_userid")?;
+	let first_key: &[u8] = b"\0raw\xFF:key";
+	let first_value: &[u8] = b"\xFE\0value";
+	let second_key: &[u8] = b"\xFFother\0key";
+	let second_value: &[u8] = b"value\0\xFD";
+	let put_raw_key = ("mixed", 1_u64);
+	let put_raw_value: &[u8] = b"raw\0value\xFC";
+	let raw_put_key: &[u8] = b"raw\0key\xFB";
+	let raw_put_value = 2_u64;
+	let encoded_put_raw_key = serialize_key(put_raw_key)?;
+	let encoded_raw_put_value = serialize_val(raw_put_value)?;
+
+	let mut txn = Txn::insert_each([
+		(first.as_ref(), first_key, first_value),
+		(second.as_ref(), second_key, second_value),
+	]);
+
+	txn.put_raw(first, put_raw_key, put_raw_value);
+	txn.raw_put(second, raw_put_key, raw_put_value);
+
+	let mut keys = txn.keys();
+	let (map, key) = keys.next().expect("first queued key");
+
+	assert!(Arc::ptr_eq(&map, first));
+	assert_eq!(key, first_key);
+
+	let (map, key) = keys.next().expect("second queued key");
+
+	assert!(Arc::ptr_eq(&map, second));
+	assert_eq!(key, second_key);
+
+	let (map, key) = keys.next().expect("serialized queued key");
+
+	assert!(Arc::ptr_eq(&map, first));
+	assert_eq!(key, encoded_put_raw_key.as_ref());
+
+	let (map, key) = keys.next().expect("raw queued key");
+
+	assert!(Arc::ptr_eq(&map, second));
+	assert_eq!(key, raw_put_key);
+	assert!(keys.next().is_none());
+	drop(keys);
+
+	txn.execute();
+
+	assert_eq!(first.get(&first_key).await?.as_ref(), first_value);
+	assert_eq!(second.get(&second_key).await?.as_ref(), second_value);
+	assert_eq!(first.get(&encoded_put_raw_key).await?.as_ref(), put_raw_value);
+	assert_eq!(second.get(&raw_put_key).await?.as_ref(), encoded_raw_put_value.as_ref());
+
+	let watch = first.watch_raw_prefix(first_key);
+	let mut txn = database.txn();
+
+	txn.extend([
+		(first.as_ref(), first_key),
+		(second.as_ref(), second_key),
+		(first.as_ref(), encoded_put_raw_key.as_ref()),
+		(second.as_ref(), raw_put_key),
+	]);
+
+	txn.execute();
+
+	watch.await;
+
+	assert!(
+		first
+			.get(&first_key)
+			.await
+			.unwrap_err()
+			.is_not_found()
+	);
+
+	assert!(
+		second
+			.get(&second_key)
+			.await
+			.unwrap_err()
+			.is_not_found()
+	);
+
+	assert!(
+		first
+			.get(&encoded_put_raw_key)
+			.await
+			.unwrap_err()
+			.is_not_found()
+	);
+
+	assert!(
+		second
+			.get(&raw_put_key)
+			.await
+			.unwrap_err()
+			.is_not_found()
+	);
+
+	drop(database);
+	drop(server);
+
+	Ok(())
+}
+
+#[tokio::test]
+async fn a_restore_is_not_repeated_on_reopen() -> Result {
+	let root = var("TMPDIR").unwrap_or_else(|_| "/nvme/target/tmp".into());
+
+	let path = format!("{root}/tuwunel-database-restore-{}", process_id());
+	let raw_config = Figment::new()
+		.merge(("server_name", "localhost"))
+		.merge(("database_path", &path))
+		.merge(("database_backup_path", format!("{path}-backups")))
+		.merge(("database_restore_backup", 1))
+		.merge(("test", ["fresh", "cleanup"]));
+
+	let config = Config::new(&raw_config)?;
+	let runtime = Handle::current();
+	let logging = Logging {
+		subscriber: Arc::new(NoSubscriber::new()),
+		reload: LogLevelReloadHandles::default(),
+		capture: Arc::new(State::new()),
+	};
+
+	let metrics = Metrics::new(Some(&runtime));
+	let server =
+		Arc::new(Server::new(config, Sources::default(), Some(&runtime), logging, metrics));
+
+	// No such backup exists, so the open which claims the restore fails; the
+	// reopen declines the claim and succeeds on the very same configuration.
+	Database::open(&server)
+		.await
+		.map(drop)
+		.expect_err("the claimed restore has no backup to find");
+
+	Database::open(&server).await?;
+
+	Ok(())
 }

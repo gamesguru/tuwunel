@@ -6,7 +6,7 @@ use ruma::{
 	events::StateEventType, room_version_rules::RoomVersionRules,
 };
 use tuwunel_core::{
-	Err, Result, debug, debug_info, err, implement, is_equal_to,
+	Result, debug, debug_info, err, implement, is_equal_to,
 	matrix::{Event, EventTypeExt, PduEvent, StateKey, pdu::check_rules, room_version},
 	trace,
 	utils::{
@@ -17,6 +17,7 @@ use tuwunel_core::{
 };
 
 use super::{
+	backoff::{Context, Disposition, UPGRADE_RETRY},
 	policy_server::PolicyCheck,
 	state_local_build::{WalkMode, compare_shadow},
 };
@@ -27,6 +28,9 @@ use crate::rooms::{
 	timeline::RawPduId,
 };
 
+#[cfg(test)]
+mod tests;
+
 /// How the state at the incoming event was obtained, deciding the memo write
 /// at the upgrade site.
 #[derive(Clone, Copy)]
@@ -35,6 +39,17 @@ enum ResolvedVia {
 	Memo,
 	Local,
 	Fetch,
+}
+
+/// Outcome of re-examining an event that already carries a soft-fail marker.
+#[derive(Clone, Copy)]
+enum Standing {
+	/// Evaluate the event. `true` when a re-check already cleared a lapsed
+	/// marker, so the soft-fail computation is settled.
+	Evaluate(bool),
+
+	/// The standing verdict holds; leave the event withheld.
+	Withheld,
 }
 
 #[implement(super::Service)]
@@ -67,15 +82,6 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 		return Ok(Some((pdu_id, false)));
 	}
 
-	if self
-		.services
-		.pdu_metadata
-		.is_event_soft_failed(incoming_pdu.event_id())
-		.await
-	{
-		return Err!(Request(InvalidParam("Event has been soft failed")));
-	}
-
 	trace!("Upgrading to timeline pdu");
 
 	let timer = Instant::now();
@@ -83,6 +89,13 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 
 	trace!(format = ?room_rules.event_format, "Checking format");
 	check_rules(&pdu_json, &room_rules.event_format)?;
+
+	let Standing::Evaluate(cleared) = self
+		.soft_fail_standing(&incoming_pdu, &room_rules, &mut pdu_json)
+		.await?
+	else {
+		return Ok(None);
+	};
 
 	let (state_at_incoming_event, resolved_via) = self
 		.resolve_state_at_incoming_event(
@@ -98,9 +111,10 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 	self.auth_check_outlier_pdu(room_id, &incoming_pdu, &room_rules, &state_at_incoming_event)
 		.await?;
 
-	let soft_fail = self
-		.compute_soft_fail(&incoming_pdu, &room_rules, &mut pdu_json)
-		.await?;
+	let soft_fail = !cleared
+		&& self
+			.compute_soft_fail(&incoming_pdu, &room_rules, &mut pdu_json)
+			.await?;
 
 	// 13. Use state resolution to find new room state
 	// We start looking at current room state now, so lets lock the room
@@ -152,7 +166,9 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 			.await;
 	}
 
-	if incoming_pdu.state_key().is_some() {
+	// A soft-failed event is not a forward extremity, so it never drives the
+	// room's current state; only an accepted state event resolves forward.
+	if incoming_pdu.state_key().is_some() && !soft_fail {
 		self.resolve_and_force_state_after(
 			room_id,
 			room_version,
@@ -203,23 +219,81 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 			.pdu_metadata
 			.mark_event_soft_failed(incoming_pdu.event_id());
 
+		self.record_outcome(Context::Upgrade, incoming_pdu.event_id(), Disposition::Transient);
+
 		drop(state_lock);
 		warn!(
+			event_id = %incoming_pdu.event_id(),
 			elapsed = ?timer.elapsed(),
-			"Event was soft failed: {:?}",
-			incoming_pdu.event_id()
+			"Event was soft failed.",
 		);
 
-		return Err!(Request(InvalidParam("Event has been soft failed")));
+		return Ok(None);
 	}
 
 	drop(state_lock);
+
+	if cleared {
+		self.services
+			.pdu_metadata
+			.clear_event_soft_failed(incoming_pdu.event_id());
+
+		self.record_success(Context::Upgrade, incoming_pdu.event_id())
+			.await;
+	}
+
 	debug_info!(
 		elapsed = ?timer.elapsed(),
 		"Accepted",
 	);
 
 	Ok(pdu_id.zip(Some(true)))
+}
+
+/// Re-examines an event that already carries a soft-fail marker.
+///
+/// The marker is a standing verdict rather than a permanent rejection, so it
+/// lapses on the upgrade backoff and the event is weighed again. Asking before
+/// state resolution keeps a still-refused event cheap to decline, since a
+/// cached policy answer needs no round trip.
+#[implement(super::Service)]
+async fn soft_fail_standing(
+	&self,
+	incoming_pdu: &PduEvent,
+	room_rules: &RoomVersionRules,
+	pdu_json: &mut CanonicalJsonObject,
+) -> Result<Standing> {
+	let event_id = incoming_pdu.event_id();
+
+	if !self
+		.services
+		.pdu_metadata
+		.is_event_soft_failed(event_id)
+		.await
+	{
+		return Ok(Standing::Evaluate(false));
+	}
+
+	if self
+		.is_suppressed(Context::Upgrade, event_id, UPGRADE_RETRY)
+		.await
+		.is_deny()
+	{
+		debug!(%event_id, "Soft failed; deferring re-evaluation.");
+		return Ok(Standing::Withheld);
+	}
+
+	if self
+		.compute_soft_fail(incoming_pdu, room_rules, pdu_json)
+		.await?
+	{
+		self.record_outcome(Context::Upgrade, event_id, Disposition::Transient);
+
+		debug!(%event_id, "Still soft failed.");
+		return Ok(Standing::Withheld);
+	}
+
+	Ok(Standing::Evaluate(true))
 }
 
 #[implement(super::Service)]
@@ -409,13 +483,13 @@ async fn compute_remaining_extremities(
 		.services
 		.state
 		.get_forward_extremities(room_id)
-		.map(ToOwned::to_owned)
-		.ready_filter(|event_id| {
+		.ready_filter(|&event_id| {
 			// Remove any that are referenced by this incoming event's prev_events
 			!incoming_pdu
 				.prev_events()
 				.any(is_equal_to!(event_id))
 		})
+		.map(ToOwned::to_owned)
 		.broad_filter_map(async |event_id| {
 			// Only keep those extremities were not referenced yet
 			self.services

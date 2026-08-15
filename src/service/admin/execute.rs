@@ -1,11 +1,14 @@
 use tokio::task::yield_now;
 use tuwunel_core::{Err, Result, debug, debug_info, error, implement, info};
+#[cfg(feature = "console")]
+use tuwunel_core::{log::is_terminal_mode, warn};
 
 use super::CommandOutput;
 
 pub(super) const SIGNAL: &str = "SIGUSR2";
 
-/// Possibly spawn the terminal console at startup if configured.
+/// Possibly spawn the terminal console at startup if configured and standard
+/// input is a terminal.
 #[implement(super::Service)]
 #[cfg_attr(not(feature = "console"), expect(clippy::unused_async))]
 pub(super) async fn console_auto_start(&self) {
@@ -16,6 +19,11 @@ pub(super) async fn console_auto_start(&self) {
 		.config
 		.admin_console_automatic
 	{
+		if !is_terminal_mode() {
+			warn!("Not starting the admin console: standard input is not a terminal");
+			return;
+		}
+
 		// Allow more of the startup sequence to execute before spawning
 		yield_now().await;
 		self.console.start();

@@ -1,7 +1,10 @@
 #![cfg(test)]
 
 use ruma::{RoomId, UserId};
+use tuwunel_core::matrix::pdu::PduCount;
 use tuwunel_database::{Interfix, SEP, serialize_to_vec};
+
+use super::{data::position_advances, thread_kind_to_receipt};
 
 const ROOM: &str = "!room:example.com";
 const USER: &str = "@user:example.com";
@@ -100,6 +103,31 @@ fn legacy_match_does_not_collide_with_kind_tails() {
 	assert!(legacy_key().ends_with(user_bytes));
 }
 
+/// Position comparison behind the public receipt gate.
+///
+/// A stored position of `None` means no row was found. A position of `None`
+/// after resolution means the event is not in this server's timeline.
+#[test]
+fn position_advance_matrix() {
+	let normal = |count| Some(PduCount::Normal(count));
+	let backfilled = |count| Some(PduCount::Backfilled(count));
+
+	assert!(position_advances(None, normal(1)), "absent stored position accepts");
+	assert!(position_advances(None, None), "neither position resolved accepts");
+	assert!(position_advances(normal(2), None), "unresolvable incoming accepts");
+	assert!(position_advances(normal(1), normal(2)), "strictly greater advances");
+	assert!(!position_advances(normal(2), normal(2)), "equal position rejects");
+	assert!(!position_advances(normal(3), normal(2)), "lower position rejects");
+	assert!(position_advances(backfilled(-1), normal(1)), "normal advances past backfilled");
+	assert!(!position_advances(normal(1), backfilled(-1)), "backfilled sorts below normal");
+}
+
+#[test]
+fn invalid_thread_kind_is_rejected() {
+	thread_kind_to_receipt("not-an-event-id")
+		.expect_err("invalid private receipt thread must fail");
+}
+
 /// MSC3771 per-thread `m.read.private` storage. `roomuserid_privateread`
 /// stores the unthreaded marker as a 2-tuple `(room, user)` (legacy shape,
 /// unchanged) and per-thread markers as 3-tuple `(room, user, kind)` rows.
@@ -123,9 +151,11 @@ mod private_read {
 	#[test]
 	fn legacy_2tuple_and_3tuple_are_byte_distinct() {
 		let legacy = legacy_2tuple();
+		let unthreaded = thread_3tuple("");
 		let main = thread_3tuple("main");
 		let thread = thread_3tuple(THREAD_ROOT);
 
+		assert_ne!(legacy, unthreaded);
 		assert_ne!(legacy, main);
 		assert_ne!(legacy, thread);
 		assert_eq!(&main[..legacy.len()], &*legacy);
@@ -150,6 +180,7 @@ mod private_read {
 	fn interfix_prefix_includes_thread_rows() {
 		let prefix = thread_prefix();
 
+		assert!(thread_3tuple("").starts_with(&prefix));
 		assert!(thread_3tuple("main").starts_with(&prefix));
 		assert!(thread_3tuple(THREAD_ROOT).starts_with(&prefix));
 	}

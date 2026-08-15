@@ -5,7 +5,7 @@ use std::{
 
 use axum::extract::State;
 use futures::{
-	FutureExt, StreamExt, TryFutureExt,
+	FutureExt, StreamExt, TryFutureExt, TryStreamExt,
 	future::{join, join3, join4, join5},
 	pin_mut,
 };
@@ -55,11 +55,13 @@ use tuwunel_core::{
 		math::ruma_from_u64,
 		option::OptionExt,
 		result::MapExpect,
-		stream::{BroadbandExt, Tools, TryExpect, WidebandExt},
+		stream::{BroadbandExt, Tools, TryBroadbandExt, TryReadyExt, WidebandExt},
 	},
+	warn,
 };
 use tuwunel_service::{
 	Services,
+	presence::Ping,
 	rooms::{
 		lazy_loading,
 		lazy_loading::{Options, Witness},
@@ -74,39 +76,6 @@ use crate::{
 	client::{ignored_filter, is_empty_account_data_event, with_membership},
 };
 
-type TimelineEventIds = SmallVec<[OwnedEventId; 1]>;
-
-/// MSC4222 `state_after` opt-in: which room-state field the response carries.
-#[derive(Clone, Copy, Debug)]
-enum StateAfter {
-	Off,
-	Stable,
-	Unstable,
-}
-
-impl StateAfter {
-	fn requested(self) -> bool { !matches!(self, Self::Off) }
-
-	fn wrap(self, events: StateEvents) -> RoomState {
-		match self {
-			| Self::Off => RoomState::Before(events),
-			| Self::Stable => RoomState::After(events),
-			| Self::Unstable => RoomState::AfterUnstable(events),
-		}
-	}
-}
-
-impl From<(bool, bool)> for StateAfter {
-	fn from((stable, unstable): (bool, bool)) -> Self {
-		// Unstable opt-in wins: such a client reads the unstable field name.
-		match (stable, unstable) {
-			| (_, true) => Self::Unstable,
-			| (true, _) => Self::Stable,
-			| _ => Self::Off,
-		}
-	}
-}
-
 #[derive(Default)]
 struct StateChanges {
 	heroes: Option<Vec<OwnedUserId>>,
@@ -115,7 +84,17 @@ struct StateChanges {
 	state_events: Vec<PduEvent>,
 }
 
-type PresenceUpdates = HashMap<OwnedUserId, PresenceEventContent>;
+struct StateChangeParams<'a> {
+	full_state: bool,
+	state_after: StateAfter,
+	since_shortstatehash: Option<ShortStateHash>,
+	horizon_shortstatehash: Option<ShortStateHash>,
+	after_shortstatehash: Option<ShortStateHash>,
+	current_shortstatehash: ShortStateHash,
+	joined_since_last_sync: bool,
+	witness: Option<&'a Witness>,
+	include_heroes: bool,
+}
 
 struct RoomMetadata {
 	since_shortstatehash: Option<ShortStateHash>,
@@ -156,6 +135,40 @@ struct BuildJoinedRoom {
 	limited: bool,
 	joined_since_last_sync: bool,
 	prev_batch: Option<PduCount>,
+}
+
+/// MSC4222 `state_after` opt-in: which room-state field the response carries.
+#[derive(Clone, Copy, Debug)]
+enum StateAfter {
+	Off,
+	Stable,
+	Unstable,
+}
+
+type PresenceUpdates = HashMap<OwnedUserId, PresenceEventContent>;
+type TimelineEventIds = SmallVec<[OwnedEventId; 1]>;
+
+impl StateAfter {
+	fn requested(self) -> bool { !matches!(self, Self::Off) }
+
+	fn wrap(self, events: StateEvents) -> RoomState {
+		match self {
+			| Self::Off => RoomState::Before(events),
+			| Self::Stable => RoomState::After(events),
+			| Self::Unstable => RoomState::AfterUnstable(events),
+		}
+	}
+}
+
+impl From<(bool, bool)> for StateAfter {
+	fn from((stable, unstable): (bool, bool)) -> Self {
+		// Unstable opt-in wins: such a client reads the unstable field name.
+		match (stable, unstable) {
+			| (_, true) => Self::Unstable,
+			| (true, _) => Self::Stable,
+			| _ => Self::Off,
+		}
+	}
 }
 
 /// # `GET /_matrix/client/r0/sync`
@@ -229,19 +242,23 @@ pub(crate) async fn sync_events_route(
 	let state_after =
 		StateAfter::from((body.body.use_state_after, body.body.use_state_after_unstable));
 
+	let ping = Ping {
+		device_id: body.sender_device.as_deref(),
+		client_ip: Some(client),
+		new_state: Some(set_presence),
+		appservice: body.appservice_info.as_ref(),
+	};
+
 	let ping_presence = services
 		.presence
-		.maybe_ping_presence(
-			sender_user,
-			body.sender_device.as_deref(),
-			Some(client),
-			set_presence,
-		)
+		.maybe_ping_presence(sender_user, ping)
 		.inspect_err(inspect_log)
 		.ok();
 
 	// Record user as actively syncing for push suppression heuristic.
-	let note_sync = services.presence.note_sync(sender_user);
+	let note_sync = services
+		.presence
+		.note_sync(sender_user, body.appservice_info.as_ref());
 
 	let (filter, ..) = join3(filter, ping_presence, note_sync).await;
 
@@ -902,21 +919,20 @@ async fn load_left_room(
 		.boxed()
 		.await;
 
-	let StateChanges { state_events, .. } = calculate_state_changes(
-		services,
-		sender_user,
-		room_id,
-		full_state || initial,
-		state_after,
-		since_shortstatehash,
-		horizon_shortstatehash.flatten(),
-		after_shortstatehash.flat_ok(),
-		left_shortstatehash?,
-		false,
-		None,
-	)
-	.boxed()
-	.await?;
+	let StateChanges { state_events, .. } =
+		calculate_state_changes(services, sender_user, room_id, StateChangeParams {
+			full_state: full_state || initial,
+			state_after,
+			since_shortstatehash,
+			horizon_shortstatehash: horizon_shortstatehash.flatten(),
+			after_shortstatehash: after_shortstatehash.flat_ok(),
+			current_shortstatehash: left_shortstatehash?,
+			joined_since_last_sync: false,
+			witness: None,
+			include_heroes: true,
+		})
+		.boxed()
+		.await?;
 
 	let is_sender_membership = |event: &PduEvent| {
 		*event.kind() == RoomMember && event.state_key() == Some(sender_user.as_str())
@@ -1093,12 +1109,15 @@ async fn load_joined_room(
 	.boxed()
 	.await;
 
-	let StateChanges {
-		heroes,
-		joined_member_count,
-		invited_member_count,
-		mut state_events,
-	} = compute_join_state_changes(
+	let (
+		state_after,
+		StateChanges {
+			heroes,
+			joined_member_count,
+			invited_member_count,
+			mut state_events,
+		},
+	) = compute_join_state_changes(
 		services,
 		sender_user,
 		room_id,
@@ -1123,6 +1142,7 @@ async fn load_joined_room(
 
 	let prev_batch =
 		compute_join_prev_batch(&timeline_pdus, joined_sender_member.as_ref(), since);
+
 	let in_window = |count: u64| count > since && count <= next_batch;
 
 	let NotificationGates {
@@ -1196,26 +1216,69 @@ async fn compute_join_state_changes(
 	current_shortstatehash: Option<ShortStateHash>,
 	joined_since_last_sync: bool,
 	witness: Option<&Witness>,
-) -> Result<StateChanges> {
-	current_shortstatehash
-		.map_async(|current_shortstatehash| {
-			calculate_state_changes(
-				services,
-				sender_user,
-				room_id,
+) -> Result<(StateAfter, StateChanges)> {
+	let Some(current_shortstatehash) = current_shortstatehash else {
+		return Ok((state_after, StateChanges::default()));
+	};
+
+	let state_changes =
+		calculate_state_changes(services, sender_user, room_id, StateChangeParams {
+			full_state,
+			state_after,
+			since_shortstatehash,
+			horizon_shortstatehash,
+			after_shortstatehash,
+			current_shortstatehash,
+			joined_since_last_sync,
+			witness,
+			include_heroes: true,
+		})
+		.await;
+
+	let incremental = !full_state && !joined_since_last_sync && since_shortstatehash.is_some();
+
+	if !state_after.requested() || incremental {
+		return state_changes.map(|state_changes| (state_after, state_changes));
+	}
+
+	match state_changes {
+		| Ok(state_changes) => Ok((state_after, state_changes)),
+		| Err(after_error) => {
+			let after_boundary = after_shortstatehash.unwrap_or(current_shortstatehash);
+			let legacy_boundary = horizon_shortstatehash.unwrap_or(current_shortstatehash);
+
+			warn!(
+				%room_id,
+				%after_boundary,
+				?after_error,
+				"Failed to load requested state-after boundary; retrying legacy state."
+			);
+
+			calculate_state_changes(services, sender_user, room_id, StateChangeParams {
 				full_state,
-				state_after,
+				state_after: StateAfter::Off,
 				since_shortstatehash,
 				horizon_shortstatehash,
 				after_shortstatehash,
 				current_shortstatehash,
 				joined_since_last_sync,
 				witness,
-			)
-		})
-		.await
-		.transpose()
-		.map(Option::unwrap_or_default)
+				include_heroes: false,
+			})
+			.await
+			.inspect_err(|legacy_error| {
+				warn!(
+					%room_id,
+					%after_boundary,
+					%legacy_boundary,
+					?after_error,
+					?legacy_error,
+					"Failed to load state-after and legacy state boundaries."
+				);
+			})
+			.map(|state_changes| (StateAfter::Off, state_changes))
+		},
+	}
 }
 
 fn compute_join_prev_batch(
@@ -2061,19 +2124,21 @@ fn assemble_unread_notifications(
 	    cs = %current_shortstatehash,
     )
 )]
-#[expect(clippy::too_many_arguments)]
 async fn calculate_state_changes<'a>(
 	services: &Services,
 	sender_user: &UserId,
 	room_id: &RoomId,
-	full_state: bool,
-	state_after: StateAfter,
-	since_shortstatehash: Option<ShortStateHash>,
-	horizon_shortstatehash: Option<ShortStateHash>,
-	after_shortstatehash: Option<ShortStateHash>,
-	current_shortstatehash: ShortStateHash,
-	joined_since_last_sync: bool,
-	witness: Option<&'a Witness>,
+	StateChangeParams {
+		full_state,
+		state_after,
+		since_shortstatehash,
+		horizon_shortstatehash,
+		after_shortstatehash,
+		current_shortstatehash,
+		joined_since_last_sync,
+		witness,
+		include_heroes,
+	}: StateChangeParams<'a>,
 ) -> Result<StateChanges> {
 	let incremental = !full_state && !joined_since_last_sync && since_shortstatehash.is_some();
 
@@ -2121,7 +2186,6 @@ async fn calculate_state_changes<'a>(
 		services
 			.state_accessor
 			.state_full_shortids(horizon_shortstatehash)
-			.expect_ok()
 			.boxed()
 			.into_future()
 	});
@@ -2130,31 +2194,40 @@ async fn calculate_state_changes<'a>(
 	let after = state_after.requested();
 	let state_events = current_state_ids
 		.stream()
-		.map(|ids| (false, ids))
+		.map_ok(|ids| (false, ids))
 		.chain(
 			state_diff_ids
 				.stream()
-				.map(move |ids| (after, ids)),
+				.map(move |ids| Ok((after, ids))),
 		)
-		.broad_filter_map(async |(after, (shortstatekey, shorteventid))| {
-			lazy_filter(services, sender_user, witness, shortstatekey, shorteventid, after).await
+		.broad_and_then(async |(after, (shortstatekey, shorteventid))| {
+			let event_id =
+				lazy_filter(services, sender_user, witness, shortstatekey, shorteventid, after)
+					.await;
+
+			Ok(event_id)
 		})
-		.chain(lazy_state_ids.stream())
-		.broad_filter_map(|shorteventid| {
-			services
+		.ready_try_filter_map(Result::Ok)
+		.chain(lazy_state_ids.stream().map(Result::Ok))
+		.broad_and_then(async |shorteventid| {
+			let pdu = services
 				.timeline
 				.get_pdu_from_shorteventid(shorteventid)
 				.ok()
+				.await;
+
+			Ok(pdu)
 		})
-		.collect::<Vec<_>>()
-		.await;
+		.ready_try_filter_map(Result::Ok)
+		.try_collect::<Vec<_>>()
+		.await?;
 
 	let send_member_counts = state_events
 		.iter()
 		.any(|event| *event.kind() == RoomMember);
 
-	let member_counts =
-		send_member_counts.then_async(|| calculate_counts(services, room_id, sender_user));
+	let member_counts = send_member_counts
+		.then_async(|| calculate_counts(services, room_id, sender_user, include_heroes));
 
 	let (joined_member_count, invited_member_count, heroes) =
 		member_counts.await.unwrap_or((None, None, None));
@@ -2198,6 +2271,7 @@ async fn calculate_counts(
 	services: &Services,
 	room_id: &RoomId,
 	sender_user: &UserId,
+	include_heroes: bool,
 ) -> (Option<u64>, Option<u64>, Option<Vec<OwnedUserId>>) {
 	let joined_member_count = services
 		.state_cache
@@ -2217,6 +2291,7 @@ async fn calculate_counts(
 	let heroes = services
 		.config
 		.calculate_heroes
+		.and_is(include_heroes)
 		.and_is(small_room)
 		.then_async(|| calculate_heroes(services, room_id, sender_user));
 

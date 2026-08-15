@@ -19,14 +19,18 @@ use tuwunel_core::{
 		pdu::{PduCount, PduEvent, PduId, RawPduId},
 		room_version,
 	},
+	smallvec::SmallVec,
 	utils::{self, result::LogErr},
 };
 use tuwunel_database::Json;
 
 use super::{ExtractBody, ExtractRelatesTo, ExtractRelatesToEventId, RoomMutexGuard, bias_count};
 use crate::rooms::{
-	short::ShortRoomId, state_accessor::plain_text_topic, state_compressor::CompressedState,
+	read_receipt::PrivateRead, short::ShortRoomId, state_accessor::plain_text_topic,
+	state_cache::MembershipUpdate, state_compressor::CompressedState,
 };
+
+type Band<'a> = SmallVec<[&'a EventId; 1]>;
 
 /// Append the incoming event setting the state snapshot to the state from
 /// the server that sent the event.
@@ -62,10 +66,14 @@ where
 			.pdu_metadata
 			.mark_as_referenced(&pdu.room_id, pdu.prev_events.iter().map(AsRef::as_ref));
 
-		self.services
-			.state
-			.set_forward_extremities(&pdu.room_id, new_room_leafs, state_lock)
-			.await;
+		// Keep the previous band rather than let a soft-failed event empty it; a
+		// later accepted event self-chains and heals it.
+		if let Some(new_room_leafs) = nonempty_band(new_room_leafs) {
+			self.services
+				.state
+				.set_forward_extremities(&pdu.room_id, new_room_leafs.into_iter(), state_lock)
+				.await;
+		}
 
 		return Ok(None);
 	}
@@ -75,6 +83,15 @@ where
 		.await?;
 
 	Ok(Some(pdu_id))
+}
+
+fn nonempty_band<'a, Leafs>(leafs: Leafs) -> Option<Band<'a>>
+where
+	Leafs: Iterator<Item = &'a EventId>,
+{
+	let leafs: Band<'_> = leafs.collect();
+
+	(!leafs.is_empty()).then_some(leafs)
 }
 
 /// Creates a new persisted data unit and adds it to a room.
@@ -160,21 +177,21 @@ where
 		.await;
 
 	let insert_lock = self.mutex_insert.lock(pdu.room_id()).await;
-	let next_count1 = self.services.globals.next_count();
-	let next_count2 = self.services.globals.next_count();
+	let next_count = self.services.globals.next_count();
 
 	// Mark as read first so the sending client doesn't get a notification even if
 	// appending fails. Route through the dispatcher so per-thread counts are
 	// also cleared; the sender's own send subsumes any thread receipt.
 	self.services
 		.read_receipt
-		.private_read_set(
-			pdu.room_id(),
-			pdu.sender(),
-			*next_count2,
-			pdu.origin_server_ts(),
-			&ReceiptThread::Unthreaded,
-		)
+		.private_read_set(PrivateRead {
+			room_id: pdu.room_id(),
+			user_id: pdu.sender(),
+			count: *next_count,
+			ts: pdu.origin_server_ts(),
+			thread: &ReceiptThread::Unthreaded,
+			announce: false,
+		})
 		.await;
 
 	self.services
@@ -186,13 +203,23 @@ where
 		)
 		.await;
 
-	let count = PduCount::Normal(*next_count1);
+	let count = PduCount::Normal(*next_count);
 	let pdu_id: RawPduId = PduId { shortroomid, count }.into();
 
 	// Insert pdu
 	self.append_pdu_json(&pdu_id, pdu, &pdu_json);
 
 	drop(insert_lock);
+
+	// Only local senders can own pushers.
+	if self.services.globals.user_is_local(pdu.sender()) {
+		self.services
+			.sending
+			.refresh_push_badge(pdu.sender())
+			.await
+			.log_err()
+			.ok();
+	}
 
 	self.services
 		.pusher
@@ -204,8 +231,7 @@ where
 	self.append_pdu_effects(pdu_id, pdu, shortroomid, count, state_lock)
 		.await?;
 
-	drop(next_count1);
-	drop(next_count2);
+	drop(next_count);
 
 	self.services
 		.appservice
@@ -271,16 +297,16 @@ async fn append_pdu_effects(
 				// knock event for auth
 				self.services
 					.state_cache
-					.update_membership(
-						pdu.room_id(),
-						&target_user_id,
-						content,
-						pdu.sender(),
-						stripped_state,
-						None,
-						true,
+					.update_membership(MembershipUpdate {
+						room_id: pdu.room_id(),
+						user_id: &target_user_id,
+						membership_event: content,
+						sender: pdu.sender(),
+						last_state: stripped_state,
+						invite_via: None,
+						update_joined_count: true,
 						count,
-					)
+					})
 					.await?;
 			}
 		},
@@ -380,20 +406,42 @@ async fn append_pdu_effects(
 fn append_pdu_json(&self, pdu_id: &RawPduId, pdu: &PduEvent, json: &CanonicalJsonObject) {
 	debug_assert!(matches!(pdu_id.pdu_count(), PduCount::Normal(_)), "PduCount not Normal");
 
-	self.db.pduid_pdu.raw_put(pdu_id, Json(json));
+	let mut txn = self.db.db.txn();
 
-	self.db
-		.eventid_pduid
-		.insert(pdu.event_id.as_bytes(), pdu_id);
+	txn.raw_put(&self.db.pduid_pdu, pdu_id, Json(json));
+	txn.insert_raw(&self.db.eventid_pduid, pdu.event_id.as_bytes(), pdu_id);
+	txn.del_raw(&self.db.eventid_outlierpdu, pdu.event_id.as_bytes());
 
-	self.db
-		.eventid_outlierpdu
-		.remove(pdu.event_id.as_bytes());
-
-	let ts = u64::from(pdu.origin_server_ts);
 	let count_key = bias_count(pdu_id.count());
+	let ts = u64::from(pdu.origin_server_ts);
+	let key = (pdu.room_id(), ts, count_key);
+	txn.put_raw(&self.db.roomid_tscount_pducount, key, pdu_id.count());
 
-	self.db
-		.roomid_tscount_pducount
-		.put_raw((pdu.room_id(), ts, count_key), pdu_id.count());
+	txn.execute();
+}
+
+#[cfg(test)]
+mod tests {
+	use std::iter::empty;
+
+	use ruma::event_id;
+
+	use super::*;
+
+	#[test]
+	fn empty_band_is_skipped() {
+		assert!(nonempty_band(empty::<&EventId>()).is_none());
+	}
+
+	#[test]
+	fn nonempty_band_preserves_all_leaves() {
+		let leaves = [event_id!("$a:test.local"), event_id!("$b:test.local")];
+
+		let kept: Vec<&EventId> = nonempty_band(leaves.iter().copied())
+			.expect("non-empty band retained")
+			.into_iter()
+			.collect();
+
+		assert_eq!(kept, leaves);
+	}
 }

@@ -8,13 +8,14 @@ use std::{
 	fmt::Debug,
 	hash::{DefaultHasher, Hash, Hasher},
 	io::Write,
-	iter::once,
+	iter::{once, repeat_with},
 	pin::pin,
 	sync::Arc,
 };
 
 use async_trait::async_trait;
 use futures::{FutureExt, Stream, StreamExt};
+use loole::unbounded;
 use ruma::{DeviceId, OwnedRoomId, RoomId, ServerName, UserId};
 use serde::Serialize;
 use tokio::{task, task::JoinSet};
@@ -28,8 +29,8 @@ use tuwunel_core::{
 	warn,
 };
 
-use self::data::Data;
 pub use self::{
+	data::Data,
 	dest::Destination,
 	sender::{EDU_LIMIT, PDU_LIMIT},
 };
@@ -56,7 +57,11 @@ pub enum SendingEvent {
 	Edu(EduBuf),               // edu json
 	ToDevice(EduBuf),          // msc4203 to-device
 	DeviceListChanged(EduBuf), // msc3202 device list
-	Flush,                     // none
+	/// Queue an account-wide counts-only push.
+	///
+	/// The sender recomputes the count when the row is delivered.
+	BadgeRefresh,
+	Flush, // none
 }
 
 pub type EduBuf = SmallVec<[u8; EDU_BUF_CAP]>;
@@ -65,22 +70,22 @@ pub type EduVec = SmallVec<[EduBuf; EDU_VEC_CAP]>;
 const EDU_BUF_CAP: usize = 128 - 16;
 const EDU_VEC_CAP: usize = 1;
 
-/// Leading byte on a queued appservice value selecting a tagged
-/// `SendingEvent` variant. Legacy rows self-identify without a tag: `Pdu`
-/// values are empty and `Edu` values are `{`-leading json, neither of which
-/// can collide with these bytes. The tag and the following count are baked
-/// into the owned buffer at construction, so the codec writes it verbatim.
+// Leading bytes on queued sending values select tagged event variants. Legacy
+// PDU and EDU rows cannot collide; the badge tag stands alone.
 const TAG_TO_DEVICE: u8 = 0x01;
 const TAG_DEVICE_LIST_CHANGED: u8 = 0x02;
+const TAG_BADGE_REFRESH: u8 = 0x03;
 const TAG_PREFIX_LEN: usize = 1 + size_of::<u64>();
 
 impl SendingEvent {
-	/// Bytes written verbatim as the queue row value. `Pdu` keeps its id in
-	/// the row key and `Flush` is never persisted, so both are valueless; the
-	/// tagged variants own their whole `[tag][count][body]` buffer.
+	/// Return bytes written verbatim as the queue row value.
+	///
+	/// PDUs keep their ID in the row key and flushes are not persisted. EDU
+	/// variants own `[tag][count][body]`; a badge refresh owns only its tag.
 	pub(super) fn value_bytes(&self) -> &[u8] {
 		match self {
 			| Self::Edu(bytes) | Self::ToDevice(bytes) | Self::DeviceListChanged(bytes) => bytes,
+			| Self::BadgeRefresh => &[TAG_BADGE_REFRESH],
 			| Self::Pdu(_) | Self::Flush => &[],
 		}
 	}
@@ -108,9 +113,7 @@ impl crate::Service for Service {
 			db: Data::new(args),
 			server: args.server.clone(),
 			services: args.services.clone(),
-			channels: (0..num_senders)
-				.map(|_| loole::unbounded())
-				.collect(),
+			channels: repeat_with(unbounded).take(num_senders).collect(),
 		}))
 	}
 
@@ -182,6 +185,23 @@ impl Service {
 				.next()
 				.expect("request queue key"),
 		})
+	}
+
+	/// Queue a counts-only push refresh for every pusher owned by a user.
+	///
+	/// Rows are durable, coalesced, and recomputed at send time.
+	#[tracing::instrument(level = "debug", skip(self))]
+	pub async fn refresh_push_badge(&self, user_id: &UserId) -> Result {
+		self.services
+			.pusher
+			.get_pushkeys(user_id)
+			.map(Ok)
+			.ready_try_for_each(|pushkey| {
+				let dest = Destination::Push(user_id.to_owned(), pushkey.to_owned());
+
+				self.queue_and_dispatch(dest, SendingEvent::BadgeRefresh)
+			})
+			.await
 	}
 
 	#[tracing::instrument(skip(self), level = "debug")]
@@ -261,6 +281,9 @@ impl Service {
 	/// Sends an EDU to all appservices interested in a room.
 	/// The `serialized` data must be in `EphemeralData` format, not federation
 	/// `Edu`.
+	// Stream::filter requires FnMut returning a nameable future; an async
+	// closure capturing self does not satisfy it.
+	#[expect(closure_returning_async_block)]
 	#[tracing::instrument(skip(self, serializer), level = "debug")]
 	pub async fn send_edu_room_appservices<'a, F>(
 		&self,
@@ -277,7 +300,7 @@ impl Service {
 			.await
 			.values()
 			.stream()
-			.filter(|&appservice| async {
+			.filter(|&appservice| async move {
 				if !appservice.registration.receive_ephemeral {
 					return false;
 				}
@@ -492,8 +515,18 @@ impl Service {
 			.await
 	}
 
+	#[tracing::instrument(skip(self), level = "debug")]
+	pub fn flush_appservice(&self, appservice_id: String) -> Result {
+		self.dispatch(Msg {
+			dest: Destination::Appservice(appservice_id),
+			event: SendingEvent::Flush,
+			queue_id: Vec::<u8>::new(),
+		})
+	}
+
 	/// Flushes the sender for a federation peer that has proven reachable via
-	/// inbound activity, but only when it was actually in its failure bucket.
+	/// inbound activity or an operator reset, but only when it was actually in
+	/// its failure bucket; reports whether it was.
 	#[tracing::instrument(
 		level = "debug",
 		skip(self),
@@ -501,13 +534,14 @@ impl Service {
 			%server,
 		),
 	)]
-	pub async fn notify_peer_alive(&self, server: &ServerName) {
-		if self
+	pub async fn notify_peer_alive(&self, server: &ServerName) -> bool {
+		let sad = self
 			.services
 			.federation
 			.note_peer_alive(server)
-			.await
-		{
+			.await;
+
+		if sad {
 			self.dispatch(Msg {
 				dest: Destination::Federation(server.to_owned()),
 				event: SendingEvent::Flush,
@@ -516,6 +550,8 @@ impl Service {
 			.log_err()
 			.ok();
 		}
+
+		sad
 	}
 
 	/// Clean up queued sending event data
@@ -530,28 +566,21 @@ impl Service {
 		push_key: Option<&str>,
 	) -> Result {
 		match (appservice_id, user_id, push_key) {
-			| (None, Some(user_id), Some(push_key)) => {
+			| (None, Some(user_id), Some(push_key)) =>
 				self.db
 					.delete_all_requests_for(&Destination::Push(
 						user_id.to_owned(),
 						push_key.to_owned(),
 					))
-					.await;
-
-				Ok(())
-			},
-			| (Some(appservice_id), None, None) => {
+					.await,
+			| (Some(appservice_id), None, None) =>
 				self.db
 					.delete_all_requests_for(&Destination::Appservice(appservice_id.to_owned()))
-					.await;
-
-				Ok(())
-			},
-			| _ => {
-				debug_warn!("cleanup_events called with too many or too few arguments");
-				Ok(())
-			},
+					.await,
+			| _ => debug_warn!("cleanup_events called with too many or too few arguments"),
 		}
+
+		Ok(())
 	}
 
 	fn dispatch(&self, msg: Msg) -> Result {

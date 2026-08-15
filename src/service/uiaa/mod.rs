@@ -118,10 +118,10 @@ pub async fn try_auth(
 					.completed
 					.push(AuthType::RegistrationToken);
 			} else {
-				uiaainfo.auth_error = Some(StandardErrorBody {
+				uiaainfo.auth_error = Some(Box::new(StandardErrorBody {
 					kind: ErrorKind::forbidden(),
 					message: "Invalid registration token.".to_owned(),
-				});
+				}));
 
 				return Ok((false, uiaainfo));
 			}
@@ -142,11 +142,11 @@ pub async fn try_auth(
 				{
 					uiaainfo.completed.push(AuthType::OAuth);
 				} else {
-					uiaainfo.auth_error = Some(StandardErrorBody {
+					uiaainfo.auth_error = Some(Box::new(StandardErrorBody {
 						kind: ErrorKind::forbidden(),
 						message: "OAuth cross-signing reset not approved for this session."
 							.to_owned(),
-					});
+					}));
 
 					return Ok((false, uiaainfo));
 				}
@@ -171,10 +171,10 @@ pub async fn try_auth(
 				.await;
 
 			if !validated {
-				uiaainfo.auth_error = Some(StandardErrorBody {
+				uiaainfo.auth_error = Some(Box::new(StandardErrorBody {
 					kind: ErrorKind::forbidden(),
 					message: "Email address has not been validated.".to_owned(),
-				});
+				}));
 
 				return Ok((false, uiaainfo));
 			}
@@ -220,7 +220,6 @@ pub async fn try_auth(
 }
 
 #[implement(Service)]
-#[allow(clippy::useless_let_if_seq)]
 async fn verify_password(
 	&self,
 	user_id: &UserId,
@@ -288,10 +287,10 @@ async fn verify_password(
 	}
 
 	if !password_verified {
-		uiaainfo.auth_error = Some(StandardErrorBody {
+		uiaainfo.auth_error = Some(Box::new(StandardErrorBody {
 			kind: ErrorKind::forbidden(),
 			message: "Invalid username or password.".to_owned(),
-		});
+		}));
 
 		return Ok(ControlFlow::Break(false));
 	}

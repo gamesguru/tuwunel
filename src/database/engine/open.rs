@@ -2,16 +2,16 @@ use std::{
 	collections::BTreeSet,
 	fs::read_dir,
 	path::Path,
-	sync::{Arc, atomic::AtomicU32},
+	sync::{Arc, OnceLock, atomic::AtomicU32},
 };
 
-use rocksdb::{ColumnFamilyDescriptor, Options};
+use rocksdb::{ColumnFamilyDescriptor, Options, WriteOptions};
 use tuwunel_core::{
 	Result, debug, debug_warn, err, implement, info, itertools::Itertools, trace, warn,
 };
 
 use super::{
-	Db, Engine, cf_opts::cf_options, context, db_opts::db_options, descriptor,
+	Db, Engine, backup::restore, cf_opts::cf_options, context, db_opts::db_options, descriptor,
 	descriptor::Descriptor, repair::repair,
 };
 use crate::{Context, or_else};
@@ -24,6 +24,16 @@ pub(crate) async fn open(ctx: Arc<Context>, desc: &[Descriptor]) -> Result<Arc<S
 	let path = &config.database_path;
 
 	context::before_open(&ctx, path)?;
+
+	if let Some(backup_id) = config.database_restore_backup {
+		match server.claim_backup_restore() {
+			| true => restore(&ctx, backup_id)?,
+			| false => {
+				info!(%backup_id, "Restore already claimed by this process; not restoring again");
+			},
+		}
+	}
+
 	let db_opts = db_options(
 		config,
 		&ctx.env.lock().expect("environment locked"),
@@ -70,6 +80,8 @@ pub(crate) async fn open(ctx: Arc<Context>, desc: &[Descriptor]) -> Result<Arc<S
 		read_only: config.rocksdb_read_only,
 		secondary: config.rocksdb_secondary,
 		checksums: config.rocksdb_checksums,
+		write_options: WriteOptions::default(),
+		cf_index: OnceLock::new(),
 		corks: AtomicU32::new(0),
 	}))
 }

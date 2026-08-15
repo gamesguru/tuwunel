@@ -1,5 +1,6 @@
 mod and_then_ref;
 mod debug_inspect;
+mod expect_unchecked;
 mod filter;
 mod flat_ok;
 mod inspect_log;
@@ -16,6 +17,7 @@ mod unwrap_or_err;
 pub use self::{
 	and_then_ref::AndThenRef,
 	debug_inspect::DebugInspect,
+	expect_unchecked::ExpectUnchecked,
 	filter::Filter,
 	flat_ok::FlatOk,
 	inspect_log::{ErrDebugLog, ErrLog},
@@ -30,4 +32,8 @@ pub use self::{
 	unwrap_or_err::UnwrapOrErr,
 };
 
+/// Standard result type for core operations.
+///
+/// The success type defaults to `()`, while the error type defaults to the
+/// crate's [`crate::Error`]. Callers may override either type parameter.
 pub type Result<T = (), E = crate::Error> = std::result::Result<T, E>;

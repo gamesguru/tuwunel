@@ -1099,6 +1099,7 @@ target "docker" {
         COPY --from=input . .
         EXPOSE 8008 8448
         ENTRYPOINT ["tuwunel"]
+        HEALTHCHECK --interval=30s --timeout=15s --start-period=60s CMD ["tuwunel", "--health-check"]
 EOF
 }
 
@@ -1118,6 +1119,7 @@ target "static" {
     dockerfile-inline =<<EOF
         FROM scratch AS install
         COPY --from=input /usr/bin/tuwunel /usr/bin/tuwunel
+        COPY --from=input /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 EOF
 }
 
@@ -1195,6 +1197,26 @@ group "pkg" {
         "deb-install",
         "rpm-install",
     ]
+}
+
+target "apt-repo-install" {
+    description = "Install tuwunel from the public apt repository as documented."
+    name = elem("apt-repo-install", [sys_name, sys_version, sys_target])
+    tags = [
+        elem_tag("apt-repo-install", [sys_name, sys_version, sys_target], "latest"),
+    ]
+    target = "apt-repo-install"
+    output = ["type=cacheonly,compression=zstd,mode=min,compression-level=${cache_compress_level}"]
+    dockerfile = "${docker_dir}/Dockerfile.apt"
+    context = "."
+    matrix = sys
+    no-cache-filter = ["apt-repo-install"]
+    inherits = [
+        elem("system", [sys_name, sys_version, sys_target]),
+    ]
+    contexts = {
+        input = elem("target:system", [sys_name, sys_version, sys_target])
+    }
 }
 
 target "rpm-install" {
@@ -2262,6 +2284,7 @@ target "runtime" {
 base_pkgs = [
     "adduser",
     "ca-certificates",
+    "procps",
 ]
 
 target "base" {

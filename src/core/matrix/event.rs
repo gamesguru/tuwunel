@@ -4,6 +4,10 @@ mod format;
 mod id;
 mod redact;
 mod relation;
+/// State-event key types and ordering helpers.
+///
+/// Keys combine a state event type with its state key for use in maps. The
+/// module also provides forward and reverse comparison functions.
 pub mod state_key;
 mod type_ext;
 mod unsigned;
@@ -19,6 +23,7 @@ use serde_json::{Value as JsonValue, value::RawValue as RawJsonValue};
 
 pub use self::{
 	filter::{Matches, trim_event_fields},
+	format::{Owned, Ref},
 	id::*,
 	relation::RelationTypeEqual,
 	state_key::{StateKey, TypeStateKey},
@@ -29,6 +34,10 @@ use crate::{Result, utils};
 
 /// Abstraction of a PDU so users can have their own PDU types.
 pub trait Event: Clone + Debug + Send + Sync {
+	/// Checks whether this event has both the requested type and state key.
+	///
+	/// Message-like events never match because their state key is absent. The
+	/// comparison does not inspect event content.
 	#[inline]
 	fn is_type_and_state_key(&self, kind: &TimelineEventType, state_key: &str) -> bool {
 		self.kind() == kind && self.state_key() == Some(state_key)
@@ -38,22 +47,27 @@ pub trait Event: Clone + Debug + Send + Sync {
 	#[inline]
 	fn into_format<T>(self) -> T
 	where
-		T: From<format::Owned<Self>>,
+		T: From<Owned<Self>>,
 		Self: Sized,
 	{
-		format::Owned(self).into()
+		Owned(self).into()
 	}
 
 	/// Serialize into a Ruma JSON format
 	#[inline]
 	fn to_format<'a, T>(&'a self) -> T
 	where
-		T: From<format::Ref<'a, Self>>,
+		T: From<Ref<'a, Self>>,
 		Self: Sized + 'a,
 	{
-		format::Ref(self).into()
+		Ref(self).into()
 	}
 
+	/// Checks an unsigned-data property with a caller-supplied predicate.
+	///
+	/// The method returns false when the property is absent or the predicate
+	/// rejects its value. Missing or malformed unsigned data is treated as
+	/// empty.
 	#[inline]
 	fn contains_unsigned_property<T>(&self, property: &str, is_type: T) -> bool
 	where
@@ -63,6 +77,10 @@ pub trait Event: Clone + Debug + Send + Sync {
 		unsigned::contains_unsigned_property::<T, _>(self, property, is_type)
 	}
 
+	/// Deserializes one property from the event's unsigned data.
+	///
+	/// A missing property or malformed unsigned data is reported as not found.
+	/// A value of the wrong type fails deserialization.
 	#[inline]
 	fn get_unsigned_property<T>(&self, property: &str) -> Result<T>
 	where
@@ -72,6 +90,10 @@ pub trait Event: Clone + Debug + Send + Sync {
 		unsigned::get_unsigned_property::<T, _>(self, property)
 	}
 
+	/// Deserializes the event's unsigned data as a JSON value.
+	///
+	/// Missing or malformed unsigned data produces JSON null. Use
+	/// `get_unsigned` when the distinction must be preserved.
 	#[inline]
 	fn get_unsigned_as_value(&self) -> JsonValue
 	where
@@ -80,6 +102,10 @@ pub trait Event: Clone + Debug + Send + Sync {
 		unsigned::get_unsigned_as_value(self)
 	}
 
+	/// Deserializes the complete unsigned-data object into a requested type.
+	///
+	/// Missing unsigned data is reported as not found. Invalid JSON or a type
+	/// mismatch fails deserialization.
 	#[inline]
 	fn get_unsigned<T>(&self) -> Result<T>
 	where
@@ -89,6 +115,14 @@ pub trait Event: Clone + Debug + Send + Sync {
 		unsigned::get_unsigned::<T, _>(self)
 	}
 
+	/// Deserializes event content as an untyped JSON value.
+	///
+	/// The returned value owns its data and can be inspected without borrowing
+	/// the event. Typed consumers should prefer `get_content`.
+	///
+	/// # Panics
+	///
+	/// Panics when the stored content is not valid JSON.
 	#[inline]
 	fn get_content_as_value(&self) -> JsonValue
 	where
@@ -97,6 +131,10 @@ pub trait Event: Clone + Debug + Send + Sync {
 		content::as_value(self)
 	}
 
+	/// Deserializes event content into a requested type.
+	///
+	/// The target type determines which event-content shape is accepted.
+	/// Invalid JSON or a mismatched target type produces a bad-JSON result.
 	#[inline]
 	fn get_content<T>(&self) -> Result<T>
 	where
@@ -106,6 +144,11 @@ pub trait Event: Clone + Debug + Send + Sync {
 		content::get::<T, _>(self)
 	}
 
+	/// Resolves the event ID targeted by a redaction event.
+	///
+	/// The selected room rules determine whether the ID is read from event
+	/// content or the top-level `redacts` field. Non-redaction events and
+	/// malformed content return `None`.
 	#[inline]
 	fn redacts_id(&self, room_rules: &RoomVersionRules) -> Option<OwnedEventId>
 	where
@@ -114,6 +157,10 @@ pub trait Event: Clone + Debug + Send + Sync {
 		redact::redacts_id(self, room_rules)
 	}
 
+	/// Reports whether the event carries redaction metadata.
+	///
+	/// Redaction is recognized by the presence of `unsigned.redacted_because`.
+	/// Missing or malformed unsigned data is treated as not redacted.
 	#[inline]
 	fn is_redacted(&self) -> bool
 	where
@@ -122,6 +169,14 @@ pub trait Event: Clone + Debug + Send + Sync {
 		redact::is_redacted(self)
 	}
 
+	/// Consumes the event and serializes its PDU as a canonical JSON object.
+	///
+	/// Implementations first convert the event to the common `Pdu`
+	/// representation. The resulting object preserves the stored event fields.
+	///
+	/// # Panics
+	///
+	/// Panics if the PDU cannot be serialized as a canonical JSON object.
 	#[inline]
 	fn into_canonical_object(self) -> CanonicalJsonObject
 	where
@@ -130,11 +185,27 @@ pub trait Event: Clone + Debug + Send + Sync {
 		utils::to_canonical_object(self.into_pdu()).expect("failed to create Value::Object")
 	}
 
+	/// Serializes the event's PDU as an owned canonical JSON object.
+	///
+	/// The event remains available after conversion. The resulting object
+	/// preserves the stored event fields.
+	///
+	/// # Panics
+	///
+	/// Panics if the PDU cannot be serialized as a canonical JSON object.
 	#[inline]
 	fn to_canonical_object(&self) -> CanonicalJsonObject {
 		utils::to_canonical_object(self.as_pdu()).expect("failed to create Value::Object")
 	}
 
+	/// Consumes the event and serializes its PDU as a JSON value.
+	///
+	/// Implementations first convert the event to the common `Pdu`
+	/// representation. The returned value is an owned JSON object.
+	///
+	/// # Panics
+	///
+	/// Panics if the PDU cannot be serialized as JSON.
 	#[inline]
 	fn into_value(self) -> JsonValue
 	where
@@ -143,18 +214,46 @@ pub trait Event: Clone + Debug + Send + Sync {
 		serde_json::to_value(self.into_pdu()).expect("failed to create JSON Value")
 	}
 
+	/// Serializes the event's PDU as an owned JSON value.
+	///
+	/// The event remains available after conversion. The returned value is an
+	/// owned JSON object.
+	///
+	/// # Panics
+	///
+	/// Panics if the PDU cannot be serialized as JSON.
 	#[inline]
 	fn to_value(&self) -> JsonValue {
 		serde_json::to_value(self.as_pdu()).expect("failed to create JSON Value")
 	}
 
+	/// Returns mutable access to the common PDU representation.
+	///
+	/// Implementations backed by a mutable `Pdu` override this method. The
+	/// default implementation marks mutable conversion as unsupported.
+	///
+	/// # Panics
+	///
+	/// Panics when the implementation does not provide mutable PDU access.
 	#[inline]
 	fn as_mut_pdu(&mut self) -> &mut Pdu { unimplemented!("not a mutable Pdu") }
 
+	/// Borrows the event as the common PDU representation.
+	///
+	/// Implementations may return their underlying PDU directly or a borrowed
+	/// PDU representation with the same event data.
 	fn as_pdu(&self) -> &Pdu;
 
+	/// Converts the event into an owned common PDU representation.
+	///
+	/// Owned implementations can move their PDU. Borrowed implementations clone
+	/// the PDU so the returned value owns every field.
 	fn into_pdu(self) -> Pdu;
 
+	/// Reports whether consuming conversion can move an owned PDU.
+	///
+	/// A false result indicates that `into_pdu` must clone borrowed event data.
+	/// The value can help callers choose a conversion path.
 	fn is_owned(&self) -> bool;
 
 	//
@@ -203,6 +302,10 @@ pub trait Event: Clone + Debug + Send + Sync {
 	fn unsigned(&self) -> Option<&RawJsonValue>;
 
 	//#[deprecated]
+	/// Returns the event's timeline type.
+	///
+	/// This compatibility accessor delegates directly to `kind`. New callers
+	/// can use either name without changing the returned value.
 	#[inline]
 	fn event_type(&self) -> &TimelineEventType { self.kind() }
 }

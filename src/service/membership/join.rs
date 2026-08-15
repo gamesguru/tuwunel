@@ -851,8 +851,10 @@ async fn join_local(
 	self.services
 		.event_handler
 		.handle_incoming_pdu(&remote_server, room_id, &signed_event_id, signed_value, true)
-		.boxed()
-		.await?;
+		.await?
+		.ok_or_else(|| {
+			err!(Request(InvalidParam("Signed join was not accepted as a timeline event.")))
+		})?;
 
 	Ok(())
 }

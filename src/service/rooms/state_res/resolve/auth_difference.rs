@@ -68,12 +68,13 @@ impl<Id: Ord + Clone> RoaringState<Id> {
 ///
 /// ## Arguments
 ///
-/// * `auth_chains` - The list of full recursive sets of `auth_events`. Inputs
-///   must be sorted.
+/// * `auth_sets` - The list of full recursive sets of `auth_events`. Inputs
+///   must not contain duplicates.
 ///
 /// ## Returns
 ///
-/// Outputs the event IDs that are not present in all the auth chains.
+/// Outputs the event IDs that are not present in all the auth chains, in no
+/// particular order.
 #[tracing::instrument(level = "debug", skip_all)]
 pub(super) fn auth_difference<'a, AuthSets, Id>(auth_sets: AuthSets) -> impl Stream<Item = Id>
 where

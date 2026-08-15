@@ -1,15 +1,13 @@
 mod extensions;
 mod filter;
+mod range;
 mod rooms;
 mod selector;
 
 use std::{collections::BTreeMap, fmt::Debug, sync::Arc, time::Duration};
 
 use axum::extract::{Extension, State};
-use futures::{
-	FutureExt, TryFutureExt,
-	future::{join, try_join},
-};
+use futures::{FutureExt, TryFutureExt, future::join};
 use ruma::{
 	DeviceId, OwnedRoomId, UserId,
 	api::client::sync::sync_events::v5::{ListId, Request, Response, response},
@@ -30,9 +28,14 @@ use tuwunel_core::{
 };
 use tuwunel_service::{
 	Services,
+	presence::Ping,
 	sync::{Connection, into_connection_key},
 };
 
+use self::{
+	extensions::{apply_ranges, handle as handle_extensions},
+	range::collect as collect_ranges,
+};
 use super::share_encrypted_room;
 use crate::{ClientIp, Ruma};
 
@@ -41,6 +44,7 @@ struct SyncInfo<'a> {
 	services: &'a Services,
 	sender_user: &'a UserId,
 	sender_device: Option<&'a DeviceId>,
+	previous_connection_pos: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -48,8 +52,15 @@ struct WindowRoom {
 	room_id: OwnedRoomId,
 	membership: Option<MembershipState>,
 	lists: ListIds,
-	ranked: usize,
-	last_count: u64,
+	event_count: u64,
+	payload_count: u64,
+}
+
+impl WindowRoom {
+	#[inline]
+	fn payload_is_fresh(&self, roomsince: u64) -> bool {
+		roomsince == 0 || self.payload_count > roomsince
+	}
 }
 
 type Window = BTreeMap<OwnedRoomId, WindowRoom>;
@@ -108,9 +119,16 @@ pub(crate) async fn sync_events_v5_route(
 		.await;
 
 	let conn = conn_val.lock();
+	let ping = Ping {
+		device_id: sender_device,
+		client_ip: Some(client),
+		new_state: Some(&request.set_presence),
+		appservice: body.appservice_info.as_ref(),
+	};
+
 	let ping_presence = services
 		.presence
-		.maybe_ping_presence(sender_user, sender_device, Some(client), &request.set_presence)
+		.maybe_ping_presence(sender_user, ping)
 		.inspect_err(inspect_log)
 		.ok();
 
@@ -157,7 +175,12 @@ pub(crate) async fn sync_events_v5_route(
 		.checked_add(Duration::from_millis(timeout))
 		.expect("configuration must limit maximum timeout");
 
-	let sync_info = SyncInfo { services, sender_user, sender_device };
+	let sync_info = SyncInfo {
+		services,
+		sender_user,
+		sender_device,
+		previous_connection_pos: since.ne(&0).then_some(since),
+	};
 	loop {
 		debug_assert!(
 			conn.globalsince <= conn.next_batch,
@@ -176,15 +199,16 @@ pub(crate) async fn sync_events_v5_route(
 			.await;
 
 		if conn.globalsince < conn.next_batch {
-			let rooms = rooms::handle(sync_info, &conn, &window)
-				.map_ok(|response_rooms| response.rooms = response_rooms);
+			let ranges = collect_ranges(sync_info, &conn, &window);
+			let extensions = handle_extensions(sync_info, &conn, &window);
+			let (mut ranges, extensions) = join(ranges, extensions).boxed().await;
 
-			let extensions = extensions::handle(sync_info, &conn, &window)
-				.map_ok(|response_extensions| response.extensions = response_extensions);
+			let mut extensions = extensions?;
 
-			try_join(rooms, extensions).boxed().await?;
-
-			conn.update_rooms_epilogue(window.keys().map(AsRef::as_ref));
+			apply_ranges(&conn, &window, &mut ranges, &mut extensions);
+			conn.update_rooms_epilogue(ranges.keys());
+			response.rooms = ranges.into_payloads();
+			response.extensions = extensions.into_response(&response.rooms);
 
 			if !is_empty_response(&response) {
 				response.pos = conn.next_batch.to_string().into();

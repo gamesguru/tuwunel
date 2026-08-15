@@ -5,17 +5,14 @@ use std::{
 	sync::{Arc, Mutex},
 };
 
-use rocksdb::{Cache, Env, LruCacheOptions};
+use rocksdb::{Cache, LruCacheOptions};
 use tuwunel_core::{
 	Result, Server, debug,
 	utils::{math::usize_from_f64, result::LogErr},
 };
 
-use crate::{or_else, pool::Pool};
-
-/// Name under which the shared block cache (every CF with
-/// `CacheDisp::Shared`) is registered in [`Context::col_cache`].
-pub(crate) const SHARED_POOL: &str = "Shared";
+use super::env::Env;
+use crate::pool::Pool;
 
 /// One block-cache pool, plus the column families participating in it.
 ///
@@ -24,27 +21,37 @@ pub(crate) const SHARED_POOL: &str = "Shared";
 /// surface name them.
 pub(crate) struct ColCache {
 	pub(crate) cache: Cache,
+
 	pub(crate) participants: Vec<&'static str>,
+}
+
+/// Holds shared resources that must outlive an opened database.
+///
+/// The worker pool, caches, server handle, and RocksDB environment are prepared
+/// before the database opens. Keeping them in one shared context gives every
+/// engine component a common owner for those resources.
+pub(crate) struct Context {
+	pub(crate) pool: Arc<Pool>,
+
+	/// Retained because rust-rocksdb's `Cache` binding lacks `get_capacity`.
+	pub(crate) row_cache_capacity: usize,
+
+	pub(crate) row_cache: Mutex<Cache>,
+
+	pub(crate) col_cache: Mutex<ColCaches>,
+
+	pub(crate) server: Arc<Server>,
+
+	pub(super) env: Arc<Env>,
 }
 
 /// Map of block-cache pools keyed by pool name. The pool name is either
 /// `SHARED_POOL` or the first-arrival CF that created it.
 pub(crate) type ColCaches = BTreeMap<&'static str, ColCache>;
 
-/// Some components are constructed prior to opening the database and must
-/// outlive the database. These can also be shared between database instances
-/// though at the time of this comment we only open one database per process.
-/// These assets are housed in the shared Context.
-pub(crate) struct Context {
-	pub(crate) pool: Arc<Pool>,
-	pub(crate) col_cache: Mutex<ColCaches>,
-	pub(crate) row_cache: Mutex<Cache>,
-	/// Retained because rust-rocksdb's `Cache` binding lacks `get_capacity`;
-	/// needed for the admin renderer's row-cache util%.
-	pub(crate) row_cache_capacity: usize,
-	pub(crate) env: Mutex<Env>,
-	pub(crate) server: Arc<Server>,
-}
+/// Name under which the shared block cache (every CF with
+/// `CacheDisp::Shared`) is registered in [`Context::col_cache`].
+pub(crate) const SHARED_POOL: &str = "Shared";
 
 impl Context {
 	pub(crate) fn new(server: &Arc<Server>) -> Result<Arc<Self>> {
@@ -72,23 +79,13 @@ impl Context {
 		};
 		let col_cache: ColCaches = [(SHARED_POOL, shared)].into();
 
-		let mut env = Env::new().or_else(or_else)?;
-
-		if config.rocksdb_compaction_prio_idle {
-			env.lower_thread_pool_cpu_priority();
-		}
-
-		if config.rocksdb_compaction_ioprio_idle {
-			env.lower_thread_pool_io_priority();
-		}
-
 		Ok(Arc::new(Self {
 			pool: Pool::new(server)?,
-			col_cache: col_cache.into(),
-			row_cache: row_cache.into(),
 			row_cache_capacity: row_cache_capacity_bytes,
-			env: env.into(),
+			row_cache: row_cache.into(),
+			col_cache: col_cache.into(),
 			server: server.clone(),
+			env: Env::acquire(server)?,
 		}))
 	}
 }
@@ -98,17 +95,6 @@ impl Drop for Context {
 	fn drop(&mut self) {
 		debug!("Closing frontend pool");
 		self.pool.close();
-
-		let mut env = self.env.lock().expect("locked");
-
-		debug!("Shutting down background threads");
-		env.set_high_priority_background_threads(0);
-		env.set_low_priority_background_threads(0);
-		env.set_bottom_priority_background_threads(0);
-		env.set_background_threads(0);
-
-		debug!("Joining background threads...");
-		env.join_all_threads();
 
 		after_close(self, &self.server.config.database_path)
 			.expect("Failed to execute after_close handler");

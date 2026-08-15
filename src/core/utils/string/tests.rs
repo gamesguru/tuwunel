@@ -1,5 +1,10 @@
 #![cfg(test)]
 
+use crate::{arrayvec::ArrayString, smallstr::SmallString};
+
+type SmallBuf = SmallString<[u8; 16]>;
+type ArrayBuf = ArrayString<16>;
+
 #[test]
 fn common_prefix() {
 	let input = ["conduwuit", "conduit", "construct"];
@@ -31,6 +36,37 @@ fn camel_to_snake_case_0() {
 fn camel_to_snake_case_1() {
 	let res = super::camel_to_snake_string("CAmelTOSnakeCase");
 	assert_eq!(res, "camel_tosnake_case");
+}
+
+#[test]
+fn format_small_string_macro() {
+	let res: SmallBuf = crate::format_small_string!(":{}", 8448);
+
+	assert_eq!(res.as_str(), ":8448");
+	assert!(!res.spilled());
+}
+
+#[test]
+fn format_array_string_macro() {
+	let res: ArrayBuf = crate::format_array_string!(":{}", 8448);
+
+	assert_eq!(res.as_str(), ":8448");
+}
+
+#[test]
+fn to_array_string_display() {
+	let res: ArrayBuf = super::to_array_string(8448);
+
+	assert_eq!(res.as_str(), "8448");
+}
+
+#[test]
+fn try_format_array_string_overflows() {
+	use crate::Error;
+
+	let res = super::try_format_array_string::<4>(format_args!(":{}", 8448));
+
+	assert!(matches!(res, Err(Error::Fmt(_))));
 }
 
 #[test]

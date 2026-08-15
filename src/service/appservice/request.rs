@@ -3,7 +3,7 @@ use std::{fmt::Debug, mem};
 use bytes::{Bytes, BytesMut};
 use reqwest::Request;
 use ruma::api::{
-	IncomingResponse, OutgoingRequest,
+	IncomingResponse, OutgoingRequest, OutgoingRequestExt,
 	appservice::Registration,
 	auth_scheme::{AuthScheme, SendAccessToken},
 	path_builder::PathBuilder,
@@ -80,7 +80,14 @@ where
 	);
 
 	let limit = self.services.config.max_response_size;
-	let body = read_response_capped(response, limit).await?;
+	let body = read_response_capped(response, limit)
+		.await
+		.map_err(|e| {
+			err!(BadServerResponse(warn!(
+				"Failed reading response from appservice \"{}\" at {dest}: {e}",
+				registration.id
+			)))
+		})?;
 
 	if !status.is_success() {
 		debug_error!("Appservice response bytes: {:?}", string_from_bytes(&body));
@@ -117,7 +124,7 @@ pub(super) fn add_access_token_query(request: &mut http::Request<Bytes>, hs_toke
 	let symbol = if old_path_and_query.contains('?') { "&" } else { "?" };
 
 	parts.path_and_query = Some(
-		(old_path_and_query + symbol + "access_token=" + hs_token)
+		format!("{old_path_and_query}{symbol}access_token={hs_token}")
 			.parse()
 			.expect("valid path and query"),
 	);

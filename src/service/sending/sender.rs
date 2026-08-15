@@ -2,6 +2,7 @@ use std::{
 	cmp::Reverse,
 	collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, btree_map::Entry},
 	fmt::Debug,
+	iter::once,
 	str::from_utf8,
 	sync::{
 		Arc,
@@ -39,7 +40,7 @@ use ruma::{
 		receipt::ReceiptType,
 	},
 	presence::PresenceState,
-	push,
+	push::Ruleset,
 	serde::Raw,
 	uint,
 };
@@ -69,8 +70,14 @@ use crate::{federation::ShouldAttempt, rooms::timeline::RawPduId};
 #[derive(Debug)]
 enum TransactionStatus {
 	Running,
+	RunningForceRetry,
 	Failed(u32, Instant), // push backoff: tries, last failure
 	Retrying(u32),        // number of times failed
+}
+
+enum RetryAction {
+	None,
+	Force,
 }
 
 type SendingError = (Destination, Error);
@@ -215,40 +222,72 @@ impl Service {
 				self.handle_response_ok(&dest, futures, statuses)
 					.await,
 			| Err((dest, e)) => {
-				Self::handle_response_err(&dest, statuses, &e);
+				let retry_action = Self::handle_response_err(&dest, statuses, &e);
 
-				// Arm a one-shot retry at the destination's earliest-retry time.
-				if let Destination::Federation(server) = dest
-					&& let ShouldAttempt::No { earliest_retry } = self
-						.services
-						.federation
-						.should_attempt(&server)
-						.await
-				{
-					arm_wake(wakes, server, earliest_retry);
+				match dest {
+					| Destination::Federation(server) => {
+						// Arm a one-shot retry at the destination's earliest-retry time.
+						if let ShouldAttempt::No { earliest_retry } = self
+							.services
+							.federation
+							.should_attempt(&server)
+							.await
+						{
+							arm_wake(wakes, server, earliest_retry);
+						}
+					},
+					| dest if matches!(retry_action, RetryAction::Force) =>
+						self.handle_force_retry(dest, futures, statuses)
+							.await,
+					| _ => {},
 				}
 			},
 		}
 	}
 
-	fn handle_response_err(dest: &Destination, statuses: &mut CurTransactionStatus, e: &Error) {
+	async fn handle_force_retry<'a>(
+		&'a self,
+		dest: Destination,
+		futures: &mut SendingFutures<'a>,
+		statuses: &mut CurTransactionStatus,
+	) {
+		let Ok(Some(events)) = self
+			.select_events(&dest, Vec::new(), statuses)
+			.await
+		else {
+			return;
+		};
+
+		self.schedule_events(dest, events, futures, statuses);
+	}
+
+	fn handle_response_err(
+		dest: &Destination,
+		statuses: &mut CurTransactionStatus,
+		e: &Error,
+	) -> RetryAction {
 		debug!(?dest, "{e:?}");
 		// Push backs off locally; federation defers to peer_status, appservice retries.
 		let push = matches!(dest, Destination::Push(..));
 
-		if let Some(status) = statuses.get_mut(dest) {
-			let tries = match status {
-				| TransactionStatus::Running => 1,
-				| TransactionStatus::Failed(n, _) | TransactionStatus::Retrying(n) =>
-					n.saturating_add(1),
-			};
+		let Some(status) = statuses.get_mut(dest) else {
+			return RetryAction::None;
+		};
 
-			*status = if push {
-				TransactionStatus::Failed(tries, Instant::now())
-			} else {
-				TransactionStatus::Retrying(tries)
-			};
-		}
+		let (tries, retry_action) = match status {
+			| TransactionStatus::Running => (1, RetryAction::None),
+			| TransactionStatus::RunningForceRetry => (1, RetryAction::Force),
+			| TransactionStatus::Failed(n, _) | TransactionStatus::Retrying(n) =>
+				(n.saturating_add(1), RetryAction::None),
+		};
+
+		*status = if push {
+			TransactionStatus::Failed(tries, Instant::now())
+		} else {
+			TransactionStatus::Retrying(tries)
+		};
+
+		retry_action
 	}
 
 	#[expect(clippy::needless_pass_by_ref_mut)]
@@ -293,11 +332,32 @@ impl Service {
 		if events.is_empty() {
 			statuses.remove(dest);
 		} else {
+			if let Some(status) = statuses.get_mut(dest) {
+				*status = TransactionStatus::Running;
+			}
+
 			futures.push(self.send_events(dest.clone(), events));
 		}
 	}
 
-	#[expect(clippy::needless_pass_by_ref_mut)]
+	#[expect(
+		clippy::needless_pass_by_ref_mut,
+		reason = "mutable reference avoids requiring SendingFutures to be Sync"
+	)]
+	fn schedule_events<'a>(
+		&'a self,
+		dest: Destination,
+		events: Vec<SendingEvent>,
+		futures: &mut SendingFutures<'a>,
+		statuses: &mut CurTransactionStatus,
+	) {
+		if events.is_empty() {
+			statuses.remove(&dest);
+		} else {
+			futures.push(self.send_events(dest, events));
+		}
+	}
+
 	#[tracing::instrument(name = "request", level = "debug", skip_all)]
 	async fn handle_request<'a>(
 		&'a self,
@@ -305,13 +365,25 @@ impl Service {
 		futures: &mut SendingFutures<'a>,
 		statuses: &mut CurTransactionStatus,
 	) {
-		let iv = vec![(msg.queue_id, msg.event)];
-		if let Ok(Some(events)) = self.select_events(&msg.dest, iv, statuses).await {
-			if !events.is_empty() {
-				futures.push(self.send_events(msg.dest, events));
-			} else {
-				statuses.remove(&msg.dest);
-			}
+		let synthetic_badge =
+			msg.queue_id.is_empty() && matches!(&msg.event, SendingEvent::BadgeRefresh);
+
+		let new_events = match (synthetic_badge, statuses.contains_key(&msg.dest)) {
+			| (false, _) => vec![(msg.queue_id, msg.event)],
+			| (true, true) => Vec::new(),
+			| (true, false) =>
+				self.db
+					.queued_requests(&msg.dest)
+					.take(DEQUEUE_LIMIT)
+					.collect()
+					.await,
+		};
+
+		if let Ok(Some(events)) = self
+			.select_events(&msg.dest, new_events, statuses)
+			.await
+		{
+			self.schedule_events(msg.dest, events, futures, statuses);
 		}
 	}
 
@@ -387,7 +459,7 @@ impl Service {
 				() = sleep_until(deadline) => return,
 				response = futures.next() => match response {
 					Some(Ok(dest)) => self.db.delete_all_active_requests_for(&dest).await,
-					Some(_) => continue,
+					Some(_) => {},
 					None => return,
 				},
 			}
@@ -400,7 +472,6 @@ impl Service {
 		skip_all,
 		fields(futures = %futures.len()),
 	)]
-	#[expect(clippy::needless_pass_by_ref_mut)]
 	async fn startup_netburst<'a>(
 		&'a self,
 		id: usize,
@@ -434,6 +505,29 @@ impl Service {
 				futures.push(self.send_events(dest.clone(), events));
 			}
 		}
+
+		// Active transaction generations must own their queued successors before
+		// queued-only badge destinations are woken.
+		if !self.server.config.startup_netburst || keep == 0 {
+			return;
+		}
+
+		let destinations = self
+			.db
+			.queued_badge_refresh_destinations()
+			.ready_filter(|dest| self.shard_id(dest) == id)
+			.collect::<HashSet<_>>()
+			.await;
+
+		for dest in destinations {
+			let msg = Msg {
+				dest,
+				event: SendingEvent::BadgeRefresh,
+				queue_id: Vec::new(),
+			};
+
+			self.handle_request(msg, futures, statuses).await;
+		}
 	}
 
 	#[tracing::instrument(
@@ -451,7 +545,19 @@ impl Service {
 		new_events: Vec<QueueItem>, // Events we want to send: event and full key
 		statuses: &mut CurTransactionStatus,
 	) -> Result<Option<Vec<SendingEvent>>> {
-		let (allow, retry) = self.select_events_current(dest, statuses).await?;
+		let retry_action = if matches!(dest, Destination::Appservice(_))
+			&& new_events
+				.iter()
+				.any(|(_, event)| matches!(event, SendingEvent::Flush))
+		{
+			RetryAction::Force
+		} else {
+			RetryAction::None
+		};
+
+		let (allow, retry) = self
+			.select_events_current(dest, statuses, retry_action)
+			.await?;
 
 		// Nothing can be done for this remote, bail out.
 		if !allow {
@@ -472,15 +578,15 @@ impl Service {
 
 		// Compose the next transaction
 		let _cork = self.db.db.cork();
-		if !new_events.is_empty() {
-			self.db.mark_as_active(new_events.iter());
-			events.extend(
-				new_events
-					.into_iter()
-					.map(|(_, event)| event)
-					.filter(|event| !matches!(event, SendingEvent::Flush)),
-			);
-		}
+		self.db
+			.retain_queued(new_events)
+			.ready_for_each(|item| {
+				self.db.mark_as_active(once(&item));
+				if !matches!(&item.1, SendingEvent::Flush) {
+					events.push(item.1);
+				}
+			})
+			.await;
 
 		// Add EDU's into the transaction
 		if let Destination::Federation(server_name) = dest {
@@ -501,6 +607,7 @@ impl Service {
 		&self,
 		dest: &Destination,
 		statuses: &mut CurTransactionStatus,
+		retry_action: RetryAction,
 	) -> Result<(bool, bool)> {
 		// peer_status gates federation only; appservice and push fall through.
 		if let Destination::Federation(server) = dest {
@@ -519,8 +626,11 @@ impl Service {
 		statuses
 			.entry(dest.clone())
 			.and_modify(|e| match e {
-				| TransactionStatus::Running => {
+				| TransactionStatus::Running | TransactionStatus::RunningForceRetry => {
 					allow = false; // already running
+					if matches!(retry_action, RetryAction::Force) {
+						*e = TransactionStatus::RunningForceRetry;
+					}
 				},
 				| TransactionStatus::Failed(tries, time) => {
 					// Push backoff: hold off until the exponential window elapses.
@@ -1015,7 +1125,8 @@ impl Service {
 					(pdus, edus, to_device.saturating_add(1), device_list),
 				| SendingEvent::DeviceListChanged(_) =>
 					(pdus, edus, to_device, device_list.saturating_add(1)),
-				| SendingEvent::Flush => (pdus, edus, to_device, device_list),
+				| SendingEvent::BadgeRefresh | SendingEvent::Flush =>
+					(pdus, edus, to_device, device_list),
 			},
 		);
 
@@ -1083,7 +1194,7 @@ impl Service {
 						changed.push(user_id);
 					}
 				},
-				| SendingEvent::Flush => {}, // flush only; no new content
+				| SendingEvent::BadgeRefresh | SendingEvent::Flush => {},
 			}
 		}
 
@@ -1092,7 +1203,7 @@ impl Service {
 			| SendingEvent::ToDevice(b)
 			| SendingEvent::DeviceListChanged(b) => Some(b.as_ref()),
 			| SendingEvent::Pdu(b) => Some(b.as_ref()),
-			| SendingEvent::Flush => None,
+			| SendingEvent::BadgeRefresh | SendingEvent::Flush => None,
 		}));
 
 		let txn_id = &*URL_SAFE_NO_PAD.encode(txn_hash);
@@ -1219,8 +1330,11 @@ impl Service {
 		pushkey: String,
 		events: Vec<SendingEvent>,
 	) -> SendingResult {
-		let suppressed = self.pushing_suppressed(&user_id).map(Ok);
+		let has_pdu = events
+			.iter()
+			.any(|event| matches!(event, SendingEvent::Pdu(_)));
 
+		let suppressed = self.pushing_suppressed(&user_id).map(Ok);
 		let pusher = self
 			.services
 			.pusher
@@ -1232,20 +1346,27 @@ impl Service {
 				)
 			});
 
-		let rules_for_user = self
-			.services
-			.account_data
-			.get_global::<PushRulesEvent>(&user_id, GlobalAccountDataEventType::PushRules)
-			.map(|ev| {
-				ev.map_or_else(
-					|_| push::Ruleset::server_default(&user_id),
-					|ev| ev.content.global,
-				)
+		let rules_for_user = has_pdu
+			.then_async(async || {
+				self.services
+					.account_data
+					.get_global::<PushRulesEvent>(&user_id, GlobalAccountDataEventType::PushRules)
+					.await
+					.map_or_else(|_| Ruleset::server_default(&user_id), |ev| ev.content.global)
 			})
 			.map(Ok);
 
 		let (pusher, rules_for_user, suppressed) =
 			try_join3(pusher, rules_for_user, suppressed).await?;
+
+		// Reconciliation, not an alert: a suppressed drop strands a stale badge.
+		if events.contains(&SendingEvent::BadgeRefresh) {
+			self.services
+				.pusher
+				.send_badge_notice(&user_id, &pusher)
+				.map_err(|e| (Destination::Push(user_id.clone(), pushkey.clone()), e))
+				.await?;
+		}
 
 		if suppressed {
 			let queued = self
@@ -1268,27 +1389,29 @@ impl Service {
 			"non-suppressed push",
 		);
 
-		let _sent = events
-			.iter()
-			.stream()
-			.ready_filter_map(|event| extract_variant!(event, SendingEvent::Pdu))
-			.wide_filter_map(|pdu_id| {
-				self.services
-					.timeline
-					.get_pdu_from_id(pdu_id)
-					.ok()
-			})
-			.ready_filter(|pdu| !pdu.is_redacted())
-			.wide_filter_map(async |pdu| {
-				self.services
-					.pusher
-					.send_push_notice(&user_id, &pusher, &rules_for_user, &pdu)
-					.await
-					.map_err(|e| (Destination::Push(user_id.clone(), pushkey.clone()), e))
-					.ok()
-			})
-			.count()
-			.await;
+		if let Some(rules_for_user) = rules_for_user {
+			let _sent = events
+				.iter()
+				.stream()
+				.ready_filter_map(|event| extract_variant!(event, SendingEvent::Pdu))
+				.wide_filter_map(|pdu_id| {
+					self.services
+						.timeline
+						.get_pdu_from_id(pdu_id)
+						.ok()
+				})
+				.ready_filter(|pdu| !pdu.is_redacted())
+				.wide_filter_map(async |pdu| {
+					self.services
+						.pusher
+						.send_push_notice(&user_id, &pusher, &rules_for_user, &pdu)
+						.await
+						.map_err(|e| (Destination::Push(user_id.clone(), pushkey.clone()), e))
+						.ok()
+				})
+				.count()
+				.await;
+		}
 
 		Ok(Destination::Push(user_id, pushkey))
 	}
@@ -1363,7 +1486,7 @@ impl Service {
 		user_id: &UserId,
 		pushkey: &str,
 		pusher: &Pusher,
-		rules_for_user: &push::Ruleset,
+		rules_for_user: &Ruleset,
 		rooms: Vec<(OwnedRoomId, Vec<RawPduId>)>,
 		reason: &'static str,
 	) {
@@ -1464,7 +1587,7 @@ impl Service {
 			.await
 		{
 			| Ok(ev) => ev.content.global,
-			| Err(_) => push::Ruleset::server_default(&user_id),
+			| Err(_) => Ruleset::server_default(&user_id),
 		};
 
 		self.flush_suppressed_rooms(
@@ -1495,7 +1618,7 @@ impl Service {
 			.await
 		{
 			| Ok(ev) => ev.content.global,
-			| Err(_) => push::Ruleset::server_default(&user_id),
+			| Err(_) => Ruleset::server_default(&user_id),
 		};
 
 		for (pushkey, rooms) in suppressed {
@@ -1666,16 +1789,17 @@ impl Service {
 fn arm_wake(wakes: &mut WakeQueue, server: OwnedServerName, earliest_retry: SystemTime) {
 	use tokio::time::Instant;
 
-	// Floor the delay at 1s so clock steps and past deadlines wake promptly,
-	// and jitter to spread a mass-failure wake storm.
+	// Floor the delay at 1s so clock steps and past deadlines wake promptly.
 	let delay = earliest_retry
 		.duration_since(SystemTime::now())
 		.unwrap_or_default()
-		.max(Duration::from_secs(1))
-		.saturating_add(rand_secs(0..3));
+		.max(Duration::from_secs(1));
 
+	// Spread the wake over another delay-width (3s minimum), so destinations
+	// sharing a backoff tier trickle back rather than retrying in one burst.
+	let jitter = rand_secs(0..delay.as_secs().max(3));
 	let deadline = Instant::now()
-		.checked_add(delay)
+		.checked_add(delay.saturating_add(jitter))
 		.unwrap_or_else(Instant::now);
 
 	wakes.push(Reverse((deadline, server)));

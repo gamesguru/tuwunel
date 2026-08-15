@@ -11,9 +11,9 @@ pub struct Service {
 	services: Arc<crate::services::OnceServices>,
 }
 
-/// Outcome of a room shutdown: evicted users, stripped local aliases, and the
-/// redirect room (always `None`; replacement rooms are not created). Serializes
-/// to Synapse's `ShutdownRoom` shape for the async delete task to round-trip.
+/// Records local-user eviction results and aliases targeted for removal.
+///
+/// Its serialized layout matches Synapse's `ShutdownRoom`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ShutdownRoom {
 	pub kicked_users: Vec<OwnedUserId>,
@@ -102,7 +102,6 @@ impl Service {
 					.services
 					.membership
 					.leave(&user_id, room_id, Some("Room Deleted".into()), true, state_lock)
-					.boxed()
 					.await
 				{
 					| Ok(()) => kicked.push(user_id),

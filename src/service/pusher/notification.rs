@@ -1,12 +1,18 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt::Debug};
 
-use futures::{StreamExt, stream::select};
+use futures::{StreamExt, future::join3, stream::select};
 use ruma::{EventId, OwnedEventId, RoomId, UserId, events::receipt::ReceiptThread};
+use serde::Serialize;
 use tuwunel_core::{
 	Result, implement, trace,
-	utils::stream::{ReadyExt, TryIgnore},
+	utils::{
+		stream::{BroadbandExt, ReadyExt, TryIgnore},
+		u64_from_u8,
+	},
 };
-use tuwunel_database::{Deserialized, Ignore, Interfix};
+use tuwunel_database::{
+	Deserialized, Ignore, IgnoreAll, Interfix, KeyBuf, deserialize_from_slice as deserialize_key,
+};
 
 /// Per-thread unread counts: `(notification, highlight)` keyed by thread root.
 type ThreadCounts = BTreeMap<OwnedEventId, (u64, u64)>;
@@ -16,17 +22,22 @@ type ThreadCounts = BTreeMap<OwnedEventId, (u64, u64)>;
 /// cursor advanced within the sync window.
 type ThreadLastReads = BTreeMap<OwnedEventId, u64>;
 
+/// Reset the room's main-timeline notification counts.
+///
+/// The last-read stamp gates sync output; callers dispatch the badge refresh
+/// after every reset.
 #[implement(super::Service)]
 #[tracing::instrument(level = "debug", skip(self))]
-pub fn reset_notification_counts(&self, user_id: &UserId, room_id: &RoomId) {
+pub async fn reset_notification_counts(&self, user_id: &UserId, room_id: &RoomId) {
 	let count = self.services.globals.next_count();
 
 	let userroom_id = (user_id, room_id);
+
+	self.reset_notification_count(room_id, user_id, userroom_id)
+		.await;
+
 	self.db
 		.userroomid_highlightcount
-		.put(userroom_id, 0_u64);
-	self.db
-		.userroomid_notificationcount
 		.put(userroom_id, 0_u64);
 
 	let roomuser_id = (room_id, user_id);
@@ -40,14 +51,29 @@ pub fn reset_notification_counts(&self, user_id: &UserId, room_id: &RoomId) {
 	}
 }
 
-/// Reset counts for a single thread within a room. Per-thread rows live in
-/// the same CFs as the main `(user, room)` rows; the trailing event id
-/// keeps them disjoint. Stamps a per-thread last-read so sync v3 can gate
-/// emission of `unread_thread_notifications` to threads that advanced
-/// within the window.
+#[implement(super::Service)]
+async fn reset_notification_count<K>(&self, room_id: &RoomId, user_id: &UserId, key: K)
+where
+	K: Serialize + Debug + Send + Sync,
+{
+	// The increment path is a read-modify-write under this lock; an unlocked
+	// zero could land inside it and be overwritten by the stale sum.
+	let _lock = self
+		.notification_increment_mutex
+		.lock(&(room_id.to_owned(), user_id.to_owned()))
+		.await;
+
+	self.db
+		.userroomid_notificationcount
+		.put(key, 0_u64);
+}
+
+/// Reset counts for a single thread within a room.
+///
+/// The last-read stamp gates sync output.
 #[implement(super::Service)]
 #[tracing::instrument(level = "debug", skip(self))]
-pub fn reset_thread_notification_counts(
+pub async fn reset_thread_notification_counts(
 	&self,
 	user_id: &UserId,
 	room_id: &RoomId,
@@ -56,11 +82,12 @@ pub fn reset_thread_notification_counts(
 	let count = self.services.globals.next_count();
 
 	let userroom_thread = (user_id, room_id, thread_root);
+
+	self.reset_notification_count(room_id, user_id, userroom_thread)
+		.await;
+
 	self.db
 		.userroomid_highlightcount
-		.put(userroom_thread, 0_u64);
-	self.db
-		.userroomid_notificationcount
 		.put(userroom_thread, 0_u64);
 
 	let roomuser_thread = (room_id, user_id, thread_root);
@@ -69,50 +96,44 @@ pub fn reset_thread_notification_counts(
 		.put(roomuser_thread, *count);
 }
 
-/// Clear every per-thread notification, highlight, and last-read row for
-/// this user and room. The `Interfix` prefix forces a trailing separator
-/// into the scan key, so the legacy 2-tuple main row (which has no
-/// trailing separator) is excluded by construction; only 3-tuple thread
-/// rows match. Sweeps run sequentially: parallelizing them via `join`
-/// triggers a `for<'a> FnMut(&[u8])` Send-not-general-enough cascade
-/// through the route handler. Per-thread last-reads use the inverse
-/// `(room, user, ...)` order to mirror the existing sync watch prefix.
+/// Clear all per-thread notification state for this user and room.
+///
+/// The `Interfix` prefix excludes the main row. The notification-count sweep
+/// runs under the increment mutex so a concurrent read-modify-write cannot
+/// resurrect a cleared row.
 #[implement(super::Service)]
+#[tracing::instrument(level = "debug", skip(self))]
 pub async fn clear_all_thread_notification_counts(&self, user_id: &UserId, room_id: &RoomId) {
 	let userroom_prefix = (user_id, room_id, Interfix);
 	let roomuser_prefix = (room_id, user_id, Interfix);
 
-	self.db
+	let highlights = self
+		.db
 		.userroomid_highlightcount
-		.keys_prefix_raw(&userroom_prefix)
-		.ignore_err()
-		.ready_for_each(|key| {
-			self.db.userroomid_highlightcount.remove(key);
-		})
-		.await;
+		.del_prefix(&userroom_prefix);
 
-	self.db
-		.userroomid_notificationcount
-		.keys_prefix_raw(&userroom_prefix)
-		.ignore_err()
-		.ready_for_each(|key| {
-			self.db.userroomid_notificationcount.remove(key);
-		})
-		.await;
-
-	self.db
+	let last_reads = self
+		.db
 		.roomuserid_lastnotificationread
-		.keys_prefix_raw(&roomuser_prefix)
-		.ignore_err()
-		.ready_for_each(|key| {
-			self.db
-				.roomuserid_lastnotificationread
-				.remove(key);
-		})
-		.await;
+		.del_prefix(&roomuser_prefix);
+
+	let notifications = async {
+		let _lock = self
+			.notification_increment_mutex
+			.lock(&(room_id.to_owned(), user_id.to_owned()))
+			.await;
+
+		self.db
+			.userroomid_notificationcount
+			.del_prefix(&userroom_prefix)
+			.await;
+	};
+
+	join3(notifications, highlights, last_reads).await;
 }
 
 /// Dispatcher: route a receipt's `ReceiptThread` to the matching reset path.
+///
 /// `Unthreaded` clears all room and thread counts; `Main` clears only the
 /// main-timeline counts; `Thread(id)` clears just that thread.
 #[implement(super::Service)]
@@ -123,11 +144,16 @@ pub async fn reset_notification_counts_for_thread(
 	thread: &ReceiptThread,
 ) {
 	match thread {
-		| ReceiptThread::Main => self.reset_notification_counts(user_id, room_id),
+		| ReceiptThread::Main =>
+			self.reset_notification_counts(user_id, room_id)
+				.await,
 		| ReceiptThread::Thread(root) =>
-			self.reset_thread_notification_counts(user_id, room_id, root),
+			self.reset_thread_notification_counts(user_id, room_id, root)
+				.await,
 		| _ => {
-			self.reset_notification_counts(user_id, room_id);
+			self.reset_notification_counts(user_id, room_id)
+				.await;
+
 			self.clear_all_thread_notification_counts(user_id, room_id)
 				.await;
 		},
@@ -144,6 +170,35 @@ pub async fn notification_count(&self, user_id: &UserId, room_id: &RoomId) -> u6
 		.await
 		.deserialized()
 		.unwrap_or(0)
+}
+
+/// Return the user's account-wide unread notification count.
+///
+/// Joined main and thread rows contribute to a saturating total.
+#[implement(super::Service)]
+#[tracing::instrument(level = "trace", skip(self), ret)]
+pub async fn global_notification_count(&self, user_id: &UserId) -> u64 {
+	self.db
+		.userroomid_notificationcount
+		.stream_prefix_raw(&(user_id, Interfix))
+		.ignore_err()
+		.ready_filter_map(|(key, count)| {
+			let count = u64_from_u8(count);
+
+			(count > 0).then(|| (KeyBuf::from(key), count))
+		})
+		.broad_filter_map(async |(key, count)| {
+			let (_, room_id, _): (Ignore, &RoomId, IgnoreAll) =
+				deserialize_key(&key).expect("notification count key");
+
+			self.services
+				.state_cache
+				.is_joined(user_id, room_id)
+				.await
+				.then_some(count)
+		})
+		.ready_fold(0_u64, u64::saturating_add)
+		.await
 }
 
 #[implement(super::Service)]

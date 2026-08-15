@@ -25,7 +25,7 @@ use tuwunel_core::{
 };
 use tuwunel_database::{Deserialized, Json, Map};
 
-pub use self::{keys::parse_master_key, register::Register};
+pub use self::{dehydrated_device::DehydratedDevice, keys::parse_master_key, register::Register};
 
 pub const PASSWORD_SENTINEL: &str = "*";
 pub const PASSWORD_DISABLED: &str = "";
@@ -545,4 +545,8 @@ impl Service {
 	pub async fn auth_ldap(&self, _user_dn: &str, _password: &str) -> Result {
 		Err!(FeatureDisabled("ldap"))
 	}
+
+	#[cfg(not(feature = "ldap"))]
+	#[must_use]
+	pub fn ldap_bind_dn(&self, _localpart: &str) -> Option<String> { None }
 }

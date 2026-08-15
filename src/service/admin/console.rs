@@ -77,17 +77,21 @@ impl Console {
 	}
 
 	pub fn interrupt_readline(self: &Arc<Self>) {
-		if let Some(input_abort) = self.input_abort.lock().expect("locked").take() {
-			debug!("Interrupting console readline...");
-			input_abort.abort();
-		}
+		let Some(input_abort) = self.input_abort.lock().expect("locked").take() else {
+			return;
+		};
+
+		debug!("Interrupting console readline...");
+		input_abort.abort();
 	}
 
 	pub fn interrupt_command(self: &Arc<Self>) {
-		if let Some(command_abort) = self.command_abort.lock().expect("locked").take() {
-			debug!("Interrupting console command...");
-			command_abort.abort();
-		}
+		let Some(command_abort) = self.command_abort.lock().expect("locked").take() else {
+			return;
+		};
+
+		debug!("Interrupting console command...");
+		command_abort.abort();
 	}
 
 	#[tracing::instrument(skip_all, name = "console", level = "trace")]
@@ -103,7 +107,7 @@ impl Console {
 			match self.readline().await {
 				| Ok(event) => match event {
 					| ReadlineEvent::Line(string) => self.clone().handle(string).await,
-					| ReadlineEvent::Interrupted => continue,
+					| ReadlineEvent::Interrupted => {},
 					| ReadlineEvent::Eof => break,
 					| ReadlineEvent::Quit => self
 						.server
@@ -239,7 +243,7 @@ fn configure_output_err(mut output: MadSkin) -> MadSkin {
 	use termimad::{Alignment, CompoundStyle, LineStyle, crossterm::style::Color};
 
 	let code_style = CompoundStyle::with_fgbg(Color::AnsiValue(196), Color::AnsiValue(234));
-	output.inline_code = code_style.clone();
+	output.inline_code = code_style;
 	output.code_block = LineStyle {
 		left_margin: 0,
 		right_margin: 0,
@@ -254,7 +258,7 @@ fn configure_output(mut output: MadSkin) -> MadSkin {
 	use termimad::{Alignment, CompoundStyle, LineStyle, crossterm::style::Color};
 
 	let code_style = CompoundStyle::with_fgbg(Color::AnsiValue(40), Color::AnsiValue(234));
-	output.inline_code = code_style.clone();
+	output.inline_code = code_style;
 	output.code_block = LineStyle {
 		left_margin: 0,
 		right_margin: 0,

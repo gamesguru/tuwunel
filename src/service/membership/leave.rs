@@ -12,7 +12,7 @@ use ruma::{
 	serde::Raw,
 };
 use tuwunel_core::{
-	Err, Error, Result, debug_info, debug_warn, err, implement,
+	Err, Error, Result, async_noinline, debug_info, debug_warn, err, implement,
 	matrix::{PduCount, pdu::check_rules, room_version},
 	pdu::PduBuilder,
 	utils::{self, FutureBoolExt, future::ReadyBoolExt},
@@ -20,21 +20,23 @@ use tuwunel_core::{
 };
 
 use super::Service;
-use crate::rooms::timeline::RoomMutexGuard;
+use crate::rooms::{state_cache::MembershipUpdate, timeline::RoomMutexGuard};
 
 #[implement(Service)]
+#[async_noinline]
 #[tracing::instrument(
+    name = "leave",
     level = "debug",
     skip_all,
     fields(%room_id, %user_id)
 )]
-pub async fn leave(
-	&self,
-	user_id: &UserId,
-	room_id: &RoomId,
+pub async fn leave<'a>(
+	&'a self,
+	user_id: &'a UserId,
+	room_id: &'a RoomId,
 	reason: Option<String>,
 	remote_leave_now: bool,
-	state_lock: &RoomMutexGuard,
+	state_lock: &'a RoomMutexGuard,
 ) -> Result {
 	let leave_content = RoomMemberEventContent {
 		membership: MembershipState::Leave,
@@ -231,16 +233,16 @@ async fn clear_local_leave(
 	let count = self.services.globals.next_count();
 	self.services
 		.state_cache
-		.update_membership(
+		.update_membership(MembershipUpdate {
 			room_id,
 			user_id,
-			leave_content,
-			user_id,
+			membership_event: leave_content,
+			sender: user_id,
 			last_state,
-			None,
-			true,
-			PduCount::Normal(*count),
-		)
+			invite_via: None,
+			update_joined_count: true,
+			count: PduCount::Normal(*count),
+		})
 		.await
 }
 
@@ -293,11 +295,8 @@ async fn remote_leave(
 							.filter_map(|event| event.get_field("sender").ok().flatten())
 							.filter_map(|sender: &str| UserId::parse(sender).ok())
 							.filter_map(|sender| {
-								if !self.services.globals.user_is_local(&sender) {
-									Some(sender.server_name().to_owned())
-								} else {
-									None
-								}
+								(!self.services.globals.user_is_local(&sender))
+									.then(|| sender.server_name().to_owned())
 							}),
 					);
 				},

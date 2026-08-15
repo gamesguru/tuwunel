@@ -8,7 +8,6 @@
 
 use std::{
 	collections::BTreeMap,
-	future::Future,
 	sync::{Arc, Mutex as StdMutex},
 	time::Duration,
 };
@@ -152,6 +151,20 @@ pub fn by_resource(&self, resource_id: &str) -> Vec<TaskInfo> {
 		.filter(|(_, task)| task.resource_id.as_str() == resource_id)
 		.map(|(id, task)| task.info(id))
 		.collect()
+}
+
+/// Whether a nonterminal task matches both `action` and `resource_id`.
+#[implement(Service)]
+pub fn has_nonterminal(&self, action: &str, resource_id: &str) -> bool {
+	self.tasks
+		.lock()
+		.expect("locked")
+		.values()
+		.any(|task| matches_nonterminal(task, action, resource_id))
+}
+
+fn matches_nonterminal(task: &Task, action: &str, resource_id: &str) -> bool {
+	task.action == action && task.resource_id == resource_id && !task.status.is_terminal()
 }
 
 /// Every tracked task; callers filter by action or status.

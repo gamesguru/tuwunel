@@ -12,6 +12,8 @@ use axum::{
 	routing::{any, get, post},
 };
 pub use client_ip::{ConfiguredIpSource, TrustedPeerSubnets};
+use http::{HeaderValue, header};
+use tower_http::set_header::SetResponseHeaderLayer;
 use tuwunel_core::{Server, err};
 
 use self::handler::RouterExt;
@@ -19,15 +21,11 @@ pub(super) use self::{
 	args::Args as Ruma, auth::auth_uiaa, client_ip::ClientIp, response::RumaResponse,
 	state::State,
 };
-use crate::{
-	client::{self, mas_active},
-	oidc::{self, native_get_route, native_submit_route},
-	server,
-};
+use crate::{client, oidc, server};
 
 pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 	let config = &server.config;
-	let mas_active = mas_active(config);
+	let mas_active = client::mas_active(config);
 	let router = register_client_auth_routes(router);
 	let router = register_mas_routes(router);
 	let router = register_client_profile_and_data_routes(router);
@@ -43,6 +41,7 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 	let router = register_synapse_admin_federation_routes(router);
 	let router = register_synapse_admin_misc_routes(router);
 	let router = register_oidc_routes(router);
+	let router = register_rendezvous_routes(router);
 	let router = register_server_misc_routes(router);
 	let router = register_federation_routes(router, config.allow_federation);
 
@@ -80,6 +79,8 @@ fn register_client_auth_routes(router: Router<State>) -> Router<State> {
 		.ruma_route(&client::suspend_user_route)
 		.ruma_route(&client::is_user_locked_route)
 		.ruma_route(&client::lock_user_route)
+		.route("/_tuwunel/sso/complete.js", get(client::sso_complete_js_route))
+		.route("/_tuwunel/sso/sso.css", get(client::sso_css_route))
 }
 
 fn register_mas_routes(router: Router<State>) -> Router<State> {
@@ -113,6 +114,8 @@ fn register_synapse_admin_users_routes(router: Router<State>, mas_active: bool) 
 		.ruma_route(&client::users::admin_username_available_route)
 		.ruma_route(&client::users::admin_lookup_threepid_route)
 		.ruma_route(&client::users::admin_allow_cross_signing_replacement_route)
+		.ruma_route(&client::users::admin_redact_user_route)
+		.ruma_route(&client::users::admin_redact_status_route)
 		// whois is served at the /_synapse admin path and the client-server admin
 		// aliases where Synapse also mounts it.
 		.route("/_synapse/admin/v1/whois/{user_id}", get(client::users::admin_whois_route))
@@ -134,6 +137,7 @@ fn register_synapse_admin_users_routes(router: Router<State>, mas_active: bool) 
 			.ruma_route(&client::admin_register_route)
 			.ruma_route(&client::users::admin_reset_password_route)
 			.ruma_route(&client::users::admin_is_user_admin_route)
+			.ruma_route(&client::users::admin_login_as_route)
 	}
 }
 
@@ -190,9 +194,13 @@ fn register_synapse_admin_rooms_routes(router: Router<State>) -> Router<State> {
 
 fn register_synapse_admin_media_routes(router: Router<State>) -> Router<State> {
 	router
+		.ruma_route(&client::admin::media::admin_query_media_route)
 		.ruma_route(&client::admin::media::admin_delete_media_route)
 		.ruma_route(&client::admin::media::admin_list_user_media_route)
+		.ruma_route(&client::admin::media::admin_list_room_media_route)
 		.ruma_route(&client::admin::media::admin_delete_user_media_route)
+		.ruma_route(&client::admin::media::admin_purge_media_cache_route)
+		.ruma_route(&client::admin::media::admin_user_media_statistics_route)
 		.route(
 			"/_synapse/admin/v1/media/delete",
 			post(client::admin::media::admin_delete_media_by_date_size_route),
@@ -204,13 +212,21 @@ fn register_synapse_admin_media_routes(router: Router<State>) -> Router<State> {
 		)
 }
 
-fn register_synapse_admin_federation_routes(router: Router<State>) -> Router<State> { router }
+fn register_synapse_admin_federation_routes(router: Router<State>) -> Router<State> {
+	router
+		.ruma_route(&client::admin::federation::admin_list_destinations_route)
+		.ruma_route(&client::admin::federation::admin_destination_details_route)
+		.ruma_route(&client::admin::federation::admin_destination_rooms_route)
+		.ruma_route(&client::admin::federation::admin_reset_connection_route)
+}
 
 fn register_synapse_admin_misc_routes(router: Router<State>) -> Router<State> {
 	router
 		.ruma_route(&client::misc::admin_server_version_route)
 		.ruma_route(&client::misc::admin_fetch_event_route)
 		.ruma_route(&client::misc::admin_scheduled_tasks_route)
+		.ruma_route(&client::misc::admin_send_server_notice_route)
+		.ruma_route(&client::misc::admin_send_server_notice_txn_route)
 }
 
 fn register_client_profile_and_data_routes(router: Router<State>) -> Router<State> {
@@ -303,6 +319,11 @@ fn register_client_room_routes(router: Router<State>) -> Router<State> {
 		.ruma_route(&client::search_users_route)
 		.ruma_route(&client::get_member_events_route)
 		.ruma_route(&client::get_protocols_route)
+		.ruma_route(&client::get_protocol_route)
+		.ruma_route(&client::get_user_for_protocol_route)
+		.ruma_route(&client::get_location_for_protocol_route)
+		.ruma_route(&client::get_user_for_user_id_route)
+		.ruma_route(&client::get_location_for_room_alias_route)
 		.ruma_route(&client::upgrade_room_route)
 		.ruma_route(&client::get_mutual_rooms_route)
 		.ruma_route(&client::get_room_summary)
@@ -360,13 +381,17 @@ fn register_client_state_and_sync_routes(router: Router<State>) -> Router<State>
 }
 
 fn register_client_media_and_device_routes(router: Router<State>) -> Router<State> {
+	let media_content_router = Router::new()
+		.ruma_route(&client::get_content_thumbnail_route)
+		.ruma_route(&client::get_content_route)
+		.ruma_route(&client::get_content_as_filename_route);
+
+	let media_content_router = media_content_headers(media_content_router);
+
 	router
 		.ruma_route(&client::create_content_route)
 		.ruma_route(&client::create_mxc_uri_route)
 		.ruma_route(&client::create_content_async_route)
-		.ruma_route(&client::get_content_thumbnail_route)
-		.ruma_route(&client::get_content_route)
-		.ruma_route(&client::get_content_as_filename_route)
 		.ruma_route(&client::get_media_preview_route)
 		.ruma_route(&client::get_media_config_route)
 		.ruma_route(&client::get_devices_route)
@@ -379,6 +404,7 @@ fn register_client_media_and_device_routes(router: Router<State>) -> Router<Stat
 		.ruma_route(&client::get_dehydrated_device_route)
 		.ruma_route(&client::get_dehydrated_events_route)
 		.ruma_route(&client::send_event_to_device_route)
+		.merge(media_content_router)
 }
 
 fn register_client_misc_routes(router: Router<State>) -> Router<State> {
@@ -401,7 +427,10 @@ fn register_oidc_routes(router: Router<State>) -> Router<State> {
 		.route("/_tuwunel/oidc/registration", post(oidc::registration_route))
 		.route("/_tuwunel/oidc/authorize", get(oidc::authorize_route))
 		.route("/_tuwunel/oidc/_complete", get(oidc::complete_route))
-		.route("/_tuwunel/oidc/native", get(native_get_route).post(native_submit_route))
+		.route(
+			"/_tuwunel/oidc/native",
+			get(oidc::native_get_route).post(oidc::native_submit_route),
+		)
 		.route("/_tuwunel/oidc/token", post(oidc::token_route))
 		.route("/_tuwunel/oidc/device_authorization", post(oidc::device_authorization_route))
 		.route("/_tuwunel/oidc/device", get(oidc::get_device_route))
@@ -430,6 +459,26 @@ fn register_oidc_routes(router: Router<State>) -> Router<State> {
 			get(oidc::openid_configuration_route),
 		)
 		.route("/.well-known/openid-configuration", get(oidc::openid_configuration_route))
+}
+
+fn register_rendezvous_routes(router: Router<State>) -> Router<State> {
+	let router = router
+		.ruma_route(&client::discover_msc4388_route)
+		.ruma_route(&client::create_msc4388_route)
+		.ruma_route(&client::get_msc4388_route)
+		.ruma_route(&client::put_msc4388_route)
+		.ruma_route(&client::delete_msc4388_route);
+
+	let session_routes = get(client::get_rendezvous_route)
+		.put(client::put_rendezvous_route)
+		.delete(client::delete_rendezvous_route);
+
+	router
+		.route(
+			"/_matrix/client/unstable/org.matrix.msc4108/rendezvous",
+			post(client::create_rendezvous_route),
+		)
+		.route("/_matrix/client/unstable/org.matrix.msc4108/rendezvous/{id}", session_routes)
 }
 
 fn register_server_misc_routes(router: Router<State>) -> Router<State> {
@@ -469,7 +518,6 @@ fn register_federation_routes(router: Router<State>, allow_federation: bool) -> 
 			.ruma_route(&server::get_hierarchy_route)
 			.ruma_route(&server::get_content_route)
 			.ruma_route(&server::get_content_thumbnail_route)
-			.route("/_matrix/federation/v1/query/edutypes", get(server::get_edu_types_route))
 			.route("/_tuwunel/local_user_count", get(client::tuwunel_local_user_count))
 	} else {
 		router
@@ -484,9 +532,7 @@ fn register_legacy_media_routes(
 	allow_legacy_media: bool,
 ) -> Router<State> {
 	if allow_legacy_media {
-		router
-			.ruma_route(&client::get_media_config_legacy_route)
-			.ruma_route(&client::get_media_preview_legacy_route)
+		let media_content_router = Router::new()
 			.route(
 				"/_matrix/media/r0/download/{server_name}/{media_id}",
 				get(client::get_content_legacy_route),
@@ -510,7 +556,14 @@ fn register_legacy_media_routes(
 			.route(
 				"/_matrix/media/v3/thumbnail/{server_name}/{media_id}",
 				get(client::get_content_thumbnail_legacy_route),
-			)
+			);
+
+		let media_content_router = media_content_headers(media_content_router);
+
+		router
+			.ruma_route(&client::get_media_config_legacy_route)
+			.ruma_route(&client::get_media_preview_legacy_route)
+			.merge(media_content_router)
 	} else {
 		router
 			.route("/_matrix/media/v3/config", any(legacy_media_disabled))
@@ -518,6 +571,22 @@ fn register_legacy_media_routes(
 			.route("/_matrix/media/v3/thumbnail/{*path}", any(legacy_media_disabled))
 			.route("/_matrix/media/v3/preview_url", any(legacy_media_disabled))
 	}
+}
+
+fn media_content_headers(router: Router<State>) -> Router<State> {
+	const MEDIA_CSP: &[&str] = &[
+		"sandbox",
+		"default-src 'none'",
+		"script-src 'none'",
+		"plugin-types application/pdf",
+		"style-src 'unsafe-inline'",
+		"object-src 'self'",
+	];
+
+	router.route_layer(SetResponseHeaderLayer::overriding(
+		header::CONTENT_SECURITY_POLICY,
+		HeaderValue::from_static(const_str::join!(MEDIA_CSP, ";")),
+	))
 }
 
 async fn legacy_media_disabled() -> impl IntoResponse {

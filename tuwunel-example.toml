@@ -60,6 +60,10 @@
 # To listen on multiple addresses, specify a vector e.g. ["127.0.0.1",
 # "::1"]
 #
+# An address set here must bind or the server refuses to start. The
+# default is only a guess that both loopback families exist, so one of
+# them failing to bind is logged and skipped instead.
+#
 #address = ["127.0.0.1", "::1"]
 
 # The port(s) tuwunel will listen on.
@@ -110,7 +114,8 @@
 #database_backup_path =
 
 # The amount of online RocksDB database backups to keep/retain, if using
-# "database_backup_path", before deleting the oldest one.
+# "database_backup_path", before deleting the oldest one. This must be at
+# least 1; "backup-database" is an error at 0 or below.
 #
 # reloadable: yes
 #
@@ -157,39 +162,92 @@
 #
 #db_write_buffer_capacity_mb = varies by system
 
-# This item is undocumented. Please contribute documentation for it.
+# Maximum number of entries in the RocksDB block cache shared by the
+# `pduid_pdu` and `eventid_outlierpdu` column families: a PDU's full
+# body, keyed by its PDU ID, and the same body keyed by event ID when
+# the PDU is an outlier.
+#
+# This is an entry count, not a byte size. The cache's actual capacity
+# in bytes is this value multiplied by an internal per-column-family
+# key+value size estimate, then multiplied by `cache_capacity_modifier`.
+#
+# Scaled by your CPU core count by default; see
+# `cache_capacity_modifier` to scale this along with the other
+# individual LRU caches at once.
 #
 #pdu_cache_capacity = varies by system
 
-# This item is undocumented. Please contribute documentation for it.
+# Maximum number of entries in the RocksDB block cache shared by the
+# `shorteventid_authchain` and `authchainkey_authchain` column
+# families: a room event's full auth chain, keyed by its short event ID
+# or by the auth chain's own key.
+#
+# Same entry-count semantics as `pdu_cache_capacity` above; see there
+# for how this becomes a byte capacity and how
+# `cache_capacity_modifier` applies.
 #
 #auth_chain_cache_capacity = varies by system
 
-# This item is undocumented. Please contribute documentation for it.
+# Maximum number of entries in the RocksDB block cache for the
+# `shorteventid_eventid` column family: an event's full event ID,
+# looked up from its short event ID.
+#
+# Same entry-count semantics as `pdu_cache_capacity`.
 #
 #shorteventid_cache_capacity = varies by system
 
-# This item is undocumented. Please contribute documentation for it.
+# Maximum number of entries in the RocksDB block cache for the
+# `eventid_shorteventid` column family: an event's short event ID,
+# looked up from its full event ID. The reverse lookup of
+# `shorteventid_cache_capacity`.
+#
+# Same entry-count semantics as `pdu_cache_capacity`.
 #
 #eventidshort_cache_capacity = varies by system
 
-# This item is undocumented. Please contribute documentation for it.
+# Maximum number of entries in the RocksDB block cache for the
+# `eventid_pduid` column family: an event's PDU ID, looked up from its
+# full event ID.
+#
+# Same entry-count semantics as `pdu_cache_capacity`.
 #
 #eventid_pdu_cache_capacity = varies by system
 
-# This item is undocumented. Please contribute documentation for it.
+# Maximum number of entries in the RocksDB block cache for the
+# `shortstatekey_statekey` column family: a state event's full state
+# key, looked up from its short state key.
+#
+# Same entry-count semantics as `pdu_cache_capacity`.
 #
 #shortstatekey_cache_capacity = varies by system
 
-# This item is undocumented. Please contribute documentation for it.
+# Maximum number of entries in the RocksDB block cache for the
+# `statekey_shortstatekey` column family: a state event's short state
+# key, looked up from its full state key. The reverse lookup of
+# `shortstatekey_cache_capacity`.
+#
+# Same entry-count semantics as `pdu_cache_capacity`.
 #
 #statekeyshort_cache_capacity = varies by system
 
-# This item is undocumented. Please contribute documentation for it.
+# Maximum number of entries in the RocksDB block cache for the
+# `servernameevent_data` column family: outbound federation events
+# (PDUs and EDUs) queued for delivery, keyed by destination server
+# name.
+#
+# Same entry-count semantics as `pdu_cache_capacity`.
 #
 #servernameevent_data_cache_capacity = varies by system
 
-# This item is undocumented. Please contribute documentation for it.
+# Maximum number of entries in the in-memory LRU cache of decompressed
+# room state (a list of short state-info entries per state hash), used
+# by the state compressor to avoid re-walking
+# `shortstatehash_statediff` on every lookup.
+#
+# Unlike the other caches on this page, this one is not backed by
+# RocksDB: it is a plain in-process cache sized directly in entries,
+# with no per-entry byte-size conversion. `cache_capacity_modifier`
+# still applies to it.
 #
 #stateinfo_cache_capacity = varies by system
 
@@ -198,14 +256,14 @@
 #
 # reloadable: yes
 #
-#spacehierarchy_cache_ttl_min = 21600
+#spacehierarchy_cache_ttl_min = 10800
 
 # Maximum time-to-live in seconds for room summary entries in the spaces
 # cache.
 #
 # reloadable: yes
 #
-#spacehierarchy_cache_ttl_max = 129600
+#spacehierarchy_cache_ttl_max = 64800
 
 # Minimum timeout a client can request for long-polling sync. Requests
 # will be clamped up to this value if smaller.
@@ -227,6 +285,16 @@
 # reloadable: yes
 #
 #client_sync_timeout_max = 90000
+
+# Custom DNS servers to query instead of the operating system's default
+# resolvers; when this list is non-empty, `/etc/resolv.conf` is never
+# read. Each entry is an IP address with an optional port, defaulting to
+# port 53. The servers are assumed to support both UDP and TCP on that
+# port; enable `query_over_tcp_only` if any of them is TCP-only.
+#
+# example: ["127.0.0.53", "1.1.1.1:5353", "[fd00::1]:53"]
+#
+#dns_servers = []
 
 # Maximum entries stored in DNS memory-cache. The size of an entry may
 # vary so please take care if raising this value excessively. Only
@@ -384,7 +452,7 @@
 # This item is undocumented. Please contribute documentation for it.
 # reloadable: yes
 #
-#max_fetch_prev_events = 192
+#max_fetch_prev_events = 1024
 
 # Maximum time, in milliseconds, to wait for the missing prev_events of an
 # incoming timeline event to arrive on their own before fetching them over
@@ -467,11 +535,11 @@
 #
 #well_known_timeout = 10
 
-# Federation client request timeout (seconds). You most definitely want
-# this to be high to account for extremely large room joins, slow
-# homeservers, your own resources etc.
+# Federation client request timeout (seconds). This applies to each read
+# from the remote server rather than to the request as a whole, which
+# remains bounded by `request_total_timeout`.
 #
-#federation_timeout = 300
+#federation_timeout = 25
 
 # Timeout (seconds) for client-initiated federation key lookups, namely
 # /keys/query and /keys/claim against remote servers. Should be well
@@ -545,7 +613,7 @@
 #
 # reloadable: yes
 #
-#client_shutdown_timeout = 10
+#client_shutdown_timeout = 15
 
 # Source of the client IP address for rate limiting, logging, and
 # security tooling.
@@ -672,9 +740,11 @@
 #
 #registration_shared_secret =
 
-# Path to a file containing the registration shared secret. Trimmed of
-# surrounding whitespace on read. Takes precedence over
-# `registration_shared_secret` when both are set.
+# Path to a file containing the registration shared secret. Takes
+# precedence over `registration_shared_secret`, and falls back to it when
+# the file cannot be opened. Surrounding whitespace is trimmed off, so a
+# trailing newline does not become part of the secret. A file which is
+# present but blank resolves to no secret rather than falling back.
 #
 # reloadable: yes
 # example: "/etc/tuwunel/.reg_shared_secret"
@@ -778,7 +848,7 @@
 #
 # reloadable: yes
 #
-#resolve_state_locally_shadow = false
+#resolve_state_locally_shadow = true
 
 # Soft cap on the number of forward extremities tracked per room. When
 # applying an incoming federation event would leave the room's frontier
@@ -1041,7 +1111,11 @@
 #
 #default_power_level_content_override = { users_default = 50 }
 
-# This item is undocumented. Please contribute documentation for it.
+# Enables OTLP span export for Jaeger-compatible tracing.
+#
+# A build with performance measurements installs an OpenTelemetry layer
+# when this is enabled. It defaults to false, and `jaeger_filter` selects
+# the exported spans.
 #
 #allow_jaeger = false
 
@@ -1170,6 +1244,10 @@
 
 # Output logs with ANSI colours.
 #
+# Colours are suppressed while entries are submitted to journald, which
+# takes the formatted line verbatim and reads control bytes in it as
+# binary rather than text.
+#
 #log_colors = true
 
 # Sets the log format to compact mode.
@@ -1195,6 +1273,20 @@
 # offer this option for all other users who desire such redirection.
 #
 #log_to_stderr = false
+
+# Submits log output directly to the journald socket instead of the
+# console when running under systemd. Each entry carries its actual
+# severity as the journal priority, so tools such as `journalctl
+# --priority warning` catch Tuwunel's warnings and errors; console output
+# is captured by journald at a single fixed priority instead. The message
+# is formatted exactly as the console formats it, span fields included,
+# while the target, source location and every tracing field are attached
+# as journal fields, the latter under an `F_` prefix for queries such as
+# `journalctl F_ROOM_ID='!room:example.com'`. This option has no effect
+# when not running under systemd, and the console is kept when the
+# journald socket cannot be opened.
+#
+#log_journald = true
 
 # Setting to false disables the logging/tracing system at a lower level.
 # In contrast to configuring an empty `log` string where the system is
@@ -1461,6 +1553,74 @@
 #
 #oidc_rc_burst_count = 0
 
+# Enable the rendezvous session APIs used to sign in with a QR code
+# (MSC4108 and MSC4388).
+#
+# The rendezvous session relays the handshake between two devices before
+# the OAuth device authorization grant completes the sign-in. This
+# requires the built-in OIDC server. When disabled, clients hide the
+# feature and the endpoints return an unrecognized response.
+#
+# reloadable: yes
+#
+#rendezvous_enabled = true
+
+# Maximum size in bytes of a rendezvous session payload.
+#
+# QR sign-in handshake messages are normally much smaller than the
+# default.
+#
+# reloadable: yes
+#
+#rendezvous_session_max_bytes = 4096
+
+# Seconds a rendezvous session lives after its last write.
+#
+# Each update restarts the window, but the device displaying the QR
+# times the whole sign-in against the expiry advertised at creation.
+# The default leaves time for an interactive account login on the
+# approval page.
+#
+# reloadable: yes
+#
+#rendezvous_session_ttl = 600
+
+# Maximum number of concurrent rendezvous sessions.
+#
+# Creating a session beyond this limit evicts the oldest session instead
+# of failing. A value of zero retains one session so creation remains
+# available.
+#
+# reloadable: yes
+#
+#rendezvous_max_sessions = 100
+
+# Require an access token for MSC4388 discovery and session creation.
+#
+# When disabled, clients without an access token may discover and create
+# MSC4388 sessions. The MSC4108 endpoint remains open in either mode.
+#
+# reloadable: yes
+#
+#rendezvous_authenticated_only = true
+
+# Per-client-IP request refill rate for the MSC4388 rendezvous endpoints.
+#
+# A value of zero is treated as one request per second.
+#
+# reloadable: yes
+#
+#rendezvous_rc_per_second = 10
+
+# Token-bucket depth for the MSC4388 rendezvous request throttle.
+#
+# This is the number of requests one client IP may make in a burst before
+# `rendezvous_rc_per_second` governs. A value of zero is treated as one.
+#
+# reloadable: yes
+#
+#rendezvous_rc_burst_count = 20
+
 # Static TURN username to provide the client if not using a shared secret
 # ("turn_secret"), It is recommended to use a shared secret over static
 # credentials.
@@ -1494,13 +1654,18 @@
 # This is more secure, but if needed you can use traditional static
 # username/password credentials.
 #
+# reloadable: yes
+#
 #turn_secret = false
 
 # TURN secret to use that's read from the file path specified.
 #
-# This takes priority over "turn_secret" first, and falls back to
-# "turn_secret" if invalid or failed to open.
+# This takes priority over "turn_secret", and falls back to it when the
+# file cannot be opened. Surrounding whitespace is trimmed off, so a
+# trailing newline does not become part of the secret. A file which is
+# present but blank resolves to no secret rather than falling back.
 #
+# reloadable: yes
 # example: "/etc/tuwunel/.turn_secret"
 #
 #turn_secret_file =
@@ -1548,7 +1713,10 @@
 #
 #rocksdb_log_level = "error"
 
-# This item is undocumented. Please contribute documentation for it.
+# Routes RocksDB log messages to standard error.
+#
+# `rocksdb_log_level` still filters the emitted records. When disabled,
+# RocksDB uses the application's callback logger instead.
 #
 #rocksdb_log_stderr = false
 
@@ -1723,11 +1891,17 @@
 #
 #rocksdb_repair = false
 
-# This item is undocumented. Please contribute documentation for it.
+# Opens RocksDB in read-only mode.
+#
+# Writes are rejected and missing column families cannot be created. This
+# mode is disabled by default.
 #
 #rocksdb_read_only = false
 
-# This item is undocumented. Please contribute documentation for it.
+# Opens RocksDB as a secondary follower of a primary instance.
+#
+# Writes are rejected while the primary's latest WAL can be replayed into
+# this instance's view. Missing column families cannot be created.
 #
 #rocksdb_secondary = false
 
@@ -2048,6 +2222,87 @@
 # sadness.
 #
 #prune_missing_media = false
+
+# Largest picture, in pixels, the thumbnailer will decode. Dimensions
+# cost memory whatever the encoded file weighs, so a picture declaring
+# more than this is left without a thumbnail instead of decoded. A video
+# frame inherits the resolution of the video it came from and is bounded
+# here too.
+#
+# 50 megapixels is roughly four 8K frames and more than any ordinary
+# camera produces. Each pixel is budgeted at four bytes, so the default
+# admits a decode of about 200 MiB. The budget is per in-flight request,
+# which is what to size it against rather than one decode: thumbnail
+# requests are not otherwise limited in number.
+#
+# reloadable: yes
+#
+#media_thumbnail_max_pixels = 50000000
+
+# Program invoked to extract a still frame from a video, giving videos
+# uploaded without a thumbnail one anyway. Tuwunel decodes no video
+# itself; the frame is scaled and cropped like any other image and the
+# result is cached as an ordinary thumbnail.
+#
+# The list is an argument vector whose first entry is the program and
+# whose remaining entries are its arguments. It is executed directly,
+# never through a shell. Every argument has these tokens substituted
+# before each call:
+#
+# - `{input}` path of a temporary file holding the source video.
+# - `{width}` and `{height}` the requested thumbnail dimensions.
+#
+# The program writes one frame to standard output in any format the
+# thumbnailer decodes: PNG, JPEG, WebP or GIF. Videos are served without
+# a thumbnail while the list is empty.
+#
+# reloadable: yes
+# example: [
+# "ffmpeg", "-loglevel", "error", "-i", "{input}", "-vf", "thumbnail",
+# "-frames:v", "1", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1",
+# ]
+#
+#media_video_thumbnail_command = []
+
+# Seconds a video thumbnail request may spend on frame extraction. One
+# deadline spans the wait for a free slot, staging the video and the
+# program itself, so a queue cannot compound it into a multiple. On
+# expiry the program and anything it spawned are killed and the video is
+# served without a thumbnail.
+#
+# reloadable: yes
+#
+#media_video_thumbnail_timeout = 30
+
+# Video thumbnail extractions permitted to run at once. Decoding video
+# costs far more than scaling an image, so requests past this limit wait
+# for a slot instead of piling load onto the host. A slot is held from
+# staging the video through to the program exiting, so this also bounds
+# how many staged videos occupy the staging directory at once. Raise it
+# where cores are spare; a restart is required to apply a change.
+#
+#media_video_thumbnail_concurrency = 1
+
+# Largest video, in bytes, staged for the thumbnail program, and largest
+# frame read back from it. A video past this is served without a
+# thumbnail rather than written out, and a frame past it is refused
+# rather than decoded from a truncation. Accepts an integer byte count or
+# a string with SI/IEC suffix such as "128 MiB".
+#
+# reloadable: yes
+#
+#media_video_thumbnail_max_size = 128 MiB
+
+# Directory a video is staged in for the thumbnail program to read, one
+# file per running program, removed as soon as it exits. Leave unset to
+# use a `tmp` subdirectory of the database path, which keeps large videos
+# off the memory-backed `/tmp` a service manager commonly provides. Files
+# left behind by a killed server are reclaimed at startup.
+#
+# reloadable: yes
+# example: "/var/tmp/tuwunel"
+#
+#media_video_thumbnail_path =
 
 # List of storage providers to use for media. Providers can be configured
 # below in respective sections designated by
@@ -2402,7 +2657,7 @@
 
 # Automatically activate the tuwunel admin room console / CLI on
 # startup. This option can also be enabled with `--console` tuwunel
-# argument.
+# argument. Activation requires standard input to be a terminal.
 #
 #admin_console_automatic = false
 
@@ -2649,7 +2904,7 @@
 # The value is multiplied by the number of cores which share a device
 # queue, since group workers can be scheduled on any of those cores.
 #
-#db_pool_workers_limit = 64
+#db_pool_workers_limit = 32
 
 # Limits the total number of workers across all worker groups. When the
 # sum of all groups exceeds this value the worker counts are reduced until
@@ -2920,7 +3175,10 @@
 #
 #key =
 
-# Whether to listen and allow for HTTP and HTTPS connections (insecure!)
+# Controls whether listeners accept both HTTP and HTTPS.
+#
+# Plain requests are served without redirecting them to HTTPS. This
+# weakens transport security and is disabled by default.
 #
 #dual_protocol = false
 
@@ -3411,11 +3669,13 @@
 #
 #icon =
 
-# Optional list of scopes to authorize. An empty array does not impose any
-# restrictions from here, effectively defaulting to all scopes you
-# configured for the OAuth application at the provider. This setting
-# allows for restricting to a subset of those scopes for this instance.
-# Note the user can further restrict scopes during their authorization.
+# Optional list of scopes to authorize.
+#
+# An empty array sends `openid email profile`. The exception is
+# `brand = "MAS"`, which sends only `openid`: MAS rejects `profile`, and
+# its userinfo endpoint returns just `sub` and `username`. Set this to
+# request a different subset. The user can further restrict scopes during
+# their authorization.
 #
 #scope = []
 

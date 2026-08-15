@@ -33,7 +33,7 @@ pub(crate) async fn admin_register_route(
 	check_field("Username", &body.username)?;
 	check_field("Password", &body.password)?;
 
-	verify_mac(shared_secret, &body)
+	verify_mac(&shared_secret, &body)
 		.map_err(|()| err!(Request(Forbidden("HMAC check failed"))))?;
 
 	let user_id = resolve_local_user_id(services, &body.username)?;

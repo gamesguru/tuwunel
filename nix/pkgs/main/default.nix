@@ -186,6 +186,14 @@ let
 
     doCheck = true;
 
+    # Cargo applies the selected profile to every target, so checking under
+    # release links each test binary with thin LTO. Tests build under the test
+    # profile instead, matching the profile the unit and integ jobs use.
+    # Full-server integration binaries are large enough that concurrent links
+    # can exhaust memory and drive the builder into swap.
+    cargoTestCommand = "cargo test -j 1";
+    RUST_TEST_THREADS = "1";
+
     cargoExtraArgs =
       "--no-default-features --locked "
       + lib.optionalString (features'' != [ ]) "--features "
@@ -259,6 +267,7 @@ craneLib.buildPackage (
       ''
         export NIX_REDIRECTS="/etc/resolv.conf=${fakeResolvConf}"
         export TUWUNEL_DATABASE_PATH="$(mktemp -d)/smoketest.db"
+        export SSL_CERT_FILE="${pkgsBuildHost.cacert}/etc/ssl/certs/ca-bundle.crt"
       '';
     doCheck = true;
 

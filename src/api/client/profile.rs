@@ -4,11 +4,10 @@ use ruma::{
 	api::client::profile::{
 		PropagateTo, delete_profile_field, get_profile, get_profile_field, set_profile_field,
 	},
-	presence::PresenceState,
 	profile::ProfileFieldValue,
 };
 use tuwunel_core::{Err, Result, err};
-use tuwunel_service::profile::Propagation;
+use tuwunel_service::{presence::Ping, profile::Propagation};
 
 use crate::{ClientIp, Ruma};
 
@@ -128,14 +127,16 @@ pub(crate) async fn set_profile_field_route(
 		.await?;
 
 	// Presence update
+	let ping = Ping {
+		device_id: body.sender_device.as_deref(),
+		client_ip: Some(client),
+		appservice: body.appservice_info.as_ref(),
+		..Default::default()
+	};
+
 	services
 		.presence
-		.maybe_ping_presence(
-			&body.user_id,
-			body.sender_device.as_deref(),
-			Some(client),
-			&PresenceState::Online,
-		)
+		.maybe_ping_presence(&body.user_id, ping)
 		.await?;
 
 	Ok(set_profile_field::v3::Response {})
@@ -170,14 +171,16 @@ pub(crate) async fn delete_profile_field_route(
 		.await?;
 
 	// Presence update
+	let ping = Ping {
+		device_id: body.sender_device.as_deref(),
+		client_ip: Some(client),
+		appservice: body.appservice_info.as_ref(),
+		..Default::default()
+	};
+
 	services
 		.presence
-		.maybe_ping_presence(
-			&body.user_id,
-			body.sender_device.as_deref(),
-			Some(client),
-			&PresenceState::Online,
-		)
+		.maybe_ping_presence(&body.user_id, ping)
 		.await?;
 
 	Ok(delete_profile_field::v3::Response {})

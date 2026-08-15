@@ -20,6 +20,17 @@
 
 </details>
 
+## Systemd socket unit file
+
+<details>
+<summary>Systemd socket unit file</summary>
+
+```
+{{#include ../../debian/units/tuwunel.socket}}
+```
+
+</details>
+
 ## Arch Linux systemd unit file
 
 <details>

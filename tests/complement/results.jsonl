@@ -181,6 +181,9 @@
 {"Action":"pass","Test":"TestInboundFederationProfile/Inbound_federation_can_query_profile_data"}
 {"Action":"pass","Test":"TestInboundFederationProfile/Non-numeric_ports_in_server_names_are_rejected"}
 {"Action":"fail","Test":"TestInboundFederationRejectsEventsWithRejectedAuthEvents"}
+{"Action":"pass","Test":"TestInboundFederationRejectsEventsWithRejectedAuthEvents/Outlier_should_be_rejected"}
+{"Action":"fail","Test":"TestInboundFederationRejectsEventsWithRejectedAuthEvents/sent_event_1_should_be_rejected"}
+{"Action":"fail","Test":"TestInboundFederationRejectsEventsWithRejectedAuthEvents/sent_event_2_should_be_rejected"}
 {"Action":"fail","Test":"TestInviteFiltering"}
 {"Action":"fail","Test":"TestInviteFiltering/Can_allow_a_user_from_a_blocked_server"}
 {"Action":"fail","Test":"TestInviteFiltering/Can_block_a_single_user"}

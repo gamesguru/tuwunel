@@ -136,7 +136,7 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 			self.cache_resolved_state(room_id, incoming_pdu.event_id(), state_ids_compressed)
 				.await;
 
-			return Err(e);
+			return Err(e.clone());
 		},
 		| Err(e @ tuwunel_core::Error::AuthCheck(_)) => return Err(e),
 		| Err(e) => return Err(e),

@@ -1318,7 +1318,7 @@ dependencies = [
  "curve25519-dalek",
  "ed25519",
  "serde",
- "sha2 0.10.9",
+ "sha2",
  "subtle",
  "zeroize",
 ]
@@ -2171,6 +2171,20 @@ dependencies = [
 
 [[package]]
 name = "imbl"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc3be8d8cd36f33a46b1849f31f837c44d9fa87223baee3b4bd96b8f11df81eb"
+dependencies = [
+ "bitmaps",
+ "imbl-sized-chunks",
+ "rand_core 0.6.4",
+ "rand_xoshiro",
+ "serde",
+ "version_check",
+]
+
+[[package]]
+name = "imbl"
 version = "4.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ae128b3bc67ed43ec0a7bb1c337a9f026717628b3c4033f07ded1da3e854951"
@@ -2420,12 +2434,11 @@ dependencies = [
 
 [[package]]
 name = "keccak"
-version = "0.2.1"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffd9697dc4a9a62e2da93389f34400b77a28f0287711263cabb203b3ccb9c0e4"
+checksum = "cb26cec98cce3a3d96cbb7bced3c4b16e3d13f27ec56dbd62cbc8f39cfb9d653"
 dependencies = [
- "cfg-if",
- "cpufeatures 0.3.0",
+ "cpufeatures 0.2.17",
 ]
 
 [[package]]
@@ -3861,16 +3874,17 @@ source = "git+https://github.com/matrix-construct/resolv-conf?rev=ab5c3e44016bc7
 
 [[package]]
 name = "rezzy"
-version = "0.5.0"
-source = "git+https://github.com/gamesguru/rezzy?branch=dev#19477f06f5e7061907085ae59f415c994c22f85f"
+version = "0.6.0"
+source = "git+https://github.com/gamesguru/rezzy?branch=dev#7173c5ef521d84b4c2b0d51831c18beab812e892"
 dependencies = [
+ "base64 0.22.1",
  "blake2",
  "hashbrown 0.15.5",
- "imbl",
- "roaring",
+ "imbl 3.0.0",
+ "roaring 0.10.12",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2",
  "sha3",
 ]
 
@@ -3886,6 +3900,16 @@ dependencies = [
  "libc",
  "untrusted 0.9.0",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "roaring"
+version = "0.10.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19e8d2cfa184d94d0726d650a9f4a1be7f9b76ac9fdb954219878dc00c1c1e7b"
+dependencies = [
+ "bytemuck",
+ "byteorder",
 ]
 
 [[package]]
@@ -4098,7 +4122,7 @@ dependencies = [
  "ruma-common",
  "ruma-events",
  "serde_json",
- "sha2 0.10.9",
+ "sha2",
  "thiserror 2.0.19",
 ]
 
@@ -4640,23 +4664,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "sha2"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
-dependencies = [
- "cfg-if",
- "cpufeatures 0.3.0",
- "digest 0.11.3",
-]
-
-[[package]]
 name = "sha3"
-version = "0.11.0"
+version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be176f1a57ce4e3d31c1a166222d9768de5954f811601fb7ca06fc8203905ce1"
+checksum = "77fd7028345d415a4034cf8777cd4f8ab1851274233b45f84e3d955502d93874"
 dependencies = [
- "digest 0.11.3",
+ "digest 0.10.7",
  "keccak",
 ]
 
@@ -5754,7 +5767,7 @@ dependencies = [
  "hickory-resolver",
  "http",
  "image",
- "imbl",
+ "imbl 4.0.1",
  "insta",
  "ipaddress",
  "ldap3",
@@ -5770,7 +5783,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rezzy",
- "roaring",
+ "roaring 0.11.4",
  "ruma",
  "rustls",
  "rustyline-async",
@@ -5780,7 +5793,7 @@ dependencies = [
  "serde_html_form",
  "serde_json",
  "serde_yaml",
- "sha2 0.10.9",
+ "sha2",
  "similar 3.1.2",
  "subtle",
  "termimad",

@@ -271,19 +271,30 @@ async fn prefetch_missing_events(
 		return Ok(());
 	};
 
-	for pdu in events {
-		if let Err(e) = self
-			.land_missing_event(origin, room_id, &pdu, room_version, recursion_level)
+	best_effort_missing_events(events, async |pdu| {
+		self.land_missing_event(origin, room_id, &pdu, room_version, recursion_level)
 			.await
-		{
+	})
+	.await;
+
+	Ok(())
+}
+
+async fn best_effort_missing_events<I, F, Fut, E>(events: I, mut land: F)
+where
+	I: IntoIterator,
+	F: FnMut(I::Item) -> Fut,
+	Fut: Future<Output = std::result::Result<(), E>>,
+	E: std::fmt::Display,
+{
+	for pdu in events {
+		if let Err(e) = land(pdu).await {
 			// Missing-events batches are best-effort. One malformed or rejected
 			// event should not prevent later valid events in the same batch from
 			// being landed locally and satisfying the prev walk.
 			debug_warn!(error = %e, "Ignoring missing-events batch entry");
 		}
 	}
-
-	Ok(())
 }
 
 /// Authenticate and persist one event from the missing-events batch as an
@@ -324,4 +335,31 @@ async fn land_missing_event(
 	))
 	.await
 	.map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+	use std::sync::{
+		Arc,
+		atomic::{AtomicUsize, Ordering},
+	};
+
+	use super::best_effort_missing_events;
+
+	#[tokio::test]
+	async fn missing_events_keep_going_after_an_error() {
+		let seen = Arc::new(AtomicUsize::new(0));
+		let seen_in_closure = Arc::clone(&seen);
+
+		best_effort_missing_events(vec![1, 2, 3], move |_| {
+			let seen = Arc::clone(&seen_in_closure);
+			async move {
+				let call = seen.fetch_add(1, Ordering::SeqCst);
+				if call == 0 { Err("boom") } else { Ok(()) }
+			}
+		})
+		.await;
+
+		assert_eq!(seen.load(Ordering::SeqCst), 3);
+	}
 }

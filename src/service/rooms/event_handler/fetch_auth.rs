@@ -12,7 +12,7 @@ use tuwunel_core::{
 	Error, debug, debug_error, debug_warn, expected, implement,
 	matrix::{PduEvent, pdu::MAX_AUTH_EVENTS},
 	trace,
-	utils::stream::{BroadbandExt, IterStream},
+	utils::stream::{BroadbandExt, IterStream, TryBroadbandExt},
 	warn,
 };
 
@@ -45,18 +45,19 @@ pub(super) async fn fetch_auth<'a, Events>(
 	events: Events,
 	room_version: &RoomVersionId,
 	recursion_level: usize,
-) -> Vec<(PduEvent, Option<CanonicalJsonObject>)>
+) -> Result<Vec<(PduEvent, Option<CanonicalJsonObject>)>>
 where
 	Events: Iterator<Item = &'a EventId> + Clone + Send,
 {
 	let events_with_auth_events: Vec<_> = events
 		.stream()
-		.broad_then(|event_id| self.fetch_auth_chain(origin, room_id, event_id, room_version))
-		.collect()
+		.map(Ok)
+		.broad_and_then(|event_id| self.fetch_auth_chain(origin, room_id, event_id, room_version))
+		.try_collect()
 		.boxed()
-		.await;
+		.await?;
 
-	events_with_auth_events
+	let pdus = events_with_auth_events
 		.into_iter()
 		.stream()
 		.fold(Vec::new(), async |mut pdus, (id, local_pdu, events_in_reverse_order)| {
@@ -140,7 +141,9 @@ where
 				})
 				.await
 		})
-		.await
+		.await;
+
+	Ok(pdus)
 }
 
 #[implement(super::Service)]
@@ -156,7 +159,7 @@ async fn fetch_auth_chain(
 	room_id: &RoomId,
 	event_id: &EventId,
 	room_version: &RoomVersionId,
-) -> (OwnedEventId, Option<PduEvent>, Vec<(OwnedEventId, CanonicalJsonObject)>) {
+) -> Result<(OwnedEventId, Option<PduEvent>, Vec<(OwnedEventId, CanonicalJsonObject)>)> {
 	// a. Look in the main timeline (pduid_pdu tree)
 	// b. Look at outlier pdu tree
 	// (get_pdu_json checks both)
@@ -174,13 +177,13 @@ async fn fetch_auth_chain(
 				warn!(
 					?event_id,
 					error = %e,
-					"Failed to read rejection marker for local auth event; treating it as rejected in auth chain",
+					"Failed to read rejection marker for local auth event",
 				);
-				local_pdu.rejected = true;
+				return Err(e);
 			},
 		}
 		trace!(?event_id, "Found in database");
-		return (event_id.to_owned(), Some(local_pdu), vec![]);
+		return Ok((event_id.to_owned(), Some(local_pdu), vec![]));
 	}
 
 	// c. Ask origin server over federation
@@ -260,5 +263,5 @@ async fn fetch_auth_chain(
 		events_all.insert(next_id);
 	}
 
-	(event_id.to_owned(), None, events_in_reverse_order)
+	Ok((event_id.to_owned(), None, events_in_reverse_order))
 }

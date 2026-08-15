@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+	collections::HashMap,
+	sync::atomic::{AtomicBool, Ordering},
+};
 
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, future::try_join};
 use ruma::{EventId, OwnedEventId, RoomId, RoomVersionId};
@@ -153,20 +156,24 @@ where
 	);
 
 	trace!("Calculating extremity statehashes...");
+	let extremity_lookup_failed = AtomicBool::new(false);
 	let extremity_states: Vec<_> = incoming_pdu
 		.prev_events()
 		.map(ToOwned::to_owned)
 		.stream()
 		.broad_then(async |prev_event_id| {
-			let prev_event = self
+			let prev_event = match self
 				.services
 				.timeline
 				.get_pdu(&prev_event_id)
 				.inspect_err(|e| debug_warn!(?prev_event_id, "Missing prev event: {e}"))
-				.await;
-
-			let Ok(prev_event) = prev_event else {
-				return None;
+				.await
+			{
+				| Ok(prev_event) => prev_event,
+				| Err(_) => {
+					extremity_lookup_failed.store(true, Ordering::Relaxed);
+					return None;
+				},
 			};
 			let prev_event_is_rejected = self
 				.services
@@ -184,7 +191,10 @@ where
 				| Ok(sstatehash) => PrevState::Hash(sstatehash),
 				| Err(e) => {
 					debug_warn!(?prev_event_id, "Missing state at prev_event: {e}");
-					let state = self.cached_resolved_state(&prev_event_id).await?;
+					let Some(state) = self.cached_resolved_state(&prev_event_id).await else {
+						extremity_lookup_failed.store(true, Ordering::Relaxed);
+						return None;
+					};
 
 					PrevState::Cached(state)
 				},
@@ -195,6 +205,10 @@ where
 		.filter_map(async |state| state)
 		.collect()
 		.await;
+
+	if extremity_lookup_failed.load(Ordering::Relaxed) {
+		return Ok(None);
+	}
 
 	trace!("Calculating fork states...");
 	let (fork_states, auth_chain_sets) = extremity_states

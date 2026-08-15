@@ -144,19 +144,16 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu(
 				// rejected state event do not have to refetch `/state_ids`, but
 				// let the state-at-incoming fold decide whether to actually apply
 				// the rejected event's own state contribution.
+				self.services
+					.pdu_metadata
+					.mark_event_rejected(incoming_pdu.event_id());
+
 				self.cache_resolved_state(
 					room_id,
 					incoming_pdu.event_id(),
 					state_ids_compressed.clone(),
 				)
 				.await;
-
-				// The event already exists as a stored outlier (step 7 ran before this
-				// check), so it stays fetchable; mark it so any later event citing it as
-				// an auth event is rejected too, per the auth rules.
-				self.services
-					.pdu_metadata
-					.mark_event_rejected(incoming_pdu.event_id());
 
 				return Err(e);
 			},

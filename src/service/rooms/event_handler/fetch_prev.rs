@@ -86,7 +86,7 @@ where
 			let events = once(event_id.as_ref());
 			let auth = self
 				.fetch_auth(origin, room_id, events, room_version, recursion_level)
-				.await;
+				.await?;
 
 			(event_id, auth)
 		})
@@ -97,7 +97,8 @@ where
 	let mut amount = 0;
 	let mut eventid_info = HashMap::new();
 	let mut graph: HashMap<OwnedEventId, _> = HashMap::with_capacity(todo_outlier_stack.len());
-	while let Some((prev_event_id, mut outlier)) = todo_outlier_stack.next().await {
+	while let Some(result) = todo_outlier_stack.next().await {
+		let (prev_event_id, mut outlier) = result?;
 		self.services.server.check_running()?;
 
 		let Some((pdu, mut json_opt)) = outlier.pop() else {
@@ -152,7 +153,7 @@ where
 							room_version,
 							recursion_level,
 						)
-						.await;
+						.await?;
 
 					(prev_prev, fetch)
 				};

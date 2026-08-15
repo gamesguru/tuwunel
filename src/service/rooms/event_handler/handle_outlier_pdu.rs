@@ -132,7 +132,7 @@ pub(super) async fn handle_outlier_pdu(
 		.collect()
 		.await;
 
-	state_res::auth_check(
+	let auth_check = state_res::auth_check(
 		&room_rules,
 		&event,
 		&async |event_id| self.event_fetch(&event_id).await,
@@ -146,8 +146,23 @@ pub(super) async fn handle_outlier_pdu(
 				.ok_or_else(|| err!(Request(NotFound("state not found"))))
 		},
 	)
-	.inspect_ok(|()| trace!("Validation successful."))
-	.await?;
+	.await;
+
+	match auth_check {
+		| Ok(()) => trace!("Validation successful."),
+		| Err(e @ tuwunel_core::Error::AuthCheck(_)) => {
+			// Rejected events must stay fetchable so later auth checks can see the
+			// rejection marker instead of treating them as missing.
+			self.services
+				.timeline
+				.add_pdu_outlier(event.event_id(), &pdu_json);
+			self.services
+				.pdu_metadata
+				.mark_event_rejected(event.event_id());
+			return Err(e);
+		},
+		| Err(e) => return Err(e),
+	}
 
 	// 7. Persist the event as an outlier.
 	self.services

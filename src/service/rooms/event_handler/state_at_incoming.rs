@@ -142,38 +142,44 @@ where
 	);
 
 	trace!("Calculating extremity statehashes...");
-	let mut extremity_states = Vec::new();
-	for prev_event_id in incoming_pdu.prev_events() {
-		let prev_event = self
-			.services
-			.timeline
-			.get_pdu(prev_event_id)
-			.inspect_err(|e| debug_warn!(?prev_event_id, "Missing prev event: {e}"))
-			.await;
+	let extremity_states: Vec<_> = incoming_pdu
+		.prev_events()
+		.map(ToOwned::to_owned)
+		.stream()
+		.broad_then(async |prev_event_id| {
+			let prev_event = self
+				.services
+				.timeline
+				.get_pdu(&prev_event_id)
+				.inspect_err(|e| debug_warn!(?prev_event_id, "Missing prev event: {e}"))
+				.await;
 
-		let Ok(prev_event) = prev_event else {
-			return Ok(None);
-		};
+			let Ok(prev_event) = prev_event else {
+				return None;
+			};
 
-		let prev_state = match self
-			.services
-			.state
-			.pdu_shortstatehash(prev_event_id)
-			.await
-		{
-			| Ok(sstatehash) => PrevState::Hash(sstatehash),
-			| Err(e) => {
-				debug_warn!(?prev_event_id, "Missing state at prev_event: {e}");
-				let Some(state) = self.cached_resolved_state(prev_event_id).await else {
-					return Ok(None);
-				};
+			let prev_state = match self
+				.services
+				.state
+				.pdu_shortstatehash(&prev_event_id)
+				.await
+			{
+				| Ok(sstatehash) => PrevState::Hash(sstatehash),
+				| Err(e) => {
+					debug_warn!(?prev_event_id, "Missing state at prev_event: {e}");
+					let Some(state) = self.cached_resolved_state(&prev_event_id).await else {
+						return None;
+					};
 
-				PrevState::Cached(state)
-			},
-		};
+					PrevState::Cached(state)
+				},
+			};
 
-		extremity_states.push((prev_event_id.to_owned(), prev_state, prev_event));
-	}
+			Some((prev_event_id, prev_state, prev_event))
+		})
+		.filter_map(async |state| state)
+		.collect()
+		.await;
 
 	trace!("Calculating fork states...");
 	let (fork_states, auth_chain_sets) = extremity_states

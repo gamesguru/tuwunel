@@ -1,5 +1,5 @@
 use axum::extract::State;
-use futures::{TryFutureExt, future::join3, pin_mut};
+use futures::{TryFutureExt, future::join4, pin_mut};
 use ruma::api::client::room::get_room_event;
 use tuwunel_core::{
 	Err, Event, Pdu, Result, err,
@@ -28,13 +28,7 @@ pub(crate) async fn get_room_event_route(
 		.get_pdu(event_id)
 		.map_err(|_| err!(Request(NotFound("Event {} not found.", event_id))));
 
-	if services
-		.pdu_metadata
-		.is_event_rejected(event_id)
-		.await?
-	{
-		return Err!(Request(NotFound("Event not found.")));
-	}
+	let rejected = services.pdu_metadata.is_event_rejected(event_id);
 
 	let retained_event = body
 		.include_unredacted_content
@@ -71,8 +65,16 @@ pub(crate) async fn get_room_event_route(
 		.state_accessor
 		.user_can_see_event(sender_user, room_id, event_id);
 
-	let (mut event, retained_event, visible): (Result<Pdu>, Option<Result<Pdu>>, _) =
-		join3(event, retained_event, visible).await;
+	let (mut event, retained_event, visible, rejected): (
+		Result<Pdu>,
+		Option<Result<Pdu>>,
+		bool,
+		Result<bool>,
+	) = join4(event, retained_event, visible, rejected).await;
+
+	if rejected? {
+		return Err!(Request(NotFound("Event not found.")));
+	}
 
 	if event.as_ref().is_err_or(Event::is_redacted)
 		&& let Some(retained_event) = retained_event

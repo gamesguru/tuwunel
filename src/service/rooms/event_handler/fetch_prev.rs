@@ -271,23 +271,34 @@ async fn prefetch_missing_events(
 		return Ok(());
 	};
 
-	best_effort_missing_events(events, async |pdu| {
-		self.land_missing_event(origin, room_id, &pdu, room_version, recursion_level)
-			.await
-	})
-	.await;
+	best_effort_missing_events(
+		events,
+		async |pdu| {
+			self.land_missing_event(origin, room_id, &pdu, room_version, recursion_level)
+				.await
+		},
+		|| self.services.server.check_running(),
+	)
+	.await?;
 
 	Ok(())
 }
 
-async fn best_effort_missing_events<I, F, Fut, E>(events: I, mut land: F)
+async fn best_effort_missing_events<I, F, Fut, E, C>(
+	events: I,
+	mut land: F,
+	mut check_running: C,
+) -> Result
 where
 	I: IntoIterator,
 	F: FnMut(I::Item) -> Fut,
 	Fut: Future<Output = std::result::Result<(), E>>,
 	E: std::fmt::Display,
+	C: FnMut() -> Result,
 {
 	for pdu in events {
+		check_running()?;
+
 		if let Err(e) = land(pdu).await {
 			// Missing-events batches are best-effort. One malformed or rejected
 			// event should not prevent later valid events in the same batch from
@@ -295,6 +306,8 @@ where
 			debug_warn!(error = %e, "Ignoring missing-events batch entry");
 		}
 	}
+
+	Ok(())
 }
 
 /// Authenticate and persist one event from the missing-events batch as an
@@ -351,14 +364,19 @@ mod tests {
 		let seen = Arc::new(AtomicUsize::new(0));
 		let seen_in_closure = Arc::clone(&seen);
 
-		best_effort_missing_events(vec![1, 2, 3], move |_| {
-			let seen = Arc::clone(&seen_in_closure);
-			async move {
-				let call = seen.fetch_add(1, Ordering::SeqCst);
-				if call == 0 { Err("boom") } else { Ok(()) }
-			}
-		})
-		.await;
+		best_effort_missing_events(
+			vec![1, 2, 3],
+			move |_| {
+				let seen = Arc::clone(&seen_in_closure);
+				async move {
+					let call = seen.fetch_add(1, Ordering::SeqCst);
+					if call == 0 { Err("boom") } else { Ok(()) }
+				}
+			},
+			|| Ok(()),
+		)
+		.await
+		.unwrap();
 
 		assert_eq!(seen.load(Ordering::SeqCst), 3);
 	}

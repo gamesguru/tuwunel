@@ -60,6 +60,7 @@ enum Standing {
 	skip_all,
 	fields(lev = %recursion_level)
 )]
+#[allow(clippy::too_many_lines)]
 #[expect(clippy::too_many_arguments)]
 pub(super) async fn upgrade_outlier_to_timeline_pdu(
 	&self,

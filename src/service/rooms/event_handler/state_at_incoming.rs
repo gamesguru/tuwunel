@@ -167,9 +167,7 @@ where
 				| Ok(sstatehash) => PrevState::Hash(sstatehash),
 				| Err(e) => {
 					debug_warn!(?prev_event_id, "Missing state at prev_event: {e}");
-					let Some(state) = self.cached_resolved_state(&prev_event_id).await else {
-						return None;
-					};
+					let state = self.cached_resolved_state(&prev_event_id).await?;
 
 					PrevState::Cached(state)
 				},

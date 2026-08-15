@@ -1198,6 +1198,8 @@ fn to_lean(pdu: &PduEvent) -> rezzy::LeanEvent<OwnedEventId> {
 		prev_events: pdu.prev_events().map(ToOwned::to_owned).collect(),
 		auth_events: pdu.auth_events().map(ToOwned::to_owned).collect(),
 		depth: pdu.as_pdu().depth.into(),
+		rejected: false,
+		soft_fail: false,
 	}
 }
 

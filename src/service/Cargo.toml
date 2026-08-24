@@ -156,3 +156,7 @@ workspace = true
 [[bench]]
 name = "state_res"
 harness = false
+
+[[bench]]
+name = "auth_difference"
+harness = false

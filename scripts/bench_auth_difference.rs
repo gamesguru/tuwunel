@@ -18,10 +18,10 @@ impl<Id: Ord> Default for Counts<Id> {
 }
 
 impl<Id: Ord + Clone> Counts<Id> {
-	fn merge(mut self, set: Vec<Id>) -> Self {
+	fn merge(mut self, set: &[Id]) -> Self {
 		self.total = self.total.saturating_add(1);
 		for id in set {
-			let count = self.by_id.entry(id).or_default();
+			let count = self.by_id.entry(id.clone()).or_default();
 			*count = count.saturating_add(1);
 		}
 		self
@@ -36,67 +36,65 @@ impl<Id: Ord + Clone> Counts<Id> {
 	}
 }
 
-fn main() {
-	println!("Starting Comparative Performance Benchmark...\n");
+fn run_benchmark_for_config(num_sets: usize, size: usize, runs: u32) {
+	println!("=== Benchmark: {size} elements across {num_sets} auth sets ({runs} runs) ===");
 
-	let runs = 20_000;
-	let num_sets = 20; // 20 overlapping auth sets
-
-	for &size in &[100, 2000] {
-		println!("--- Benchmark with size: {size} elements across {num_sets} sets ---");
-
-		// We use String to simulate Event ID representation exactly
-		let mut sets: Vec<Vec<String>> = vec![Vec::new(); num_sets];
-		for i in 0..size {
-			let id = format!("$event_id_string_representation_for_testing_{i:05}");
-			for (s, set) in sets.iter_mut().enumerate() {
-				if i % (s + 3) != 0 {
-					set.push(id.clone());
-				}
+	// Generate overlapping auth sets simulating Matrix event IDs
+	let mut sets: Vec<Vec<String>> = vec![Vec::new(); num_sets];
+	for i in 0..size {
+		let id = format!("$event_id_string_representation_for_testing_{i:05}");
+		for (s, set) in sets.iter_mut().enumerate() {
+			if i % (s + 3) != 0 {
+				set.push(id.clone());
 			}
 		}
+	}
 
-		// Pre-build index mapping and RoaringBitmaps for the cached scenario
-		let mut id_to_index = BTreeMap::new();
-		let mut index_to_id = Vec::new();
-		let mut cached_bitmaps = Vec::new();
+	// Pre-build index mapping and RoaringBitmaps for the cached scenario
+	let mut id_to_index = BTreeMap::new();
+	let mut index_to_id = Vec::new();
+	let mut cached_bitmaps = Vec::new();
 
+	for set in &sets {
+		let mut bitmap = RoaringBitmap::new();
+		for id in set {
+			let idx = match id_to_index.get(id) {
+				| Some(&idx) => idx,
+				| None => {
+					let idx = u32::try_from(index_to_id.len()).unwrap();
+					id_to_index.insert(id.clone(), idx);
+					index_to_id.push(id.clone());
+					idx
+				},
+			};
+			bitmap.insert(idx);
+		}
+		cached_bitmaps.push(bitmap);
+	}
+
+	// 1. Measure Origin/Main BTreeMap counts approach (re-allocates/counts strings)
+	let start = Instant::now();
+	for _ in 0..runs {
+		let mut counts = Counts::default();
 		for set in &sets {
-			let mut bitmap = RoaringBitmap::new();
-			for id in set {
-				let idx = match id_to_index.get(id) {
-					| Some(&idx) => idx,
-					| None => {
-						let idx = u32::try_from(index_to_id.len()).unwrap();
-						id_to_index.insert(id.clone(), idx);
-						index_to_id.push(id.clone());
-						idx
-					},
-				};
-				bitmap.insert(idx);
-			}
-			cached_bitmaps.push(bitmap);
+			counts = counts.merge(set);
 		}
+		let _res = counts.result();
+	}
+	let origin_duration = start.elapsed();
+	println!(
+		"Origin/Main (BTreeMap Counts):        {:?} (avg: {:?})",
+		origin_duration,
+		origin_duration / runs
+	);
 
-		// 1. Measure Origin/Main BTreeMap counts approach (Must re-parse, allocate and merge strings)
-		let start = Instant::now();
-		for _ in 0..runs {
-			let mut counts = Counts::default();
-			for set in &sets {
-				counts = counts.merge(set.clone());
-			}
-			let _res = counts.result();
-		}
-		let origin_duration = start.elapsed();
-		println!(
-			"Origin/Main (BTreeMap Counts):     {:?} (avg: {:?})",
-			origin_duration,
-			origin_duration / runs
-		);
-
-		// 2. Measure PRE-COMPUTED/CACHED Roaring Sub::sub Approach (Just bitwise operations)
-		let start = Instant::now();
-		for _ in 0..runs {
+	// 2. Measure PRE-COMPUTED/CACHED Roaring (Bitwise union/intersection diff)
+	let start = Instant::now();
+	for _ in 0..runs {
+		let diff = if num_sets == 2 {
+			// Fast path for 2-set resolution: symmetric difference (XOR)
+			&cached_bitmaps[0] ^ &cached_bitmaps[1]
+		} else {
 			let mut union = RoaringBitmap::new();
 			let mut intersection = RoaringBitmap::new();
 			let mut first = true;
@@ -111,24 +109,43 @@ fn main() {
 					intersection &= bitmap;
 				}
 			}
+			union - intersection
+		};
 
-			let diff = std::ops::Sub::sub(union, intersection);
-			let _result_ids: Vec<String> = diff
-				.into_iter()
-				.map(|idx| {
-					let index = usize::try_from(idx).unwrap();
-					index_to_id[index].clone()
-				})
-				.collect();
-		}
-		let roaring_duration = start.elapsed();
-		println!(
-			"Cached/Pre-computed Roaring:      {:?} (avg: {:?})",
-			roaring_duration,
-			roaring_duration / runs
-		);
-
-		let speedup = origin_duration.as_nanos() as f64 / roaring_duration.as_nanos() as f64;
-		println!("Speedup of Cached Roaring over Origin/Main: {speedup:.2}x\n");
+		let _result_ids: Vec<String> = diff
+			.into_iter()
+			.map(|idx| {
+				let index = usize::try_from(idx).unwrap();
+				index_to_id[index].clone()
+			})
+			.collect();
 	}
+	let roaring_duration = start.elapsed();
+	println!(
+		"Cached/Pre-computed Roaring:         {:?} (avg: {:?})",
+		roaring_duration,
+		roaring_duration / runs
+	);
+
+	let speedup = origin_duration.as_nanos() as f64 / roaring_duration.as_nanos() as f64;
+	println!("Speedup of Cached Roaring over Origin/Main: {speedup:.2}x\n");
+}
+
+fn main() {
+	println!("Starting Comparative Performance Benchmark...\n");
+
+	// 1. 2-Set Conflict Resolution (Most common state fork)
+	println!("--------------------------------------------------");
+	println!(">>> 2-SET SCENARIOS (Direct 2-Branch Conflict) <<<");
+	println!("--------------------------------------------------");
+	run_benchmark_for_config(2, 100, 50_000);
+	run_benchmark_for_config(2, 500, 20_000);
+	run_benchmark_for_config(2, 2000, 10_000);
+
+	// 2. Multi-Set Conflict Resolution (20 Overlapping Branches)
+	println!("--------------------------------------------------");
+	println!(">>> 20-SET SCENARIOS (Complex Multi-Branch DAG) <<<");
+	println!("--------------------------------------------------");
+	run_benchmark_for_config(20, 100, 20_000);
+	run_benchmark_for_config(20, 2000, 5_000);
 }

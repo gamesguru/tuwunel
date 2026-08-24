@@ -107,43 +107,34 @@ fn generate_auth_sets(size: usize, num_sets: usize) -> Vec<Vec<String>> {
 	sets
 }
 
-fn bench_auth_difference(c: &mut Criterion) {
-	let mut group = c.benchmark_group("auth_difference");
-	let num_sets = 20;
+fn bench_auth_difference_for_set_count(c: &mut Criterion, num_sets: usize, group_name: &str) {
+	let mut group = c.benchmark_group(group_name);
 
 	for &size in &[100, 500, 2000] {
 		let sets = generate_auth_sets(size, num_sets);
 		group.throughput(Throughput::Elements(size as u64));
 
 		// 1. BTreeMap Counts
-		group.bench_with_input(
-			BenchmarkId::new("btree_counts", size),
-			&sets,
-			|b, sets| {
-				b.iter(|| {
-					let mut counts = BTreeCounts::default();
-					for set in sets {
-						counts = counts.merge(set);
-					}
-					black_box(counts.result())
-				});
-			},
-		);
+		group.bench_with_input(BenchmarkId::new("btree_counts", size), &sets, |b, sets| {
+			b.iter(|| {
+				let mut counts = BTreeCounts::default();
+				for set in sets {
+					counts = counts.merge(set);
+				}
+				black_box(counts.result())
+			});
+		});
 
 		// 2. Dynamic RoaringBitmap (live index mapping)
-		group.bench_with_input(
-			BenchmarkId::new("dynamic_roaring", size),
-			&sets,
-			|b, sets| {
-				b.iter(|| {
-					let mut state = DynamicRoaringState::new();
-					for set in sets {
-						state = state.merge(set);
-					}
-					black_box(state.result())
-				});
-			},
-		);
+		group.bench_with_input(BenchmarkId::new("dynamic_roaring", size), &sets, |b, sets| {
+			b.iter(|| {
+				let mut state = DynamicRoaringState::new();
+				for set in sets {
+					state = state.merge(set);
+				}
+				black_box(state.result())
+			});
+		});
 
 		// 3. Pre-cached RoaringBitmaps (pure bitwise operations + ID projection)
 		let mut id_to_index = BTreeMap::new();
@@ -172,22 +163,26 @@ fn bench_auth_difference(c: &mut Criterion) {
 			&cached_bitmaps,
 			|b, bitmaps| {
 				b.iter(|| {
-					let mut union = RoaringBitmap::new();
-					let mut intersection = RoaringBitmap::new();
-					let mut first = true;
+					let diff = if num_sets == 2 {
+						&bitmaps[0] ^ &bitmaps[1]
+					} else {
+						let mut union = RoaringBitmap::new();
+						let mut intersection = RoaringBitmap::new();
+						let mut first = true;
 
-					for bitmap in bitmaps {
-						if first {
-							union.clone_from(bitmap);
-							intersection = bitmap.clone();
-							first = false;
-						} else {
-							union |= bitmap;
-							intersection &= bitmap;
+						for bitmap in bitmaps {
+							if first {
+								union.clone_from(bitmap);
+								intersection = bitmap.clone();
+								first = false;
+							} else {
+								union |= bitmap;
+								intersection &= bitmap;
+							}
 						}
-					}
+						union - intersection
+					};
 
-					let diff = union - intersection;
 					let result: Vec<String> = diff
 						.into_iter()
 						.map(|idx| {
@@ -204,5 +199,13 @@ fn bench_auth_difference(c: &mut Criterion) {
 	group.finish();
 }
 
-criterion_group!(benches, bench_auth_difference);
+fn bench_auth_difference_2_sets(c: &mut Criterion) {
+	bench_auth_difference_for_set_count(c, 2, "auth_difference_2_sets");
+}
+
+fn bench_auth_difference_20_sets(c: &mut Criterion) {
+	bench_auth_difference_for_set_count(c, 20, "auth_difference_20_sets");
+}
+
+criterion_group!(benches, bench_auth_difference_2_sets, bench_auth_difference_20_sets);
 criterion_main!(benches);

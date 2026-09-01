@@ -364,7 +364,7 @@ features = [
 [workspace.dependencies.rezzy]
 #version = "0.4.0"
 git = "https://github.com/gamesguru/rezzy"
-branch = "dev"
+rev = "7173c5ef521d84b4c2b0d51831c18beab812e892"
 
 [workspace.dependencies.imbl]
 version = "4"

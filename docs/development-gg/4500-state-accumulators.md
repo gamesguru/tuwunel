@@ -52,8 +52,10 @@ implemented as follows:
 1. **Input encoding.** Each entry in the room's resolved state map is serialized
    as: `len(type) || type || len(state_key) || state_key || event_id` where each
    `len()` is an unsigned 16-bit little-endian byte count of the UTF-8 field
-   that follows. The `event_id` is appended raw with no length prefix (it is the
-   final field, so the two prefixes already make decoding unambiguous). Length
+   that follows. `event_id` is the UTF-8 encoding of its canonical Matrix event
+   ID string (including its leading `$` and server name), appended raw with no
+   length prefix. It is final, so the two preceding prefixes make decoding
+   unambiguous. Length
    prefixes make the encoding injective for arbitrary field contents — including
    embedded null bytes — with no rejection or escaping rules needed. Two bytes
    per length is sufficient since no field in a valid PDU can exceed the global
@@ -94,12 +96,15 @@ databases MUST remain responsible for _managing_ actual set element membership.
 
 ### Transaction payload
 
-Servers implementing this MSC MUST embed a `state_hashes` dictionary at the root
-of the `PUT /_matrix/federation/v1/send/{txnId}` request body. It maps the IDs
-of the PDUs included in the transaction to their respective `before` and `after`
-digests. The `state_hashes` values always represent the transaction sender's
-local resolved state, not necessarily the origin server's (meaning relays
-forward their own view).
+Stable implementations MUST embed a `state_hashes` dictionary at the root of
+the `PUT /_matrix/federation/v1/send/{txnId}` request body. Experimental
+implementations MUST instead use the root-level
+`tk.nutra.msc4500.state_hashes` key; they MAY accept either key when receiving
+transactions to ease migration, but MUST emit only the key for the version they
+implement. The dictionary maps the IDs of the PDUs included in the transaction
+to their respective `before` and `after` digests. Its values always represent
+the transaction sender's local resolved state, not necessarily the origin
+server's (meaning relays forward their own view).
 
 Network overhead for duplicate digests (e.g. across multiple non-state PDUs in a
 batch) is collapsed by standard federation HTTP compression (gzip/brotli).
@@ -159,10 +164,11 @@ approximately 200 bytes of JSON overhead per PDU in the transaction.
 
 Each server independently maintains its own `LtHash16` lattice in local storage.
 
-When a server catches a `/send` transaction containing the `state_hashes`
-payload, it collapses its own local lattice at that exact DAG point using fast
-bitmap operations, hashing it down to a canonical 32-byte `BLAKE2b-256` digest.
-If the local digest matches the incoming one, all systems are nominal.
+When a server catches a `/send` transaction containing its supported
+`state_hashes` or `tk.nutra.msc4500.state_hashes` payload, it collapses its own
+local lattice at that exact DAG point using fast bitmap operations, hashing it
+down to a canonical 32-byte `BLAKE2b-256` digest. A matching digest is a
+candidate for equality, not by itself a proof that both state maps are equal.
 
 If digests mismatch, servers SHOULD log an error or warning message of the state
 split. The receiver can automatically trigger a background `/get_missing_events`
@@ -253,9 +259,10 @@ Server-Server APIs.
   fully materialize the room state to serve these endpoints, which is an
   expensive $O(S)$ operation for large rooms. These endpoints become instantly
   cacheable via standard HTTP semantics. Servers SHOULD include the digest as an
-  `ETag` header on `200 OK` responses so standard conditional-request semantics
-  hold end-to-end. Requesters SHOULD include the 32-byte accumulator digest in
-  the `If-None-Match` header. The receiving server simply compares this against
+  `ETag` header on `200 OK` responses, as a quoted hexadecimal entity-tag such
+  as `"8b611750...15f8e67f"`, so standard conditional-request semantics hold
+  end-to-end. Requesters SHOULD include the same quoted entity-tag in the
+  `If-None-Match` header. The receiving server simply compares this against
   its own local LRU cache of the requested event's digest. If they match, the
   server immediately returns `304 Not Modified`, bypassing the legacy database
   traversal and JSON serialization of tens of thousands of state events.
@@ -267,10 +274,12 @@ least one party is desynchronized. The receiver performs homomorphic subtraction
 against the sender's full accumulator lattice.
 
 The delta lattice tells you _that_ you've diverged and lets you **bisect** to
-_where_. Because both servers can produce digests at historical DAG points, the
-receiver can query accumulators at $O(\log \Delta D)$ depth (topological
-bisection—similar to `git bisect`—over the known `prev_events` graph or auth
-chain) to find the earliest event where the digests diverged. For historical
+_where_. A requester first chooses the lexicographically smallest common tip,
+then repeatedly follows the lexicographically smallest `prev_events` edge whose
+ancestry contains a mismatch; at a merge it partitions candidate ancestors by
+that sorted edge order and queries the midpoint partition. Along this defined
+canonical ancestry traversal, historical accumulator queries take
+$O(\log \Delta D)$ steps to locate the earliest divergent point. For historical
 PDUs where a server has no stored accumulator (and deems retroactive computation
 prohibitive), it responds `404 M_NOT_FOUND`; the bisecting requester then treats
 the oldest event for which both sides _can_ produce accumulators as a lower
@@ -279,18 +288,19 @@ bound on the divergence point and proceeds from there.
 It is important to note that the delta lattice cannot name events you have never
 seen—a lattice sum isn't invertible to its summands (the property that makes it
 collision-resistant). Once the exact divergence point is isolated via bisection,
-enumeration and healing are delegated to MSCXXXX [Gossip-based federation room
-reconciliation] and its `/room_diff` and `/room_events` endpoints.
+enumeration and healing require a separate, optional reconciliation mechanism
+(for example, a future gossip-based room-reconciliation MSC).
 
 Furthermore, this MSC cannot detect omissions in messages, redactions, or other
-non-state-altering events. For this capability, it fully defers to MSCXXXX.
+non-state-altering events. Implementations that need that capability must use a
+separate event-set reconciliation mechanism.
 
-## Synergy with MSCXXXX (event set reconciliation)
+## Optional synergy with event-set reconciliation
 
-This proposal and MSCXXXX (`room_digest` / `room_diff`) solve fundamentally
+This proposal and a future event-set reconciliation protocol solve fundamentally
 different sets. MSC4500's accumulator covers the room's _current state set_ at
-arbitrary DAG positions. MSCXXXX's bloom digest and LCA/RMQ fall-back cover the
-_event set_ (full PDU timeline).
+arbitrary DAG positions. An event-set protocol can cover the _event set_ (full
+PDU timeline).
 
 Because state divergence implies event-set divergence (with the converse _often_
 also holding true), the two proposals nicely complement each other:
@@ -300,17 +310,21 @@ also holding true), the two proposals nicely complement each other:
    round trips.
 2. **Bisect (MSC4500, active):** On mismatch, optional bisection via the
    `/state_accumulator` endpoint alerts to the divergence point.
-3. **Reconcile (MSCXXXX):** `room_diff` (with a `scope: "state"` parameter)
-   fetches omissions, auth chains included, triggering state re-resolution.
+3. **Reconcile (optional):** an event-set reconciliation protocol fetches
+   omissions, auth chains included, triggering state re-resolution.
 
-Because MSC4500 gives active rooms free passive detection, MSCXXXX's periodic
-polling can back off significantly for rooms with recent inbound transactions.
+Because MSC4500 gives active rooms free passive detection, optional periodic
+event-set reconciliation can back off significantly for rooms with recent
+inbound transactions.
 
 ## Implementation notes
 
 The natural storage model is one 2048-byte lattice per state group. Creating a
-new state group from a delta is one subtraction plus one addition against the
-parent's lattice — `O(1)`, no chain walk and no full state materialization.
+new state group for one state-event replacement is one subtraction plus one
+addition against an already available parent lattice — `O(1)`, no chain walk
+and no full state materialization. Multi-entry deltas and branch merges cost in
+proportion to the changed `(type, state_key)` entries, plus any required state
+resolution and materialization work.
 Historical `/state_accumulator` queries then reduce to the existing event (state
 group lookup plus a single row or cache read).
 
@@ -363,18 +377,19 @@ state dictionary. This solves multiple architectural bottlenecks:
    independent state changes in different orders (e.g., Server A sees event $X$
    then $Y$; Server B sees $Y$ then $X$). Because the accumulator relies on
    commutative modulo addition, `Base + X + Y` produces the exact same lattice
-   and digest as `Base + Y + X`. Homeservers can instantly deduplicate
-   convergent DAG branches into a single shared state group ID upon ingestion
-   (e.g., via a relational `UNIQUE` index or a key-value point lookup map),
-   without ever expanding or comparing dictionaries.
+   and digest as `Base + Y + X`. Homeservers can use the digest as a fast
+   deduplication candidate (e.g., via a relational index or key-value lookup),
+   but MUST compare canonical state entries before merging state groups; a digest
+   collision must retain separate groups.
 
 3. **Fast-path state resolution:** During state resolution v2/v2.1, an expensive
    early step is determining if diverging DAG tips actually contain different
    states before building a conflict set. With the accumulator, this
    historically expensive code path is short-circuited by a single 32-byte
-   memory comparison. If the diverging branches have the same digests, the
-   server knows with cryptographic assurance that there is no conflict set, and
-   can safely bypass the state resolution algorithm.
+   memory comparison. Equal digests are only a fast-path candidate: before
+   bypassing resolution, the server MUST verify canonical state equality (or
+   handle a detected collision as distinct state) so distinct states never skip
+   state resolution.
 
 While relational delta chains (pointers to parent state groups) are still
 required to materialize state into memory for client APIs and to isolate actual
@@ -495,8 +510,10 @@ partitions, _not_ an authoritative proof of a peer's internal room state.
 
 **Parameter security:** The lattice parameters ($L = 1024$ lanes, $q = 2^{16}$)
 are the instantiation analyzed by Lewi et al. [^2], with an estimated security
-level in excess of 200 bits against known lattice-reduction [^4] and generalized
-birthday (k-list) attacks [^1]. This analysis requires that no element appear
+level in excess of 200 bits for the internal 2048-byte lattice against the
+specified lattice-reduction [^4] and generalized birthday (k-list) attacks [^1].
+The wire-visible BLAKE2b-256 digest has an approximately 128-bit generic
+collision bound. This analysis requires that no element appear
 with multiplicity $\ge 2^{16}$ in the accumulated multiset. MSC4500 satisfies
 this structurally: the input is a resolved state _map_, which holds exactly one
 `event_id` per `(type, state_key)` key — every element has multiplicity 1,
@@ -506,7 +523,8 @@ $2^{16}$; massive rooms are fully supported.
 The `n_before` and `n_after` payload fields are diagnostic only — they help a
 receiver gauge the magnitude of a divergence when choosing between bisection,
 full resync, and inaction. They MUST NOT be used as a validation shortcut:
-digest comparison is the sole equality check.
+digest comparison alone is not an equality check; receivers MUST validate the
+underlying canonical state before treating matching digests as identical.
 
 ## Test vectors
 
@@ -588,8 +606,8 @@ following unstable identifiers:
 
 This proposal is fully backwards-compatible:
 
-- Unknown transaction keys (`state_hashes`) are silently ignored by existing
-  servers, per current federation behavior.
+- Unknown transaction keys, including `tk.nutra.msc4500.state_hashes`, are
+  silently ignored by existing servers, per current federation behavior.
 - The unstable reconciliation endpoint returns a `404 Not Found` on
   non-implementing servers, which callers treat as an "unsupported" signal.
 - No room version consensus rules are modified.

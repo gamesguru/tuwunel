@@ -171,7 +171,12 @@ pub(super) async fn handle_outlier_pdu(
 
 	match auth_check {
 		| Ok(()) => trace!("Validation successful."),
-		| Err(e @ tuwunel_core::Error::AuthCheck(_)) => {
+		| Err(e)
+			if matches!(
+				&e,
+				tuwunel_core::Error::AuthCheck(inner) if !inner.is_not_found()
+			) =>
+		{
 			// Rejected events must stay fetchable so later auth checks can see the
 			// rejection marker instead of treating them as missing.
 			self.services

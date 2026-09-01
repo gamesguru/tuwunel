@@ -84,11 +84,18 @@ where
 		})
 		.map(async |event_id| {
 			let events = once(event_id.as_ref());
-			let auth = self
+			let auth = match self
 				.fetch_auth(origin, room_id, events, room_version, recursion_level)
-				.await?;
+				.await
+			{
+				| Ok(auth) => auth,
+				| Err(e) => {
+					debug_warn!(?event_id, error = %e, "Fetching prev event auth failed");
+					Vec::new()
+				},
+			};
 
-			Ok::<_, tuwunel_core::Error>((event_id, auth))
+			(event_id, auth)
 		})
 		.map(FutureExt::boxed)
 		.collect::<FuturesOrdered<_>>()
@@ -98,7 +105,7 @@ where
 	let mut eventid_info = HashMap::new();
 	let mut graph: HashMap<OwnedEventId, _> = HashMap::with_capacity(todo_outlier_stack.len());
 	while let Some(result) = todo_outlier_stack.next().await {
-		let (prev_event_id, mut outlier) = result?;
+		let (prev_event_id, mut outlier) = result;
 		self.services.server.check_running()?;
 
 		let Some((pdu, mut json_opt)) = outlier.pop() else {
@@ -153,9 +160,17 @@ where
 							room_version,
 							recursion_level,
 						)
-						.await?;
+						.await;
 
-					Ok::<_, tuwunel_core::Error>((prev_prev, fetch))
+					let fetch = match fetch {
+						| Ok(fetch) => fetch,
+						| Err(e) => {
+							debug_warn!(?prev_prev, error = %e, "Fetching prev event auth failed");
+							Vec::new()
+						},
+					};
+
+					(prev_prev, fetch)
 				};
 
 				todo_outlier_stack.push_back(fetch.boxed());

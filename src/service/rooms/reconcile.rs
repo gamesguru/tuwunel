@@ -14,9 +14,9 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures::StreamExt;
 use rand::seq::SliceRandom;
 use rezzy_recon::{
-	BucketDecodeBatch, BucketDecodeSuccess, ClientAction, ElementHash, EventIdFormat,
-	MAX_BUCKETED_SKETCH_CAPACITY, MAX_LOCAL_SKETCH_DECODE_CAPACITY, MAX_RECONCILIATION_ROUNDS,
-	ReconciliationClient, RemoteDigest, build_bucket_sketches,
+	BucketDecodeBatch, BucketDecodeSuccess, BucketRequest, ClientAction, ElementHash,
+	EventIdFormat, MAX_BUCKETED_SKETCH_CAPACITY, MAX_RECONCILIATION_ROUNDS, ReconciliationClient,
+	RoomAccumulator, build_bucket_sketches, triage::MAX_BUCKET_SKETCH_CAPACITY,
 };
 use ruma::{
 	OwnedEventId, OwnedRoomId, OwnedServerName, RoomId, RoomVersionId, ServerName,
@@ -163,7 +163,6 @@ const SAMPLE_FETCHES: usize = 16;
 const MAX_SAMPLE_FAILURE_PERCENT: usize = 25;
 const DIGEST_FEATURE: &str = "tk.nutra.msc4521.digest.algebraic_v1.0.0";
 const BINDING_FEATURE: &str = "tk.nutra.msc4521.binding.event_id_v1";
-const STRATA_FEATURE: &str = "tk.nutra.msc0501.strata";
 const UNSUPPORTED_COOLDOWN: Duration = Duration::from_hours(24);
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -407,7 +406,7 @@ impl Reconcile {
 			.unstable_features
 			.as_ref()
 			.is_some_and(|features| {
-				[DIGEST_FEATURE, BINDING_FEATURE, STRATA_FEATURE]
+				[DIGEST_FEATURE, BINDING_FEATURE]
 					.iter()
 					.all(|name| features.get(*name) == Some(&true))
 			}) {
@@ -416,7 +415,7 @@ impl Reconcile {
 		let remote = match self
 			.services
 			.federation
-			.execute(peer, api::strata::Request { room_id: room.to_owned() })
+			.execute(peer, api::digest::Request { room_id: room.to_owned() })
 			.await
 		{
 			| Ok(response) => response,
@@ -426,19 +425,28 @@ impl Reconcile {
 		if remote.digest_type != "algebraic_v1.0.0" {
 			return Ok(CompareOutcome::Unsupported);
 		}
-		let remote_digest = RemoteDigest::from_wire(
-			&remote.digest,
-			remote.known_event_count,
-			&remote.strata,
-			&remote.frame_event_ids,
-			&remote.frame_event_ids,
-			&remote.extremity_event_ids,
-			|_| true,
-		)
-		.map_err(|e| tuwunel_core::err!(Database("invalid reconciliation digest: {e:?}")))?;
-		let client = ReconciliationClient::new(MAX_LOCAL_SKETCH_DECODE_CAPACITY)
-			.map_err(|e| tuwunel_core::err!(Database("reconciliation client: {e:?}")))?;
-		let mut action = client.select_action(&local.resident, remote_digest, 8);
+		let remote_accumulator = RoomAccumulator::decode_digest(&remote.digest)
+			.map_err(|e| tuwunel_core::err!(Database("invalid reconciliation digest: {e:?}")))?;
+		let local_frame: std::collections::BTreeSet<&OwnedEventId> =
+			local.frame_event_ids.iter().collect();
+		let remote_frame: std::collections::BTreeSet<&OwnedEventId> =
+			remote.frame_event_ids.iter().collect();
+		let local_accumulator = local.resident.accumulator();
+		let mut action = if local_frame != remote_frame {
+			// A digest over a different frame is not comparable.
+			ClientAction::ExtremityDiff
+		} else if local_accumulator.digest() == remote_accumulator
+			&& local_accumulator.known_event_count() == remote.known_event_count
+		{
+			ClientAction::Synchronized
+		} else {
+			// Adaptive baseline: one depth-0 sketch at the per-entry capacity
+			// cap, then split on `capacity_exceeded`. No strata preflight.
+			ClientAction::BucketSketches {
+				requests: vec![BucketRequest::new(0, 0, MAX_BUCKET_SKETCH_CAPACITY)],
+				accumulated_roots: Vec::new(),
+			}
+		};
 		let mut missing_locally = std::collections::BTreeSet::new();
 		let mut requester_only = std::collections::BTreeSet::new();
 		let mut comparison = Comparison {

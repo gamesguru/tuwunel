@@ -172,6 +172,44 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 		.unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Result of comparing one room's event set with a peer.
+#[derive(Debug, Default)]
+pub struct Comparison {
+	/// Events in the locally accepted timeline.
+	pub local_known_event_count: u64,
+	/// Events in the peer's accepted timeline.
+	pub remote_known_event_count: u64,
+	/// Event IDs the peer has and the local timeline lacks.
+	pub missing_locally: Vec<OwnedEventId>,
+	/// Event IDs the local timeline has and the peer lacks.
+	pub missing_remotely: Vec<OwnedEventId>,
+	/// Short identifiers the peer lacks that did not resolve locally.
+	pub unresolved_short_ids: Vec<u64>,
+	/// Protocol rounds used by the comparison.
+	pub rounds: usize,
+	/// A bucket exceeded the sketch budget before the comparison completed.
+	pub capacity_exceeded: bool,
+	/// The digest and count agreed without any extraction.
+	pub synchronized: bool,
+	/// The peers do not share a frame.
+	pub frame_mismatch: bool,
+	/// The round limit was reached before the comparison completed.
+	pub exhausted: bool,
+}
+
+/// Why a comparison did not produce a [`Comparison`].
+#[derive(Debug)]
+pub enum CompareOutcome {
+	/// The peer and room are eligible and the comparison ran.
+	Compared(Comparison),
+	/// One side is not in the room or an access check failed.
+	NotEligible,
+	/// The room uses sender-chosen event IDs, which this profile excludes.
+	SenderChosenEventIds,
+	/// The peer does not advertise or serve the digest profile.
+	Unsupported,
+}
+
 pub struct Reconcile {
 	server: Arc<Server>,
 	services: Arc<OnceServices>,
@@ -322,11 +360,13 @@ impl Reconcile {
 		self.exchange(room_id, peer).await
 	}
 
+	/// Compares the local accepted timeline with `peer` without fetching or
+	/// applying any offered events.
 	#[expect(
 		clippy::too_many_lines,
-		reason = "exchange follows the reconciliation protocol phases"
+		reason = "compare follows the reconciliation protocol phases"
 	)]
-	async fn exchange(&self, room: &RoomId, peer: &ServerName) -> Result<bool> {
+	pub async fn compare(&self, room: &RoomId, peer: &ServerName) -> Result<CompareOutcome> {
 		if !self
 			.services
 			.state_cache
@@ -344,14 +384,14 @@ impl Reconcile {
 				.await
 				.is_err()
 		{
-			return Ok(true);
+			return Ok(CompareOutcome::NotEligible);
 		}
 		// MSC4521: the event_ids binding MUST NOT be used in room versions 1 and 2.
 		if matches!(
 			self.services.state.get_room_version(room).await?,
 			RoomVersionId::V1 | RoomVersionId::V2
 		) {
-			return Ok(false);
+			return Ok(CompareOutcome::SenderChosenEventIds);
 		}
 		let local = self
 			.services
@@ -371,7 +411,7 @@ impl Reconcile {
 					.iter()
 					.all(|name| features.get(*name) == Some(&true))
 			}) {
-			return Ok(false);
+			return Ok(CompareOutcome::Unsupported);
 		}
 		let remote = match self
 			.services
@@ -380,11 +420,11 @@ impl Reconcile {
 			.await
 		{
 			| Ok(response) => response,
-			| Err(error) if error.is_not_found() => return Ok(false),
+			| Err(error) if error.is_not_found() => return Ok(CompareOutcome::Unsupported),
 			| Err(error) => return Err(error),
 		};
 		if remote.digest_type != "algebraic_v1.0.0" {
-			return Ok(false);
+			return Ok(CompareOutcome::Unsupported);
 		}
 		let remote_digest = RemoteDigest::from_wire(
 			&remote.digest,
@@ -399,12 +439,31 @@ impl Reconcile {
 		let client = ReconciliationClient::new(MAX_LOCAL_SKETCH_DECODE_CAPACITY)
 			.map_err(|e| tuwunel_core::err!(Database("reconciliation client: {e:?}")))?;
 		let mut action = client.select_action(&local.resident, remote_digest, 8);
-		let mut offered = std::collections::BTreeSet::new();
+		let mut missing_locally = std::collections::BTreeSet::new();
+		let mut requester_only = std::collections::BTreeSet::new();
+		let mut comparison = Comparison {
+			local_known_event_count: local.resident.accumulator().known_event_count(),
+			remote_known_event_count: remote.known_event_count,
+			..Default::default()
+		};
+		let mut finished = false;
 		for _ in 0..MAX_RECONCILIATION_ROUNDS {
+			comparison.rounds = comparison.rounds.saturating_add(1);
 			match action {
-				| ClientAction::Synchronized
-				| ClientAction::ExtremityDiff
-				| ClientAction::ResolveRoots { .. } => break,
+				| ClientAction::Synchronized => {
+					comparison.synchronized = true;
+					finished = true;
+					break;
+				},
+				| ClientAction::ExtremityDiff => {
+					comparison.frame_mismatch = true;
+					finished = true;
+					break;
+				},
+				| ClientAction::ResolveRoots { .. } => {
+					finished = true;
+					break;
+				},
 				| ClientAction::BucketSketches { requests, accumulated_roots } => {
 					let sketches = build_bucket_sketches(local.population.h64s(), &requests)
 						.map_err(|e| {
@@ -443,6 +502,7 @@ impl Reconcile {
 						})
 						.await?;
 					if response.sketch_status == "capacity_exceeded" {
+						comparison.capacity_exceeded = true;
 						let batch = BucketDecodeBatch {
 							successful_buckets: vec![],
 							failed_buckets: requests
@@ -468,7 +528,7 @@ impl Reconcile {
 					for id in &response.missing_event_ids {
 						if let Some(hash) = short_hash(id) {
 							roots.push(hash);
-							offered.insert(id.clone());
+							missing_locally.insert(id.clone());
 						}
 					}
 					if let Some(ids) = &response.requester_only_short_ids {
@@ -476,9 +536,10 @@ impl Reconcile {
 							if let Ok(bytes) = URL_SAFE_NO_PAD.decode(id)
 								&& bytes.len() == 8
 							{
-								roots.push(u64::from_be_bytes(
-									bytes.try_into().expect("checked length"),
-								));
+								let root =
+									u64::from_be_bytes(bytes.try_into().expect("checked length"));
+								roots.push(root);
+								requester_only.insert(root);
 							}
 						}
 					}
@@ -507,8 +568,35 @@ impl Reconcile {
 				},
 			}
 		}
-		self.fetch_offered(room, peer, offered).await;
-		Ok(true)
+		comparison.exhausted = !finished;
+		comparison.missing_locally = missing_locally.into_iter().collect();
+		for root in requester_only {
+			if let Some(events) = local.h64_to_events.get(&root) {
+				comparison.missing_remotely.extend(
+					events
+						.iter()
+						.map(|(event_id, _)| event_id.clone()),
+				);
+			} else {
+				comparison.unresolved_short_ids.push(root);
+			}
+		}
+		comparison.missing_remotely.sort_unstable();
+		comparison.missing_remotely.dedup();
+		comparison.unresolved_short_ids.sort_unstable();
+		Ok(CompareOutcome::Compared(comparison))
+	}
+
+	async fn exchange(&self, room: &RoomId, peer: &ServerName) -> Result<bool> {
+		match self.compare(room, peer).await? {
+			| CompareOutcome::Compared(comparison) => {
+				self.fetch_offered(room, peer, comparison.missing_locally.into_iter().collect())
+					.await;
+				Ok(true)
+			},
+			| CompareOutcome::NotEligible => Ok(true),
+			| CompareOutcome::SenderChosenEventIds | CompareOutcome::Unsupported => Ok(false),
+		}
 	}
 
 	async fn fetch_offered(

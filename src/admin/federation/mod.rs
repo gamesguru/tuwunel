@@ -1,3 +1,4 @@
+mod compare;
 mod disable_room;
 mod enable_room;
 mod fetch_support_well_known;
@@ -56,6 +57,13 @@ pub(super) enum FederationCommand {
 	/// - Lists all the rooms we share/track with the specified *remote* user
 	RemoteUserInRooms {
 		user_id: OwnedUserId,
+	},
+
+	/// - Compares a room's event set with a remote server without fetching.
+	#[clap(alias("diff"), alias("comps"))]
+	Compare {
+		room_id: OwnedRoomId,
+		server: OwnedServerName,
 	},
 
 	/// - Runs an MSC4521 reconciliation of a room with a remote server.

@@ -11,6 +11,7 @@ mod checked;
 mod create;
 mod pdus;
 mod purge;
+pub mod reconciliation;
 mod redact;
 
 #[cfg(test)]

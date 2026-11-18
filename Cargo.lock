@@ -3815,6 +3815,15 @@ version = "0.7.6"
 source = "git+https://github.com/matrix-construct/resolv-conf?rev=ab5c3e44016bc76b8798ec837a5a9cf9d88bf233#ab5c3e44016bc76b8798ec837a5a9cf9d88bf233"
 
 [[package]]
+name = "rezzy-recon"
+version = "0.6.0-rc.1"
+source = "git+https://gitlab.com/wombat-foundation/rezzy.git?rev=87996819b463f94784069a96e4d35bddef5ada54#87996819b463f94784069a96e4d35bddef5ada54"
+dependencies = [
+ "base64 0.23.1",
+ "sha2 0.11.1",
+]
+
+[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5529,6 +5538,7 @@ dependencies = [
  "itertools 0.15.0",
  "log",
  "rand 0.10.3",
+ "rezzy-recon",
  "ruma",
  "serde",
  "serde_json",
@@ -5782,6 +5792,7 @@ dependencies = [
  "rand 0.10.3",
  "regex",
  "reqwest",
+ "rezzy-recon",
  "ruma",
  "rustls",
  "rustyline-async",

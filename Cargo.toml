@@ -354,6 +354,10 @@ version = "0.10"
 [workspace.dependencies.regex]
 version = "1.12"
 
+[workspace.dependencies.rezzy-recon]
+git = "https://gitlab.com/wombat-foundation/rezzy.git"
+rev = "87996819b463f94784069a96e4d35bddef5ada54"
+
 [workspace.dependencies.reqwest]
 version = "0.13"
 default-features = false
@@ -972,6 +976,7 @@ unexpected_cfgs.check-cfg = [
 	'cfg(core_intrinsics)',
 	'cfg(disable)',
 	'cfg(panic_trap)',
+	'cfg(ruma_unstable_exhaustive_types)',
 	'cfg(tokio_unstable)',
 	'cfg(tuwunel_always_prove_sendness)',
 	'cfg(tuwunel_always_prove_syncness)',

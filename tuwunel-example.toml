@@ -1655,6 +1655,15 @@
 #
 #enable = true
 
+# MSC4521: serve algebraic room digests and sketch-based set differences.
+#
+# This enables the federation endpoints and the explicit
+# `!admin federation reconcile` trigger.
+#
+# reloadable: yes
+#
+#msc4521_enabled = false
+
 # Derives incoming federation event state from locally held unresolved
 # ancestry.
 #

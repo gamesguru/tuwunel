@@ -2,6 +2,7 @@ mod disable_room;
 mod enable_room;
 mod fetch_support_well_known;
 mod incoming_federation;
+mod reconcile;
 mod remote_user_in_rooms;
 
 use clap::Subcommand;
@@ -55,5 +56,11 @@ pub(super) enum FederationCommand {
 	/// - Lists all the rooms we share/track with the specified *remote* user
 	RemoteUserInRooms {
 		user_id: OwnedUserId,
+	},
+
+	/// - Runs an MSC4521 reconciliation of a room with a remote server.
+	Reconcile {
+		room_id: OwnedRoomId,
+		server: OwnedServerName,
 	},
 }

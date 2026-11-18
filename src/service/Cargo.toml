@@ -19,6 +19,8 @@ crate-type = [
 
 [features]
 default = [
+	"client",
+	"server",
 	"brotli_compression",
 	"console",
 	"element_hacks",
@@ -37,6 +39,9 @@ default = [
 	"tuwunel-database/default",
 	"tuwunel-matrix/default",
 ]
+
+client = []
+server = []
 
 brotli_compression = [
 	"reqwest/brotli",
@@ -118,6 +123,7 @@ object_store.workspace = true
 rand.workspace = true
 regex.workspace = true
 reqwest.workspace = true
+rezzy-recon.workspace = true
 ruma.workspace = true
 rustls.workspace = true
 rustyline-async.workspace = true

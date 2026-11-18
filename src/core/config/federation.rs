@@ -53,6 +53,16 @@ pub struct Federation {
 	#[serde(default = "true_fn")]
 	pub enable: bool,
 
+	/// MSC4521: serve algebraic room digests and sketch-based set differences.
+	///
+	/// This enables the federation endpoints and the explicit
+	/// `!admin federation reconcile` trigger.
+	///
+	/// reloadable: yes
+	/// default: false
+	#[serde(default)]
+	pub msc4521_enabled: bool,
+
 	/// Derives incoming federation event state from locally held unresolved
 	/// ancestry.
 	///
@@ -483,6 +493,7 @@ impl Default for Federation {
 	fn default() -> Self {
 		Self {
 			enable: true_fn(),
+			msc4521_enabled: Default::default(),
 			resolve_state_locally: true_fn(),
 			resolve_state_locally_max: default_resolve_state_locally_max(),
 			resolve_state_locally_shadow: Default::default(),

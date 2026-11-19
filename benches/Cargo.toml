@@ -1,0 +1,13 @@
+[package]
+name = "tuwunel-recon-benches"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Standalone on purpose: this must not pull in the server, RocksDB, or the
+# workspace lockfile just to compare reconciliation strategies.
+[workspace]
+
+[dependencies]
+base64 = "0.23"
+rezzy-recon = { git = "https://gitlab.com/wombat-foundation/rezzy.git", rev = "8ee8ea309c745d7b41e8eb95ba8a2b2bf7e55694", default-features = false, features = ["std"] }

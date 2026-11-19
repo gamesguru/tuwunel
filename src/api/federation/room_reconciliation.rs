@@ -5,8 +5,9 @@ use std::collections::BTreeSet;
 use axum::extract::State;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rezzy_recon::{
-	AlgebraicError, BucketRequest, MAX_BUCKETS_PER_ROUND, RoomAccumulator, SyndromeSketch,
-	build_bucket_sketches, encode_strata, triage::validate_bucket_requests,
+	AlgebraicError, BucketRequest, FixedWindowElementHash, Gf256, Gf256Decoder, Gf256Sketch,
+	MAX_BUCKETS_PER_ROUND, RoomAccumulator, build_gf256_bucket_sketches, encode_strata,
+	triage::validate_bucket_requests,
 };
 use ruma::{OwnedEventId, RoomId, ServerName};
 use tuwunel_core::{Err, Result, err, utils::hash::sha256};
@@ -96,7 +97,7 @@ fn bad_param(what: &str) -> tuwunel_core::Error {
 
 struct SketchRequest {
 	bucket: BucketRequest,
-	local_sketch: SyndromeSketch,
+	local_sketch: Gf256Sketch,
 }
 
 struct ValidatedDiff {
@@ -157,7 +158,10 @@ fn validate_diff(body: &post_room_diff::Request) -> Result<ValidatedDiff> {
 		.iter()
 		.zip(&body.local_sketches)
 		.map(|(bucket, sketch)| {
-			let local_sketch = SyndromeSketch::decode(bucket.capacity, sketch)
+			let bytes = URL_SAFE_NO_PAD
+				.decode(sketch)
+				.map_err(|_| bad_param("local_sketches"))?;
+			let local_sketch = Gf256Sketch::from_bytes(bucket.capacity, &bytes)
 				.map_err(|_| bad_param("local_sketches"))?;
 			Ok(SketchRequest { bucket: *bucket, local_sketch })
 		})
@@ -176,7 +180,7 @@ fn validate_diff(body: &post_room_diff::Request) -> Result<ValidatedDiff> {
 
 struct DiffOutcome {
 	missing_event_ids: Vec<OwnedEventId>,
-	requester_only_short_ids: Vec<String>,
+	requester_only_event_digests: Vec<String>,
 	expected_requester_side_accumulator: String,
 }
 
@@ -184,8 +188,6 @@ enum Sketched {
 	Decoded(DiffOutcome),
 	CapacityExceeded,
 }
-
-fn encode_short_id(id: u64) -> String { URL_SAFE_NO_PAD.encode(id.to_be_bytes()) }
 
 fn diff_buckets(state: &RoomReconciliationState, body: &ValidatedDiff) -> Result<Sketched> {
 	let buckets: Vec<BucketRequest> = body.requests.iter().map(|r| r.bucket).collect();
@@ -195,17 +197,19 @@ fn diff_buckets(state: &RoomReconciliationState, body: &ValidatedDiff) -> Result
 	{
 		return Ok(Sketched::Decoded(DiffOutcome {
 			missing_event_ids: Vec::new(),
-			requester_only_short_ids: Vec::new(),
+			requester_only_event_digests: Vec::new(),
 			expected_requester_side_accumulator: RoomAccumulator::from_parts(0, 0)
 				.encode_digest(),
 		}));
 	}
-	let sketches = build_bucket_sketches(state.population.h64s(), &buckets)
+	let sketches = build_gf256_bucket_sketches(&state.population, &buckets)
 		.map_err(|_| bad_param("requests"))?;
+	let decoder = Gf256Decoder::cached()
+		.ok_or_else(|| err!(Database("build GF(2^256) reconciliation decoder")))?;
 	let mut responder_side = RoomAccumulator::new();
 	let mut outcome = DiffOutcome {
 		missing_event_ids: Vec::new(),
-		requester_only_short_ids: Vec::new(),
+		requester_only_event_digests: Vec::new(),
 		expected_requester_side_accumulator: String::new(),
 	};
 	for (request, responder_sketch) in body.requests.iter().zip(&sketches) {
@@ -215,19 +219,25 @@ fn diff_buckets(state: &RoomReconciliationState, body: &ValidatedDiff) -> Result
 		if residual
 			.coordinates()
 			.iter()
-			.all(|&coordinate| coordinate == 0)
+			.all(|&coordinate| coordinate == Gf256::ZERO)
 		{
 			continue;
 		}
-		let roots = match residual.decode_elements(request.bucket.capacity) {
+		let roots = match residual.decode_digests(request.bucket.capacity, decoder) {
 			| Ok(roots) => roots,
 			| Err(AlgebraicError::DecodeFailure | AlgebraicError::BudgetExhausted) => {
 				return Ok(Sketched::CapacityExceeded);
 			},
 			| Err(_) => return Err!(Request(InvalidParam("Sketch decode failed."))),
 		};
-		for root in roots {
-			if let Some(events) = state.h64_to_events.get(&root) {
+		for digest in roots {
+			let hash = FixedWindowElementHash::from_digest32(digest);
+			if rezzy_recon::bucket_prefix(hash.bucket_key(), request.bucket.depth)
+				!= request.bucket.prefix
+			{
+				return Err!(Request(InvalidParam("Decoded element is outside its bucket.")));
+			}
+			if let Some(events) = state.digest_to_events.get(&digest) {
 				for (event_id, hash) in events {
 					outcome.missing_event_ids.push(event_id.clone());
 					responder_side
@@ -236,8 +246,8 @@ fn diff_buckets(state: &RoomReconciliationState, body: &ValidatedDiff) -> Result
 				}
 			} else {
 				outcome
-					.requester_only_short_ids
-					.push(encode_short_id(root));
+					.requester_only_event_digests
+					.push(URL_SAFE_NO_PAD.encode(digest));
 			}
 		}
 	}
@@ -255,10 +265,10 @@ fn response(
 	outcome: Option<DiffOutcome>,
 ) -> post_room_diff::Response {
 	let truncated = outcome.is_none() && sketch_status != "not_applicable";
-	let (missing_event_ids, requester_only_short_ids, expected) = match outcome {
+	let (missing_event_ids, requester_only_event_digests, expected) = match outcome {
 		| Some(outcome) => (
 			outcome.missing_event_ids,
-			Some(outcome.requester_only_short_ids),
+			Some(outcome.requester_only_event_digests),
 			Some(outcome.expected_requester_side_accumulator),
 		),
 		| None => (Vec::new(), None, None),
@@ -266,7 +276,7 @@ fn response(
 	post_room_diff::Response {
 		digest_type: DIGEST_TYPE.to_owned(),
 		missing_event_ids,
-		requester_only_short_ids,
+		requester_only_event_digests,
 		expected_requester_side_accumulator: expected,
 		remote_known_event_count: state.resident.accumulator().known_event_count(),
 		remote_extremity_event_ids: state.frame_event_ids.clone(),

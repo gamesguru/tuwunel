@@ -356,7 +356,9 @@ version = "1.12"
 
 [workspace.dependencies.rezzy-recon]
 git = "https://gitlab.com/wombat-foundation/rezzy.git"
-rev = "87996819b463f94784069a96e4d35bddef5ada54"
+rev = "8ee8ea309c745d7b41e8eb95ba8a2b2bf7e55694"
+default-features = false
+features = ["std"]
 
 [workspace.dependencies.reqwest]
 version = "0.13"

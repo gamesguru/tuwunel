@@ -428,6 +428,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "blake3"
+version = "1.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d9e454fc11f76977dc803893aff6304ed33d6a26efae8696573bea74baa27ae"
+dependencies = [
+ "arrayvec",
+ "cc",
+ "cfg-if",
+ "constant_time_eq",
+ "cpufeatures 0.3.1",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -826,6 +839,12 @@ checksum = "9603f79528ece8163c496f8932121cb36cfe46259e9c907bb3d8205139d7caa3"
 dependencies = [
  "typewit",
 ]
+
+[[package]]
+name = "constant_time_eq"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "convert_case"
@@ -3815,11 +3834,18 @@ version = "0.7.6"
 source = "git+https://github.com/matrix-construct/resolv-conf?rev=ab5c3e44016bc76b8798ec837a5a9cf9d88bf233#ab5c3e44016bc76b8798ec837a5a9cf9d88bf233"
 
 [[package]]
+name = "rezzy-log"
+version = "0.6.0-rc.1"
+source = "git+https://gitlab.com/wombat-foundation/rezzy.git?rev=8ee8ea309c745d7b41e8eb95ba8a2b2bf7e55694#8ee8ea309c745d7b41e8eb95ba8a2b2bf7e55694"
+
+[[package]]
 name = "rezzy-recon"
 version = "0.6.0-rc.1"
-source = "git+https://gitlab.com/wombat-foundation/rezzy.git?rev=87996819b463f94784069a96e4d35bddef5ada54#87996819b463f94784069a96e4d35bddef5ada54"
+source = "git+https://gitlab.com/wombat-foundation/rezzy.git?rev=8ee8ea309c745d7b41e8eb95ba8a2b2bf7e55694#8ee8ea309c745d7b41e8eb95ba8a2b2bf7e55694"
 dependencies = [
  "base64 0.23.1",
+ "blake3",
+ "rezzy-log",
  "sha2 0.11.1",
 ]
 
@@ -4898,7 +4924,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

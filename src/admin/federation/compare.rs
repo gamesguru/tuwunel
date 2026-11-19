@@ -22,12 +22,15 @@ pub(super) async fn compare(&self, room_id: OwnedRoomId, server: OwnedServerName
 		.await?;
 	let out = match outcome {
 		| CompareOutcome::Compared(comparison) => render(&room_id, &server, &comparison),
-		| CompareOutcome::NotEligible =>
-			format!("Cannot compare {room_id} with {server}: not eligible."),
-		| CompareOutcome::SenderChosenEventIds =>
-			format!("Cannot compare {room_id}: the room version has sender-chosen event IDs."),
-		| CompareOutcome::Unsupported =>
-			format!("{server} does not support MSC4521 reconciliation."),
+		| CompareOutcome::NotEligible => {
+			format!("Cannot compare {room_id} with {server}: not eligible.")
+		},
+		| CompareOutcome::SenderChosenEventIds => {
+			format!("Cannot compare {room_id}: the room version has sender-chosen event IDs.")
+		},
+		| CompareOutcome::Unsupported => {
+			format!("{server} does not support MSC4521 reconciliation.")
+		},
 	};
 
 	self.write_str(&out).await
@@ -62,14 +65,19 @@ fn render(room_id: &OwnedRoomId, server: &OwnedServerName, comparison: &Comparis
 			.iter()
 			.map(ToString::to_string),
 	);
-	if !comparison.unresolved_short_ids.is_empty() {
+	if !comparison.unresolved_event_digests.is_empty() {
 		render_ids(
 			&mut out,
-			"Unresolved short IDs",
+			"Unresolved event digests",
 			comparison
-				.unresolved_short_ids
+				.unresolved_event_digests
 				.iter()
-				.map(|short| format!("{short:016x}")),
+				.map(|digest| {
+					digest
+						.iter()
+						.map(|byte| format!("{byte:02x}"))
+						.collect()
+				}),
 		);
 	}
 

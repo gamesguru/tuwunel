@@ -8,7 +8,9 @@
 use std::collections::{BTreeMap, HashSet};
 
 use futures::{StreamExt, TryStreamExt};
-use rezzy_recon::{AlgebraicError, ElementHash, EventIdFormat, ResidentKernel, SortedPopulation};
+use rezzy_recon::{
+	AlgebraicError, EventIdFormat, FixedWindowElementHash, FixedWindowPopulation, ResidentKernel,
+};
 use ruma::{OwnedEventId, RoomId, RoomVersionId};
 use tuwunel_core::{Result, err};
 
@@ -19,10 +21,12 @@ use super::Service;
 pub struct RoomReconciliationState {
 	/// Accumulator and strata for this event set.
 	pub resident: ResidentKernel,
-	/// Sorted short identifiers used to build bucket sketches.
-	pub population: SortedPopulation,
-	/// Full event IDs corresponding to each short identifier.
-	pub h64_to_events: BTreeMap<u64, Vec<(OwnedEventId, ElementHash)>>,
+	/// Sorted full digests used to build GF(2^256) bucket sketches.
+	pub population: FixedWindowPopulation,
+	/// Full event IDs corresponding to each digest.
+	pub digest_to_events: BTreeMap<[u8; 32], Vec<(OwnedEventId, FixedWindowElementHash)>>,
+	/// Event ID encoding selected by the room version.
+	pub event_id_format: EventIdFormat,
 	/// Forward extremities observed around the scan.
 	pub frame_event_ids: Vec<OwnedEventId>,
 	/// Inclusive minimum and maximum event depth.
@@ -44,8 +48,8 @@ pub fn event_id_format(room_version: &RoomVersionId) -> Option<EventIdFormat> {
 #[derive(Default)]
 struct Builder {
 	resident: ResidentKernel,
-	elements: Vec<ElementHash>,
-	h64_to_events: BTreeMap<u64, Vec<(OwnedEventId, ElementHash)>>,
+	elements: Vec<FixedWindowElementHash>,
+	digest_to_events: BTreeMap<[u8; 32], Vec<(OwnedEventId, FixedWindowElementHash)>>,
 	seen: HashSet<OwnedEventId>,
 	depth_range: Option<[u64; 2]>,
 	ts_range: Option<[u64; 2]>,
@@ -63,11 +67,12 @@ impl Builder {
 			return Ok(());
 		}
 
-		let hash = ElementHash::from_matrix_event_id(event_id.as_str(), format)?;
+		let hash = FixedWindowElementHash::from_matrix_event_id(event_id.as_str(), format)?;
 		self.resident.insert(hash)?;
 		self.elements.push(hash);
-		self.h64_to_events
-			.entry(hash.h64)
+		let digest = hash.digest();
+		self.digest_to_events
+			.entry(digest)
 			.or_default()
 			.push((event_id, hash));
 
@@ -82,15 +87,20 @@ impl Builder {
 		Ok(())
 	}
 
-	fn finish(self, frame_event_ids: Vec<OwnedEventId>) -> RoomReconciliationState {
-		RoomReconciliationState {
+	fn finish(
+		self,
+		frame_event_ids: Vec<OwnedEventId>,
+		event_id_format: EventIdFormat,
+	) -> std::result::Result<RoomReconciliationState, AlgebraicError> {
+		Ok(RoomReconciliationState {
 			resident: self.resident,
-			population: SortedPopulation::new(self.elements),
-			h64_to_events: self.h64_to_events,
+			population: FixedWindowPopulation::new(self.elements)?,
+			digest_to_events: self.digest_to_events,
+			event_id_format,
 			frame_event_ids,
 			depth_range: self.depth_range.unwrap_or([0, 0]),
 			origin_server_ts_range: self.ts_range.unwrap_or([0, 0]),
-		}
+		})
 	}
 }
 
@@ -130,7 +140,9 @@ impl Service {
 
 			let frame_after = self.forward_extremities_sorted(room_id).await;
 			if frame_before == frame_after || attempt == 2 {
-				return Ok(builder.finish(frame_after));
+				return builder
+					.finish(frame_after, format)
+					.map_err(|e| err!(Database("building reconciliation population: {e:?}")));
 			}
 		}
 

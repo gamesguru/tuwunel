@@ -14,9 +14,9 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures::StreamExt;
 use rand::seq::SliceRandom;
 use rezzy_recon::{
-	BucketDecodeBatch, BucketDecodeSuccess, BucketRequest, ClientAction, ElementHash,
-	EventIdFormat, MAX_BUCKETED_SKETCH_CAPACITY, MAX_RECONCILIATION_ROUNDS, ReconciliationClient,
-	RoomAccumulator, build_bucket_sketches, triage::MAX_BUCKET_SKETCH_CAPACITY,
+	BucketDecodeBatch, BucketDecodeSuccess, BucketRequest, ClientAction, FixedWindowElementHash,
+	MAX_BUCKETED_SKETCH_CAPACITY, MAX_RECONCILIATION_ROUNDS, ReconciliationClient,
+	RoomAccumulator, build_gf256_bucket_sketches, triage::MAX_BUCKET_SKETCH_CAPACITY,
 };
 use ruma::{
 	OwnedEventId, OwnedRoomId, OwnedServerName, RoomId, RoomVersionId, ServerName,
@@ -135,7 +135,7 @@ pub mod api {
 		pub struct Response {
 			pub digest_type: String,
 			pub missing_event_ids: Vec<OwnedEventId>,
-			pub requester_only_short_ids: Option<Vec<String>>,
+			pub requester_only_event_digests: Option<Vec<String>>,
 			pub expected_requester_side_accumulator: Option<String>,
 			pub remote_known_event_count: u64,
 			pub remote_extremity_event_ids: Vec<OwnedEventId>,
@@ -182,8 +182,8 @@ pub struct Comparison {
 	pub missing_locally: Vec<OwnedEventId>,
 	/// Event IDs the local timeline has and the peer lacks.
 	pub missing_remotely: Vec<OwnedEventId>,
-	/// Short identifiers the peer lacks that did not resolve locally.
-	pub unresolved_short_ids: Vec<u64>,
+	/// Full event digests that did not resolve to a local event ID.
+	pub unresolved_event_digests: Vec<[u8; 32]>,
 	/// Protocol rounds used by the comparison.
 	pub rounds: usize,
 	/// A bucket exceeded the sketch budget before the comparison completed.
@@ -473,7 +473,7 @@ impl Reconcile {
 					break;
 				},
 				| ClientAction::BucketSketches { requests, accumulated_roots } => {
-					let sketches = build_bucket_sketches(local.population.h64s(), &requests)
+					let sketches = build_gf256_bucket_sketches(&local.population, &requests)
 						.map_err(|e| {
 							tuwunel_core::err!(Database("build reconciliation sketches: {e:?}"))
 						})?;
@@ -505,7 +505,7 @@ impl Reconcile {
 								.collect(),
 							local_sketches: sketches
 								.iter()
-								.map(rezzy_recon::SyndromeSketch::encode)
+								.map(|sketch| URL_SAFE_NO_PAD.encode(sketch.to_bytes()))
 								.collect(),
 						})
 						.await?;
@@ -534,21 +534,38 @@ impl Reconcile {
 					}
 					let mut roots = Vec::new();
 					for id in &response.missing_event_ids {
-						if let Some(hash) = short_hash(id) {
-							roots.push(hash);
-							missing_locally.insert(id.clone());
-						}
+						let hash = FixedWindowElementHash::from_matrix_event_id(
+							id.as_str(),
+							local.event_id_format,
+						)
+						.map_err(|_| {
+							tuwunel_core::err!(BadServerResponse(
+								"peer returned an invalid event ID"
+							))
+						})?;
+						roots.push(hash.bucket_key());
+						missing_locally.insert(id.clone());
 					}
-					if let Some(ids) = &response.requester_only_short_ids {
-						for id in ids {
-							if let Ok(bytes) = URL_SAFE_NO_PAD.decode(id)
-								&& bytes.len() == 8
-							{
-								let root =
-									u64::from_be_bytes(bytes.try_into().expect("checked length"));
-								roots.push(root);
-								requester_only.insert(root);
+					if let Some(digests) = &response.requester_only_event_digests {
+						for digest in digests {
+							let bytes = URL_SAFE_NO_PAD.decode(digest).map_err(|_| {
+								tuwunel_core::err!(BadServerResponse(
+									"peer returned an invalid event digest"
+								))
+							})?;
+							let digest: [u8; 32] = bytes.try_into().map_err(|_| {
+								tuwunel_core::err!(BadServerResponse(
+									"peer returned an invalid event digest length"
+								))
+							})?;
+							if digest == [0; 32] {
+								return Err(tuwunel_core::err!(BadServerResponse(
+									"peer returned the reserved zero event digest"
+								)));
 							}
+							roots
+								.push(FixedWindowElementHash::from_digest32(digest).bucket_key());
+							requester_only.insert(digest);
 						}
 					}
 					let successes = requests
@@ -579,19 +596,21 @@ impl Reconcile {
 		comparison.exhausted = !finished;
 		comparison.missing_locally = missing_locally.into_iter().collect();
 		for root in requester_only {
-			if let Some(events) = local.h64_to_events.get(&root) {
+			if let Some(events) = local.digest_to_events.get(&root) {
 				comparison.missing_remotely.extend(
 					events
 						.iter()
 						.map(|(event_id, _)| event_id.clone()),
 				);
 			} else {
-				comparison.unresolved_short_ids.push(root);
+				comparison.unresolved_event_digests.push(root);
 			}
 		}
 		comparison.missing_remotely.sort_unstable();
 		comparison.missing_remotely.dedup();
-		comparison.unresolved_short_ids.sort_unstable();
+		comparison
+			.unresolved_event_digests
+			.sort_unstable();
 		Ok(CompareOutcome::Compared(comparison))
 	}
 
@@ -748,12 +767,6 @@ impl Reconcile {
 	}
 }
 
-fn short_hash(id: &OwnedEventId) -> Option<u64> {
-	[EventIdFormat::V4Plus, EventIdFormat::V3]
-		.into_iter()
-		.find_map(|format| ElementHash::from_matrix_event_id(id.as_str(), format).ok())
-		.map(|hash| hash.h64)
-}
 fn bucket_prefix(hash: u64, depth: u8) -> u64 {
 	if depth == 0 {
 		0
